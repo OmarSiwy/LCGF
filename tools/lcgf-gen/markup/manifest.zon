@@ -200,6 +200,8 @@
         .{ .kind = "selector", .name = "#id", .status = .mapped, .target = "build time", .fixture = "counter" },
         .{ .kind = "selector", .name = "combinators", .status = .mapped, .target = "build time: descendant, >, +, ~", .fixture = "landmarks" },
         .{ .kind = "selector", .name = ":structural", .status = .mapped, .target = "build time: :root, :first-child, :nth-child(), :not(), :is(), :where(), :has()", .fixture = "landmarks" },
+        .{ .kind = "selector", .name = ":state", .status = .planned, .diagnostic = "state pseudo-classes (:hover, :checked, …) are not lowered yet: they become recipe rules (engine spec F3b) and style variants (F3)", .spec = "F3b" },
+        .{ .kind = "at-rule", .name = "@supports", .status = .planned, .diagnostic = "@supports is not lowered yet" },
         .{ .kind = "selector", .name = ":visited", .status = .rejected, .diagnostic = "navigation state is not modelled" },
         .{ .kind = "selector", .name = ":link", .status = .rejected, .diagnostic = "navigation state is not modelled" },
         .{ .kind = "selector", .name = ":any-link", .status = .rejected, .diagnostic = "navigation state is not modelled" },

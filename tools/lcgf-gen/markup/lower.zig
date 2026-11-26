@@ -304,11 +304,22 @@ pub const Lowerer = struct {
         }
         for (0..l.c.simples.len) |i| {
             const s = l.c.simples.get(i);
-            switch (s.kind) {
-                .state => _ = l.refused("selector", ok(std.fmt.allocPrint(l.arena, ":{s}", .{s.name})), "", s.loc),
-                else => {},
+            if (s.kind != .state) continue;
+            const name = ok(std.fmt.allocPrint(l.arena, ":{s}", .{s.name}));
+            if (l.refused("selector", name, "", s.loc)) continue;
+            const known = for (states) |x| {
+                if (std.mem.eql(u8, x, s.name)) break true;
+            } else false;
+            if (!known) {
+                l.ds.err(s.loc, "unknown pseudo-class {s}", .{name});
+                continue;
             }
+            _ = l.refused("selector", ":state", "", s.loc);
         }
+        for (l.c.sels.items(.element), l.c.sels.items(.loc)) |e, at| if (e.len > 0)
+            l.ds.err(at, "::{s} is not lowered yet", .{e});
+        for (l.c.conds.items) |cnd| _ = l.refused("at-rule", if (cnd.kind == .media) "@media" else "@supports", "", cnd.loc);
+        for (l.c.keyframes.items) |kf| _ = l.refused("property", "animation", "", kf.loc);
     }
 
     // ---- the walk -------------------------------------------------------------------------
@@ -1562,6 +1573,9 @@ pub fn colorExpr(arena: std.mem.Allocator, c: types.Color) []const u8 {
     if (c.a == 255) return std.fmt.allocPrint(arena, ".rgb({d}, {d}, {d})", .{ c.r, c.g, c.b }) catch @panic("out of memory");
     return std.fmt.allocPrint(arena, ".rgba({d}, {d}, {d}, {d})", .{ c.r, c.g, c.b, c.a }) catch @panic("out of memory");
 }
+
+/// The state pseudo-classes of plan §2.3, resolved at run time (style.States).
+const states = [_][]const u8{ "hover", "active", "focus", "focus-visible", "focus-within", "checked", "indeterminate", "disabled", "enabled", "read-only", "read-write", "required", "optional", "invalid", "valid", "open", "placeholder-shown" };
 
 /// Names that are keywords in one of the three target languages.
 const keywords = blk: {
