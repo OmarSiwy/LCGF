@@ -372,6 +372,23 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
     finalizeSpanWith(t, first, last, .{}) catch unreachable;
 }
 
+/// Puts the subtree under `node` on the pixel grid from `node`'s snapped origin instead of the
+/// window's, after `finalize`: its descendants move by the distance `node` snapped, and are
+/// finalized again. A comptime page snaps a hosted region's rect and then lays its content out
+/// on a grid from that corner (`ct_interop.compose`), so a runtime page that builds the same
+/// content in place calls this on the region's node to round its edges the same way.
+pub fn snapSubtree(t: anytype, node: u32) void {
+    const c = &t.c;
+    const first = node + 1;
+    const last = c.end[node];
+    if (first >= last) return;
+    inline for (0..2) |a| {
+        const d = c.rect[a][node] - c.pos[a][node];
+        for (c.pos[a][first..last]) |*p| p.* += d;
+    }
+    finalizeSpan(t, first, last);
+}
+
 pub fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void {
     try options.validate();
     switch (options.mode) {
@@ -722,6 +739,29 @@ test "finalize: a clipping parent insets by its border and hides what lies outsi
     try testing.expectEqual(108, c.vis[2][Scene.para]);
     try testing.expectEqual(0, c.visible[Scene.para]);
     try testing.expectEqual(1, c.visible[Scene.col]);
+}
+
+test "snapSubtree: a subtree rounds from its root's snapped corner, not the window's" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var s = Scene.init(&raw);
+    const c = &s.t.c;
+    sized(&s);
+    place(&s.t);
+    // col at 55.5, which snaps to 56; para 0.75 below it, at 56.25, snaps to 56 from the
+    // window's grid but to 56 + 1 from col's.
+    for (c.pos[1][Scene.col..c.end[Scene.col]]) |*p| p.* += 0.5;
+    c.pos[1][Scene.para] += 0.75;
+    finalize(&s.t);
+    try testing.expectEqual(56, c.rect[1][Scene.col]);
+    try testing.expectEqual(56, c.rect[1][Scene.para]);
+    const col_y = c.rect[1][Scene.col];
+    const local = c.pos[1][Scene.para] - c.pos[1][Scene.col];
+    snapSubtree(&s.t, Scene.col);
+    // From col's snapped corner: its own rect stays, para lies at that corner plus round(local).
+    try testing.expectEqual(col_y, c.rect[1][Scene.col]);
+    try testing.expectEqual(col_y + @round(local), c.rect[1][Scene.para]);
+    try testing.expectEqual(57, c.rect[1][Scene.para]);
+    try testing.expectEqual(57, c.vis[1][Scene.para]);
 }
 
 test "run: the passes in order; with settled text it gives the tier-0 rects" {

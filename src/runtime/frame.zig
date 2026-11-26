@@ -438,15 +438,25 @@ pub const Frame = struct {
     /// texts row `rows[i]` takes `table[styles[i]]`, measured and wrapped by `protocol.MonoParagraphs`
     /// over this frame's strings. The host draws its glyphs with the same `MonoParagraphs`.
     pub fn endParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) Output {
+        f.layoutParagraphs(font, rows, styles, table);
+        return f.finish();
+    }
+
+    /// The layout half of `endParagraphs`.
+    pub fn layoutParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) void {
         f.arrange(f.paragraphs(font, rows, styles, table));
         f.finalizeLayout(.{}) catch unreachable;
-        return f.finish();
     }
 
     /// `endFlex` with paragraph styles, as `endParagraphs`.
     pub fn endFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) Output {
-        f.layoutFlexWith(f.paragraphs(font, rows, styles, table), fx);
+        f.layoutFlexParagraphs(font, rows, styles, table, fx);
         return f.finish();
+    }
+
+    /// The layout half of `endFlexParagraphs`.
+    pub fn layoutFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) void {
+        f.layoutFlexWith(f.paragraphs(font, rows, styles, table), fx);
     }
 
     /// The font `endParagraphs` measures with.

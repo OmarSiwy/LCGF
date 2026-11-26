@@ -400,6 +400,7 @@ layout: a fixed sequence of linear passes over the tree columns.
 - `fn finalize(t: anytype) void`: Legacy whole-pixel finalization.
 - `fn finalizeWith(t: anytype, options: rounding.Options) error{InvalidScale}!void`: Snap cumulative endpoints on the selected device grid, then derive exact transforms, ancestor clips and hit visibility.
 - `fn finalizeSpan(t: anytype, first: u32, last: u32) void`: Legacy finalization over an incremental subtree.
+- `fn snapSubtree(t: anytype, node: u32) void`: Puts the subtree under `node` on the pixel grid from `node`'s snapped origin instead of the window's, after `finalize`: its descendants move by the distance `node` snapped, and are finalized again.
 - `fn finalizeSpanWith(t: anytype, first: u32, last: u32, options: rounding.Options) error{InvalidScale}!void`
 - `fn run(t: anytype, tx: *Texts, viewport: [2]f32) void`: Diagonal: every pass in order, for text that does not wrap (or whose `w`/`h` the caller has already settled).
 - `fn runFlex(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32) void`: `run` with the extra sizing rules of `fx` (flex.zig), and wrapping rows (wrap.zig).
@@ -3540,7 +3541,9 @@ Fields: `ctx`, `in`
 - `fn endFlex(f: *Frame, font: Mono, fx: *Flex) Output`: `end` with the flex rules (margins, wrap, align-self, aspect, baselines) the caller wrote into `fx` this frame, one row per node: `fx.set(@backingInt(node), &.{ .margin = ...
 - `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
 - `fn endParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) on some runs: texts row `rows[i]` takes `table[styles[i]]`, measured and wrapped by `protocol.MonoParagraphs` over this frame's strings.
+- `fn layoutParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) void`: The layout half of `endParagraphs`.
 - `fn endFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
+- `fn layoutFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
 - `fn paragraphs(f: *const Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) MonoParagraphs`: The font `endParagraphs` measures with.
 - `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
 - `fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void`
