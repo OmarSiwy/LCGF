@@ -45,6 +45,7 @@ fn lessPath(_: void, a: []const u8, b: []const u8) bool {
 pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_host: *Build.Module, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step {
     const step = b.step("markup", "Test the HTML/CSS compiler: units, fixtures against their twins, diagnostics");
     const pending = b.step("markup-pending", "Build the markup fixtures that wait for engine API (docs/plans/markup-engine-api.md); expected to fail until main lands it");
+    const cost = b.step("markup-cost-obj", "Build the zero-cost probe of each fixture over its generated and its hand-written page into zig-out/markup-cost/");
     const root = b.path(".");
     const lib = addLexbor(b, root, lexbor, b.graph.host);
     const unit = b.addTest(.{ .name = "markup-units", .root_module = b.createModule(.{
@@ -79,6 +80,20 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
             .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page", .module = page }, .{ .name = "twin", .module = twin } },
         }) });
         (if (f.waits_for.len == 0) step else pending).dependOn(&b.addRunArtifact(t).step);
+        // The zero-cost probe over both sides, ReleaseFast and stripped (ci/jobs/markup-zero-cost.sh).
+        if (f.waits_for.len == 0) {
+            const twin_ui = b.createModule(.{ .root_source_file = b.path(dir ++ "/cost_twin.zig"), .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "twin", .module = twin } } });
+            for ([_]struct { []const u8, *Build.Module }{ .{ "page", page }, .{ "twin", twin_ui } }) |side| {
+                const obj = b.addObject(.{ .name = b.fmt("{s}-{s}", .{ f.name, side[0] }), .root_module = b.createModule(.{
+                    .root_source_file = b.path(dir ++ "/cost_probe.zig"),
+                    .target = target,
+                    .optimize = .ReleaseFast,
+                    .strip = true,
+                    .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "ui", .module = side[1] } },
+                }) });
+                cost.dependOn(&b.addInstallFile(obj.getEmittedBin(), b.fmt("markup-cost/{s}-{s}.o", .{ f.name, side[0] })).step);
+            }
+        }
     }
     // The check block: each testdata/compile_fail/<case>.zig drives a fixture's page with a
     // wrong handler type and must fail with the message on its `//! expect: ` first line.
