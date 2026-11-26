@@ -1,21 +1,30 @@
 content.html:3:8: error: accent-color is lowered on :root only, as the theme's accent
   .x { accent-color: red; }
        ^
-content.html:9:3: error: a link shows one literal or one field; its content cannot hold elements
+content.html:12:3: error: a link shows one literal or one field; its content cannot hold elements
   <a href="#" on:click="go"><span>b</span></a>
   ^
-content.html:10:3: error: <details> needs bind:open="field", the bool it shows its content by
+content.html:13:3: error: <details> needs bind:open="field", the bool it shows its content by
   <details><summary>c</summary><p>d</p></details>
   ^
-content.html:11:3: error: <details> takes a <summary> first and then its content
+content.html:14:3: error: <details> takes a <summary> first and then its content
   <details bind:open="e"><p>f</p></details>
   ^
-content.html:12:3: error: text-transform on text that shows a field is not lowered (display mapping, F13); transform the value in the app
+content.html:15:3: error: text-transform on text that shows a field is not lowered (display mapping, F13); transform the value in the app
   <p class="t">{name}</p>
   ^
-content.html:13:3: error: text-transform maps ASCII letters only, at build time; write this text in the case it shows
+content.html:16:3: error: text-transform maps ASCII letters only, at build time; write this text in the case it shows
   <p class="t">café</p>
   ^
 content.html:5:24: error: text-transform: 'full-width' is not a supported value
   .u { text-transform: full-width; }
                        ^
+content.html:6:32: error: more than one box-shadow is not lowered; give one
+  .s1 { box-shadow: 1px 1px red, 2px 2px blue; }
+                               ^
+content.html:7:21: error: an inset box-shadow is not lowered (P2 decoration)
+  .s2 { box-shadow: inset 1px 1px red; }
+                    ^
+content.html:8:9: error: box-shadow takes an x and a y offset
+  .s3 { box-shadow: 1px red; }
+        ^

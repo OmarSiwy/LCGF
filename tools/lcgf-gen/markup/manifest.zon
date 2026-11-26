@@ -186,7 +186,7 @@
         .{ .kind = "value", .name = "linear-gradient", .applies_to = "stops", .status = .planned, .diagnostic = "gradients with more than two stops need prepared paint (P2)" },
         .{ .kind = "property", .name = "border", .status = .mapped, .target = "Style.border, border_color; dashed/dotted -> features", .fixture = "landmarks" },
         .{ .kind = "property", .name = "border-radius", .status = .mapped, .target = "Style.radius, or Style.radii for four corners", .fixture = "counter" },
-        .{ .kind = "property", .name = "box-shadow", .status = .planned, .diagnostic = "box-shadow is not lowered yet (a shadow node with features.shadow)" },
+        .{ .kind = "property", .name = "box-shadow", .status = .mapped, .target = "one outer x y [blur [spread]] [color]: a column in the box's place (its size, margins, position, transform, opacity) holding a floating features.shadow(blur / 2) node of its size, paint_outset by offset and spread, then the box filling it; inset or several an error", .fixture = "content" },
         .{ .kind = "property", .name = "outline", .status = .planned, .diagnostic = "outline is not lowered yet" },
         .{ .kind = "property", .name = "filter", .status = .planned, .diagnostic = "filter is not lowered (prepared-paint effects, P3)" },
         .{ .kind = "property", .name = "backdrop-filter", .status = .planned, .diagnostic = "backdrop-filter is not lowered (prepared-paint effects, P3)" },

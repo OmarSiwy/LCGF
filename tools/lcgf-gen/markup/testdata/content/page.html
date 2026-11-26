@@ -6,6 +6,7 @@
     :root { accent-color: #3080e0; }
     .caps { text-transform: uppercase; }
     .title { text-transform: capitalize; }
+    .card { width: 120px; margin: 4px; padding: 8px; background-color: #333; border-radius: 4px; box-shadow: 0 2px 6px 1px rgba(0, 0, 0, 0.5); }
   </style>
 </head>
 <body>
@@ -16,6 +17,7 @@
     <li><span>Inside</span><span>a box</span></li>
   </ul>
   <ol><li>First</li></ol>
+  <div class="card"><span>Card</span><span>body</span></div>
   <details id="more" bind:open="more_open" open>
     <summary>More</summary>
     <p>Hidden text</p>

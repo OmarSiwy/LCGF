@@ -56,6 +56,10 @@ pub const Lowerer = struct {
     /// Per document node: its paragraph style (line-height, letter- and word-spacing inherit;
     /// text-overflow is the node's own).
     para: []Paragraph = &.{},
+    /// The box being lowered's `box-shadow`, drawn by a node `addNode` puts before it.
+    shadow: ?Shadow = null,
+
+    const Shadow = struct { x: f32, y: f32, blur: f32, spread: f32, color: types.Color };
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -969,8 +973,70 @@ pub const Lowerer = struct {
         if (l.current != none) node.text_uses = l.text_tokens[l.current];
         node.flex = l.flex;
         l.flex = .{};
+        if (l.shadow != null) l.decorate(&node);
         ok(l.page.nodes.append(l.arena, node));
         return @intCast(l.page.nodes.len - 1);
+    }
+
+    /// A box with a shadow: a column in its place takes what places and sizes it among its
+    /// siblings (size, min, max, margins, align-self, aspect, position, transform, opacity,
+    /// visibility) and holds a floating shadow node of its size, then the box, which fills it.
+    /// The shadow paints first, so under the box; its offset and spread are its paint outset,
+    /// and its blur `features.shadow`. Both frontends build the three nodes as written.
+    fn decorate(l: *Lowerer, node: *ir.Node) void {
+        const sh = l.shadow.?;
+        l.shadow = null;
+        switch (node.kind) {
+            .when, .list, .choice, .each => return l.ds.err(node.loc, "box-shadow on a template is not lowered; put it on the element inside", .{}),
+            else => {},
+        }
+        if (node.uses.len > 0) return l.ds.err(node.loc, "box-shadow on a box sized or painted by run-time tokens is not lowered", .{});
+        const b = node.style;
+        const d: Style = .{};
+        const wrap_style: Style = .{ .size = b.size, .min = b.min, .max = b.max, .shrink = b.shrink, .float = b.float, .offset = b.offset, .transform = b.transform, .transform_origin = b.transform_origin, .opacity = b.opacity, .participation = b.participation };
+        var wrapper: ir.Node = .{ .kind = .container, .parent = node.parent, .loc = node.loc, .style = wrap_style, .margin = node.margin };
+        wrapper.flex = .{ .cross = node.flex.cross, .aspect = node.flex.aspect };
+        node.flex.cross = null;
+        node.flex.aspect = 0;
+        node.margin = null;
+        node.style.size = .{ .fill, .fill };
+        inline for (.{ "min", "max", "shrink", "float", "offset", "transform", "transform_origin", "opacity", "participation" }) |f| @field(node.style, f) = @field(d, f);
+        ok(l.page.nodes.append(l.arena, wrapper));
+        const w: u32 = @intCast(l.page.nodes.len - 1);
+        node.parent = w;
+        var radii = b.radii;
+        for (&radii) |*r| r.* = if (r.* < 0) -1 else r.* + sh.spread;
+        const s = sh.spread;
+        const shadow: Style = .{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = sh.color, .radius = @max(b.radius + s, 0), .radii = radii, .paint_outset = .{ s - sh.x, s - sh.y, s + sh.x, s + sh.y } };
+        ok(l.page.nodes.append(l.arena, .{ .kind = .container, .parent = w, .loc = node.loc, .style = shadow, .params_expr = ok(std.fmt.allocPrint(l.arena, "lcgf.features.shadow({d})", .{sh.blur / 2})) }));
+    }
+
+    /// `box-shadow: [x y [blur [spread]]] [color]`, one outer shadow, into `l.shadow`.
+    fn boxShadow(l: *Lowerer, n: u32) void {
+        const v = l.declared(n, .@"box-shadow") orelse return;
+        if (values.isIdent(l.c, v.first, "none")) return;
+        var lens: [4]f32 = @splat(0);
+        var count: usize = 0;
+        var color: types.Color = l.text[n].color; // currentcolor
+        var rd: values.Reader = .init(l.c, v.first, v.end);
+        while (rd.next()) |t| {
+            const ty = l.c.toks.items(.type)[t];
+            if (ty == .comma) return l.ds.err(l.c.tokLoc(t), "more than one box-shadow is not lowered; give one", .{});
+            if (values.isIdent(l.c, t, "inset")) return l.ds.err(l.c.tokLoc(t), "an inset box-shadow is not lowered (P2 decoration)", .{});
+            if (ty == .dimension or ty == .number) {
+                if (count == lens.len) return l.badValue(t, .@"box-shadow", v.end);
+                const len = l.lengthAt(n, t, t + 1, .@"box-shadow") orelse return;
+                if (len != .px) return l.badValue(t, .@"box-shadow", v.end);
+                lens[count] = len.px;
+                count += 1;
+                continue;
+            }
+            if (values.isIdent(l.c, t, "currentcolor")) continue;
+            color = values.color(l.c, t, rd.i) orelse return l.badValue(t, .@"box-shadow", v.end);
+        }
+        if (count < 2) return l.ds.err(v.loc, "box-shadow takes an x and a y offset", .{});
+        if (lens[2] < 0) return l.ds.err(v.loc, "a box-shadow's blur cannot be negative", .{});
+        l.shadow = .{ .x = lens[0], .y = lens[1], .blur = lens[2], .spread = lens[3], .color = color };
     }
 
     /// The display of `n`: what box, if any, it makes.
@@ -1084,6 +1150,8 @@ pub const Lowerer = struct {
         var s = base;
         l.uses.clearRetainingCapacity();
         l.flex = .{};
+        l.shadow = null;
+        l.boxShadow(n);
         const main: u1 = @backingInt(axis);
         const cross: u1 = 1 - main;
         inline for (.{ .{ Prop.width, 0, ir.Target.width }, .{ Prop.height, 1, ir.Target.height } }) |pa| if (l.length(n, pa[0])) |len| {

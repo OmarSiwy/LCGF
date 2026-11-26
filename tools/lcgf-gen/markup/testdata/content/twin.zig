@@ -1,6 +1,6 @@
 //! content, written by hand: the document elements over widgets and roles: a link, lists, a
 //! details section, the accent colour,
-//! text-transform.
+//! text-transform, box-shadow.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -25,6 +25,11 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.col(.{ .role = .list_item }, .{ label.ct.label(theme, "Inside"), label.ct.label(theme, "a box") }),
     }),
     s.col(.{ .role = .list }, .{s.styled(label.ct.label(theme, "First"), .{ .role = .list_item })}),
+    // box-shadow: a column in the box's place, a floating shadow node of its size first.
+    s.flexed(s.col(.{ .size = .{ .px(120), .fit } }, .{
+        s.col(.{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = .rgba(0, 0, 0, 128), .radius = 5, .params = lcgf.features.shadow(3), .paint_outset = .{ 1, -1, 1, 3 } }, .{}),
+        s.col(.{ .size = .{ .fill, .fill }, .pad = @splat(8), .fill = .rgb(51, 51, 51), .radius = 4 }, .{ label.ct.label(theme, "Card"), label.ct.label(theme, "body") }),
+    }), .{ .margin = @splat(4) }),
     // <details open bind:open>: an accordion section, its <summary> the header.
     accordion.ct.section(theme, .more, .more_open, "More", .{
         s.textStyled(label.ct.label(theme, "Hidden text"), .{ .color = theme.text, .wrap = true }),
