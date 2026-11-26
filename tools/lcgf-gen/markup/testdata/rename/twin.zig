@@ -15,7 +15,7 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
 
 pub fn Handlers(comptime Ui: type) type {
     return struct {
-        text: [32]u8 = undefined,
+        text: [32]u8 = @splat(0),
         len: usize = 0,
         changed_at: ?u32 = null,
         submitted: ?u32 = null,
@@ -32,6 +32,33 @@ pub fn Handlers(comptime Ui: type) type {
 }
 
 const Row = struct { name: []const u8 };
+
+/// Focus row 1's field, go to its end, type "x", press Enter (parity.zig).
+pub const replay =
+    \\frame
+    \\viewport 800 600
+    \\pointer 40 12
+    \\frame
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\press 77
+    \\frame
+    \\text x
+    \\frame
+    \\press 40
+    \\frame
+;
+
+/// The items parity.zig gives both frontends' regions; each side gets its own copy.
+pub const Sample = struct {
+    rows: [2]Row = .{ .{ .name = "one" }, .{ .name = "two" } },
+
+    pub fn data(x: *Sample) struct { rows: []const Row } {
+        return .{ .rows = &x.rows };
+    }
+};
 const Event = lcgf.input.Input.Event;
 
 fn runOf(d: *const lcgf.draw_list.DrawList, text: []const u8) ?[4]f32 {

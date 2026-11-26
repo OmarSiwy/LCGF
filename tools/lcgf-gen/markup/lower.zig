@@ -1694,11 +1694,7 @@ pub const Lowerer = struct {
                 l.ds.err(nodes.items(.loc)[i], "an accessible name inside a repeated template is carried on comptime pages only so far", .{});
             switch (kind) {
                 .container, .landmark, .label, .text, .heading => continue,
-                .when, .list, .choice => continue,
-                .each => {
-                    l.ds.err(nodes.items(.loc)[i], "lcgf-each regions are lowered on comptime pages only so far; this page asks for the runtime frontend", .{});
-                    continue;
-                },
+                .when, .list, .choice, .each => continue,
                 .component => {
                     l.ds.err(nodes.items(.loc)[i], "app components are lowered on comptime pages only so far; this page asks for the runtime frontend", .{});
                     continue;

@@ -31,6 +31,15 @@ pub fn Handlers(comptime Ui: type) type {
 
 const Task = struct { title: []const u8, done: bool, level: f32 };
 
+/// The items parity.zig gives both frontends' regions; each side gets its own copy.
+pub const Sample = struct {
+    tasks: [2]Task = .{ .{ .title = "write", .done = false, .level = 0.5 }, .{ .title = "test", .done = true, .level = 0.25 } },
+
+    pub fn data(x: *Sample) struct { tasks: []const Task } {
+        return .{ .tasks = &x.tasks };
+    }
+};
+
 fn runOf(d: *const lcgf.draw_list.DrawList, text: []const u8) ?[4]f32 {
     for (d.runs[0..d.run_len]) |r| if (std.mem.eql(u8, d.strings[r.start..][0..r.bytes], text)) return r.rect;
     return null;

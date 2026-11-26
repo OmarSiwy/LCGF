@@ -20,6 +20,16 @@ pub fn Handlers(comptime Ui: type) type {
 
 const Row = struct { name: []const u8, detail: []const u8, selected: bool = false, expanded: bool = false };
 
+/// The items parity.zig gives both frontends' regions; each side gets its own copy, which the
+/// checkbox writes.
+pub const Sample = struct {
+    rows: [2]Row = .{ .{ .name = "one", .detail = "first", .expanded = true }, .{ .name = "two", .detail = "second" } },
+
+    pub fn data(x: *Sample) struct { rows: []Row } {
+        return .{ .rows = &x.rows };
+    }
+};
+
 fn runOf(d: *const lcgf.draw_list.DrawList, text: []const u8) ?[4]f32 {
     for (d.runs[0..d.run_len]) |r| if (std.mem.eql(u8, d.strings[r.start..][0..r.bytes], text)) return r.rect;
     return null;

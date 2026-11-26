@@ -34,6 +34,16 @@ pub fn Handlers(comptime Ui: type) type {
 const File = struct { name: []const u8, size: f32 };
 const Tag = struct { label: []const u8 };
 
+/// The items parity.zig gives both frontends' regions; each side gets its own copy.
+pub const Sample = struct {
+    files: [3]File = .{ .{ .name = "a.txt", .size = 1.5 }, .{ .name = "b.txt", .size = 20 }, .{ .name = "c.txt", .size = 0.25 } },
+    tags: [2]Tag = .{ .{ .label = "red" }, .{ .label = "green" } },
+
+    pub fn data(x: *Sample) struct { files: []File, tags: []Tag } {
+        return .{ .files = &x.files, .tags = &x.tags };
+    }
+};
+
 /// The rect of the text run showing `text` in `d`.
 fn runOf(d: *const lcgf.draw_list.DrawList, text: []const u8) ?[4]f32 {
     for (d.runs[0..d.run_len]) |r| if (std.mem.eql(u8, d.strings[r.start..][0..r.bytes], text)) return r.rect;

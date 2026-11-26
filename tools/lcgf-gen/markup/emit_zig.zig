@@ -24,6 +24,9 @@ pub const Emit = struct {
     runtime: bool = false,
     /// The events of the run-time region being written (`events_<id>`).
     events_var: []const u8 = "events",
+    /// What owns a region's text editors (`edit_<id>`): the comptime `Page` (`p`) or the
+    /// runtime `Ui` (`ui`).
+    owner: []const u8 = "p",
     /// The token uses of the node being written (runtime frontend), read by `tokenField`.
     uses: []const ir.TokenUse = &.{},
     text_uses: ir.TextTokens = .{},
@@ -952,14 +955,15 @@ pub const Emit = struct {
             else => "textfield",
         };
         const id = n.id;
-        e.print("{{ const editing = p.edit_{s}_row == @as(u32, @intCast(copy0)); var scratch: lcgf.widgets_textfield.Text(256) = .{{}}; if (!editing) scratch.set({s}); const st = if (editing) &p.edit_{s} else &scratch; ", .{ id, e.stateRef(n.bind), id });
+        const o = e.owner;
+        e.print("{{ const editing = {s}.edit_{s}_row == @as(u32, @intCast(copy0)); var scratch: lcgf.widgets_textfield.Text(256) = .{{}}; if (!editing) scratch.set({s}); const st = if (editing) &{s}.edit_{s} else &scratch; ", .{ o, id, e.stateRef(n.bind), o, id });
         e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), if (n.secure) "password" else m, e.rtId(id, list_depth) });
         if (n.kind == .textarea) e.print("{d}, ", .{n.level});
         e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
-        e.print("); if (r.focused and !editing) {{ p.edit_{s} = st.*; p.edit_{s}_row = @intCast(copy0); }} ", .{ id, id });
-        e.print("if (p.edit_{s}_row == @as(u32, @intCast(copy0))) {{ ", .{id});
+        e.print("); if (r.focused and !editing) {{ {s}.edit_{s} = st.*; {s}.edit_{s}_row = @intCast(copy0); }} ", .{ o, id, o, id });
+        e.print("if ({s}.edit_{s}_row == @as(u32, @intCast(copy0))) {{ ", .{ o, id });
         for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.widget, id) and h.each.len > 0) switch (h.event) {
-            .change => e.print("if (st.result.changed) {s}.{f} = .{{ @intCast(copy0), p.edit_{s}.text() }}; ", .{ e.events_var, std.zig.fmtId(id), id }),
+            .change => e.print("if (st.result.changed) {s}.{f} = .{{ @intCast(copy0), {s}.edit_{s}.text() }}; ", .{ e.events_var, std.zig.fmtId(id), o, id }),
             .submit => e.print("if (st.result.submitted) {s}.{s}_submit = @intCast(copy0); ", .{ e.events_var, id }),
             else => {},
         };
@@ -1037,6 +1041,7 @@ pub const Emit = struct {
             }
             e.write(" };\n");
         }
+        e.owner = "ui";
         e.write(
             \\
             \\/// The page in the runtime front end: the same state store as the comptime page's
@@ -1047,7 +1052,7 @@ pub const Emit = struct {
             \\    events: struct {
         );
         var any = false;
-        for (e.page.handlers.items) |h| if (h.event == .click or h.event == .submit) {
+        for (e.page.handlers.items) |h| if (h.each.len > 0) continue else if (h.event == .click or h.event == .submit) {
             e.print(" {f}: bool = false,", .{std.zig.fmtId(h.widget)});
             any = true;
         } else if (textChange(h)) {
@@ -1055,6 +1060,7 @@ pub const Emit = struct {
             any = true;
         };
         e.write(if (any) " } = .{},\n" else "} = .{},\n");
+        e.regionFields("    ");
         e.write(
             \\    /// The state as the frame began, for on:change.
             \\    before: State = .{},
@@ -1120,12 +1126,12 @@ pub const Emit = struct {
             \\
             \\
         );
-        e.write(
-            \\    pub fn build(ui: *Ui, f: *lcgf.frame.Frame) void {
-            \\        ui.events = .{};
-            \\        ui.before = ui.signals.state;
-            \\
-        );
+        const regions = e.hasRegions();
+        e.write(if (regions) "    pub fn build(ui: *Ui, f: *lcgf.frame.Frame, data: anytype) void {\n" else "    pub fn build(ui: *Ui, f: *lcgf.frame.Frame) void {\n");
+        e.write("        ui.events = .{};\n");
+        for (0..e.page.nodes.len) |i| if (e.page.nodes.items(.kind)[i] == .each and e.regionEvents(@intCast(i)).len > 0)
+            e.print("        ui.events_{s} = .{{}};\n", .{e.page.nodes.items(.id)[i]});
+        e.write("        ui.before = ui.signals.state;\n");
         if (paragraphs) e.write("        ui.paragraphs.len = 0;\n");
         if (tokens.len > 0) e.write("        ui.seen = ui.tokens.generation;\n");
         if (named > 0) e.write("        ui.named = @splat(lcgf.types.none);\n");
@@ -1140,6 +1146,49 @@ pub const Emit = struct {
         e.rtWalk(none, 0);
         e.write("    }\n\n");
         e.rtDispatch();
+    }
+
+    fn hasRegions(e: *Emit) bool {
+        return std.mem.indexOfScalar(ir.Kind, e.page.nodes.items(.kind), .each) != null;
+    }
+
+    /// The fields of region `each`'s events struct: an index per click and submit, an
+    /// (index, value) per change.
+    fn regionEvents(e: *Emit, each: u32) []const u8 {
+        var events: std.ArrayList(u8) = .empty;
+        const id = e.page.nodes.items(.id)[each];
+        for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.each, id)) switch (h.event) {
+            .change => events.print(e.arena, " {f}: ?struct {{ u32, {s} }} = null,", .{ std.zig.fmtId(h.widget), fieldType(h.payload.?) }) catch unreachable,
+            .submit => events.print(e.arena, " {s}_submit: ?u32 = null,", .{h.widget}) catch unreachable,
+            else => events.print(e.arena, " {f}: ?u32 = null,", .{std.zig.fmtId(h.widget)}) catch unreachable,
+        };
+        return events.items;
+    }
+
+    /// What the runtime `Ui` keeps per region: this frame's events, and one editor per text
+    /// control, for the row being edited.
+    fn regionFields(e: *Emit, pad: []const u8) void {
+        for (0..e.page.nodes.len) |i| {
+            const n = e.page.nodes.get(i);
+            if (n.kind != .each) continue;
+            const events = e.regionEvents(@intCast(i));
+            if (events.len > 0) e.print("{s}/// The clicks and changes of region `{s}` (lcgf-each=\"{s} in {s}\") this frame, by item index.\n{s}events_{s}: struct {{{s} }} = .{{}},\n", .{ pad, n.id, n.text, n.bind, pad, n.id, events });
+            e.editorFields(@intCast(i), pad);
+        }
+    }
+
+    /// One editor per text control of region `each`, for the row being edited.
+    fn editorFields(e: *Emit, each: u32, pad: []const u8) void {
+        for (0..e.page.nodes.len) |k| {
+            const c = e.page.nodes.get(k);
+            const texty = c.kind == .textfield or c.kind == .search or c.kind == .textarea;
+            if (texty and e.eachOf(@intCast(k)) == each) e.print(
+                \\{s}/// The editor of `{s}` for the item being edited, and that item's index.
+                \\{s}edit_{s}: lcgf.widgets_textfield.Text(256) = .{{}},
+                \\{s}edit_{s}_row: ?u32 = null,
+                \\
+            , .{ pad, c.id, pad, c.id, pad, c.id });
+        }
     }
 
     /// The runtime statements of every node (`within` none), or of the descendants of
@@ -1157,7 +1206,7 @@ pub const Emit = struct {
                 var k = parent;
                 while (k != none and k != within) k = nodes.items(.parent)[k];
                 if (k == none) break;
-            }
+            } else if (parent != none and e.eachOf(parent) != none) continue; // rtRegion writes it
             while (stack.items.len > 0 and stack.items[stack.items.len - 1].node != parent) {
                 const top = stack.pop().?;
                 if (nodes.items(.kind)[top.node] == .list) lists -= 1;
@@ -1180,7 +1229,10 @@ pub const Emit = struct {
             }
             // A named node: its row, which `Ui.semantics` names (engine spec R2).
             if (within == none) if (e.namedIndex(i)) |k| e.print("ui.named[{d}] = f.tree().len; ", .{k});
-            var close = e.rtOpenFlex(i, lists);
+            var close = if (nodes.items(.kind)[i] == .each) blk: {
+                e.rtRegion(i);
+                break :blk "";
+            } else e.rtOpenFlex(i, lists);
             if (in_choice) close = std.fmt.allocPrint(e.arena, "{s}{s}}},", .{ close, if (close.len > 0) " " else "" }) catch unreachable;
             if (nodes.items(.kind)[i] == .list) lists += 1;
             e.print(" // {s}\n", .{e.where(nodes.items(.loc)[i])});
@@ -1204,13 +1256,20 @@ pub const Emit = struct {
         // Dispatch: clicks, then value changes, in tree order.
         e.write("    /// Calls the handlers of the frame `build` made.\n    pub fn dispatch(ui: *Ui, h: anytype) void {\n");
         if (e.page.handlers.items.len == 0) e.write("        _ = ui;\n        _ = h;\n");
-        for (e.page.handlers.items) |h| switch (h.event) {
+        for (e.page.handlers.items) |h| if (h.each.len > 0) continue else switch (h.event) {
             .click, .submit => e.print("        if (ui.events.{f}) h.{f}(ui); // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) }),
             .change => if (textChange(h))
                 e.print("        if (ui.events.{s}_change) h.{f}(ui, {s}.text()); // {s}\n", .{ h.widget, std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) })
             else
                 e.print("        if ({s}{s} != ui.before.{f}{s}) h.{f}(ui, {s}{s}); // {s}\n", .{ e.stateRef(h.field), e.member(h), std.zig.fmtId(h.field), e.member(h), std.zig.fmtId(h.name), e.stateRef(h.field), e.member(h), e.where(h.loc) }),
         };
+        // A region's handlers get the item's index, as on the comptime page.
+        for (e.page.handlers.items) |h| if (h.event == .submit and h.each.len > 0)
+            e.print("        if (ui.events_{s}.{s}_submit) |index| h.{f}(ui, index); // {s}\n", .{ h.each, h.widget, std.zig.fmtId(h.name), e.where(h.loc) });
+        for (e.page.handlers.items) |h| if (h.event == .click and h.each.len > 0)
+            e.print("        if (ui.events_{s}.{f}) |index| h.{f}(ui, index); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
+        for (e.page.handlers.items) |h| if (h.event == .change and h.each.len > 0)
+            e.print("        if (ui.events_{s}.{f}) |change| h.{f}(ui, change[0], change[1]); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
         e.write("    }\n};\n\n");
     }
 
@@ -1303,10 +1362,20 @@ pub const Emit = struct {
 
     fn runtimePage(e: *Emit) void {
         const n: u32 = @intCast(e.page.nodes.len);
-        // Rows: widgets push up to a few rows each; texts and bytes as the literals need.
+        // Rows: widgets push up to a few rows each; texts and bytes as the literals need. A
+        // region adds its lcgf-nodes and lcgf-texts, as its own Context has on a comptime page.
+        var nodes: u32 = 8 * n + 16;
+        var texts: u32 = 2 * n + 8;
+        var strings: u32 = 8192;
+        for (0..n) |i| if (e.page.nodes.items(.kind)[i] == .each) {
+            nodes += e.page.nodes.items(.max)[i];
+            texts += @intFromFloat(e.page.nodes.items(.range)[i][0]);
+            strings += 16384;
+        };
+        const regions = e.hasRegions();
         e.print(
             \\/// A runtime `Context` large enough for this page.
-            \\pub const limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = 8192, .depth = 64 }};
+            \\pub const limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = {d}, .depth = 64 }};
             \\
             \\/// The page driven by the app's handler type `H`, in a caller's runtime `Context`:
             \\/// `frame` builds and draws, then calls the handlers after the draw list is final.
@@ -1315,9 +1384,9 @@ pub const Emit = struct {
             \\    return struct {{
             \\        ui: Ui = .{{}},
             \\
-            \\        pub fn frame(p: *@This(), ctx: *lcgf.context.Context, h: *H, in: *const lcgf.input.Input) lcgf.context.Output {{
+            \\        pub fn frame(p: *@This(), ctx: *lcgf.context.Context, h: *H, in: *const lcgf.input.Input{s}) lcgf.context.Output {{
             \\            var f = ctx.begin(in);
-            \\            p.ui.build(&f);
+            \\            p.ui.build(&f{s});
             \\            const out = {s};
             \\            p.ui.dispatch(h);
             \\            return out;
@@ -1326,7 +1395,7 @@ pub const Emit = struct {
             \\}}
             \\
             \\
-        , .{ 8 * n + 16, 2 * n + 8, if (e.hasFlex()) "p.ui.end(&f, .{})" else "f.end(.{})" });
+        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex()) "p.ui.end(&f, .{})" else "f.end(.{})" });
         if (e.hasFlex()) e.write(
             \\/// The bytes of the runtime page's flex columns.
             \\const flex_bytes = blk: {
@@ -1437,17 +1506,7 @@ pub const Emit = struct {
             , .{ n.id, n.text, n.bind, n.id, n.id, n.id });
             decls.print(e.arena, "        const {s}_limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = 16384, .depth = 64 }};\n", .{ n.id, n.max, @as(u32, @intFromFloat(n.range[0])) }) catch unreachable;
             rows.print(e.arena, " + {s}_limits.nodes", .{n.id}) catch unreachable;
-            // One editor per text control of the region, for the row being edited.
-            for (0..e.page.nodes.len) |k| {
-                const c = e.page.nodes.get(k);
-                const texty = c.kind == .textfield or c.kind == .search or c.kind == .textarea;
-                if (texty and e.eachOf(@intCast(k)) == i) e.print(
-                    \\        /// The editor of `{s}` for the item being edited, and that item's index.
-                    \\        edit_{s}: lcgf.widgets_textfield.Text(256) = .{{}},
-                    \\        edit_{s}_row: ?u32 = null,
-                    \\
-                , .{ c.id, c.id, c.id });
-            }
+            e.editorFields(@intCast(i), "        ");
             strings.print(e.arena, " + {s}_limits.strings", .{n.id}) catch unreachable;
         }
         e.print(
@@ -1486,13 +1545,8 @@ pub const Emit = struct {
         for (0..e.page.nodes.len) |i| {
             const n = e.page.nodes.get(i);
             if (n.kind != .each) continue;
-            var events: std.ArrayList(u8) = .empty;
-            for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.each, n.id)) switch (h.event) {
-                .change => events.print(e.arena, " {f}: ?struct {{ u32, {s} }} = null,", .{ std.zig.fmtId(h.widget), fieldType(h.payload.?) }) catch unreachable,
-                .submit => events.print(e.arena, " {s}_submit: ?u32 = null,", .{h.widget}) catch unreachable,
-                else => events.print(e.arena, " {f}: ?u32 = null,", .{std.zig.fmtId(h.widget)}) catch unreachable,
-            };
-            if (events.items.len > 0) e.print("            var events_{s}: struct {{{s} }} = .{{}};\n", .{ n.id, events.items });
+            const events = e.regionEvents(@intCast(i));
+            if (events.len > 0) e.print("            var events_{s}: struct {{{s} }} = .{{}};\n", .{ n.id, events });
         }
         var k: u32 = 0;
         for (0..e.page.nodes.len) |i_| {
@@ -1508,54 +1562,92 @@ pub const Emit = struct {
         const n = e.page.nodes.get(each);
         const fit = n.level == 1;
         e.print("            {{ // lcgf-each=\"{s} in {s}\", {s}\n", .{ n.text, n.bind, e.where(n.loc) });
-        // The item fields the page reads, checked with the HTML location.
-        var seen: std.StringHashMapUnmanaged(void) = .empty;
-        e.print("                comptime {{\n                    const Item = @import(\"std\").meta.Elem(@TypeOf(data.{f}));\n", .{std.zig.fmtId(n.bind)});
-        for (e.page.item_fields.items) |f| {
-            if (!std.mem.eql(u8, f.each, n.id)) continue;
-            if (f.bound) |ty| {
-                // A bound field: the type the control writes, through a mutable item list.
-                e.print("                    if (@hasField(Item, \"{s}\") and @FieldType(Item, \"{s}\") != {s}) @compileError(\"{s}: '{s}.{s}' is bound as {s} here; the item's field is \" ++ @typeName(@FieldType(Item, \"{s}\")));\n", .{ f.field, f.field, fieldType(ty), e.whereFull(f.loc), n.text, f.field, fieldType(ty), f.field });
-                if (f.writes) e.print("                    if (@typeInfo(@TypeOf(data.{f})) != .pointer or @typeInfo(@TypeOf(data.{f})).pointer.attrs.@\"const\") @compileError(\"{s}: '{s}.{s}' is bound here, so pass {s} as a mutable slice\");\n", .{ std.zig.fmtId(n.bind), std.zig.fmtId(n.bind), e.whereFull(f.loc), n.text, f.field, n.bind });
-            }
-            if (seen.contains(f.field)) continue;
-            seen.put(e.arena, f.field, {}) catch unreachable;
-            e.print("                    if (!@hasField(Item, \"{s}\")) @compileError(\"{s}: the items of '{s}' have no field '{s}'\");\n", .{ f.field, e.whereFull(f.loc), n.bind, f.field });
-        }
-        for (0..e.page.nodes.len) |k| if (e.page.nodes.items(.kind)[k] == .component and e.eachOf(@intCast(k)) == each)
-            e.componentChecks(@intCast(k), true, "                    ");
-        // Item props are item fields, so `seen` holds them too.
-        if (seen.count() == 0) e.write("                    _ = Item;\n");
-        e.write("                }\n");
+        e.eachChecks(each, "                ");
         // The copies' statements first: they name `ui` only when they read the view state.
-        e.events_var = std.fmt.allocPrint(e.arena, "events_{s}", .{n.id}) catch unreachable;
-        var body: std.ArrayList(u8) = .empty;
-        std.mem.swap(std.ArrayList(u8), &body, &e.out);
-        e.rtWalk(each, 1);
-        std.mem.swap(std.ArrayList(u8), &body, &e.out);
-        if (std.mem.indexOf(u8, body.items, "ui.") != null) e.write("                const ui = &p.ui;\n");
-        // The copy index names widgets; a region of text alone has none.
-        if (std.mem.indexOf(u8, body.items, "copy0") == null) body.insertSlice(e.arena, 0, "                    _ = copy0;\n") catch unreachable;
+        const body = e.eachLoop(each);
+        if (std.mem.indexOf(u8, body, "ui.") != null) e.write("                const ui = &p.ui;\n");
         e.print(
             \\                if (p.{s} == null) p.{s} = lcgf.context.Context.init(&p.{s}_buf, {s}_limits) catch unreachable;
             \\                const rect = out.tree.rect(out.tree.find(.from("{s}")));
             \\                {s} region_in = lcgf.ct_interop.regionInput(in, .{{ rect.x0, rect.y0, rect.x1, rect.y1 }});{s}
             \\                var region_frame = p.{s}.?.begin(&region_in);
             \\                const f = &region_frame;
-            \\                // The copies are laid out in the region as its CSS says.
-            \\                _ = f.open(.none, {s});
-            \\                for (data.{f}, 0..) |*{f}, copy0| {{
             \\
-        , .{ n.id, n.id, n.id, n.id, n.id, if (fit) "var" else "const", fitViewport(e, n), n.id, e.styleText(.{ .size = fitSize(n.style), .dir = n.style.dir, .gap = n.style.gap, .pad = n.style.pad, .main = n.style.main, .cross = n.style.cross }, ""), std.zig.fmtId(n.bind), std.zig.fmtId(n.text) });
-        e.write(body.items);
+        , .{ n.id, n.id, n.id, n.id, n.id, if (fit) "var" else "const", fitViewport(e, n), n.id });
+        e.write(body);
         e.print(
-            \\                }}
-            \\                f.close();
             \\                const region_out = f.end(.{{}});{s}
             \\                if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}
             \\            }}
             \\
         , .{ if (fit) std.fmt.allocPrint(e.arena, "\n                // The content's size before snapping, for the region's next layout, so the\n                // page around it lays out as it would around the content itself.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
+    }
+
+    /// The comptime checks of region `each`: the item fields the page reads and its
+    /// components, each message at the HTML.
+    fn eachChecks(e: *Emit, each: u32, pad: []const u8) void {
+        const n = e.page.nodes.get(each);
+        var seen: std.StringHashMapUnmanaged(void) = .empty;
+        e.print("{s}comptime {{\n{s}    const Item = @import(\"std\").meta.Elem(@TypeOf(data.{f}));\n", .{ pad, pad, std.zig.fmtId(n.bind) });
+        for (e.page.item_fields.items) |f| {
+            if (!std.mem.eql(u8, f.each, n.id)) continue;
+            if (f.bound) |ty| {
+                // A bound field: the type the control writes, through a mutable item list.
+                e.print("{s}    if (@hasField(Item, \"{s}\") and @FieldType(Item, \"{s}\") != {s}) @compileError(\"{s}: '{s}.{s}' is bound as {s} here; the item's field is \" ++ @typeName(@FieldType(Item, \"{s}\")));\n", .{ pad, f.field, f.field, fieldType(ty), e.whereFull(f.loc), n.text, f.field, fieldType(ty), f.field });
+                if (f.writes) e.print("{s}    if (@typeInfo(@TypeOf(data.{f})) != .pointer or @typeInfo(@TypeOf(data.{f})).pointer.attrs.@\"const\") @compileError(\"{s}: '{s}.{s}' is bound here, so pass {s} as a mutable slice\");\n", .{ pad, std.zig.fmtId(n.bind), std.zig.fmtId(n.bind), e.whereFull(f.loc), n.text, f.field, n.bind });
+            }
+            if (seen.contains(f.field)) continue;
+            seen.put(e.arena, f.field, {}) catch unreachable;
+            e.print("{s}    if (!@hasField(Item, \"{s}\")) @compileError(\"{s}: the items of '{s}' have no field '{s}'\");\n", .{ pad, f.field, e.whereFull(f.loc), n.bind, f.field });
+        }
+        const inner = std.fmt.allocPrint(e.arena, "{s}    ", .{pad}) catch unreachable;
+        for (0..e.page.nodes.len) |k| if (e.page.nodes.items(.kind)[k] == .component and e.eachOf(@intCast(k)) == each)
+            e.componentChecks(@intCast(k), true, inner);
+        // Item props are item fields, so `seen` holds them too.
+        if (seen.count() == 0) e.print("{s}    _ = Item;\n", .{pad});
+        e.print("{s}}}\n", .{pad});
+    }
+
+    /// The copies of region `each` in its Frame `f`: the wrapper its CSS lays them out in and
+    /// one copy per item, as text.
+    fn eachLoop(e: *Emit, each: u32) []const u8 {
+        const n = e.page.nodes.get(each);
+        e.events_var = if (e.runtime) std.fmt.allocPrint(e.arena, "ui.events_{s}", .{n.id}) catch unreachable else std.fmt.allocPrint(e.arena, "events_{s}", .{n.id}) catch unreachable;
+        var body: std.ArrayList(u8) = .empty;
+        std.mem.swap(std.ArrayList(u8), &body, &e.out);
+        e.rtWalk(each, 1);
+        std.mem.swap(std.ArrayList(u8), &body, &e.out);
+        // The copy index names widgets; a region of text alone has none.
+        if (std.mem.indexOf(u8, body.items, "copy0") == null) body.insertSlice(e.arena, 0, "                    _ = copy0;\n") catch unreachable;
+        var out: std.ArrayList(u8) = .empty;
+        out.print(e.arena,
+            \\                // The copies are laid out in the region as its CSS says.
+            \\                _ = f.open(.none, {s});
+            \\                for (data.{f}, 0..) |*{f}, copy0| {{
+            \\{s}                }}
+            \\                f.close();
+            \\
+        , .{ e.styleText(.{ .size = fitSize(n.style), .dir = n.style.dir, .gap = n.style.gap, .pad = n.style.pad, .main = n.style.main, .cross = n.style.cross }, ""), std.zig.fmtId(n.bind), std.zig.fmtId(n.text), body.items }) catch unreachable;
+        return out.items;
+    }
+
+    /// Region `each` in the runtime frontend: a node of the page's own Frame, sized and clipped
+    /// as the comptime page's region is, around the copies.
+    fn rtRegion(e: *Emit, each: u32) void {
+        const n = e.page.nodes.get(each);
+        e.print("{{ // lcgf-each=\"{s} in {s}\"\n", .{ n.text, n.bind });
+        e.eachChecks(each, "                ");
+        var outer = n.style;
+        outer.dir = .y;
+        outer.gap = 0;
+        outer.pad = @splat(0);
+        outer.main = .start;
+        outer.cross = .start;
+        // The comptime region clips its content to its rect.
+        outer.clip = true;
+        e.print("                _ = f.open(.from(\"{s}\"), {s});\n", .{ n.id, e.styleText(outer, n.params_expr) });
+        e.write(e.eachLoop(each));
+        e.write("                f.close();\n            }");
     }
 
     /// A fit region's content is measured in the page's viewport on its fit axes.
