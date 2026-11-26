@@ -341,7 +341,8 @@ pub const Editor = struct {
         }
         if (c == ks.enter or c == ks.keypad_enter) {
             if (ed.mode.read_only) return;
-            if (!single) return ed.insert("\n", r);
+            // Many lines: Enter is a newline and Ctrl+Enter (Cmd+Enter) submits.
+            if (!single and !e.mods.ctrl and !e.mods.cmd) return ed.insert("\n", r);
             ed.run = .none;
             r.submitted = true;
             return;
@@ -1037,6 +1038,30 @@ fn typeIn(ed: *Editor, typed: []const u8, press: []const u8) Result {
     const fo: Focus = .{};
     const k = Keyboard.route(&it, &fo, &in);
     return ed.update(&k, field, .{});
+}
+
+test "replayed input: many lines take Enter as a newline and submit on Ctrl+Enter or Cmd+Enter" {
+    var raw: [32]u8 = undefined;
+    var ed = try Editor.init(&raw, "");
+    var r = try replay(&ed,
+        \\frame
+        \\text a
+        \\press 40
+        \\text b
+    );
+    try testing.expect(!r.submitted);
+    try testing.expectEqualStrings("a\nb", ed.text());
+    r = try replay(&ed,
+        \\frame
+        \\press 40 ctrl
+    );
+    try testing.expect(r.submitted);
+    r = try replay(&ed,
+        \\frame
+        \\press 88 cmd
+    );
+    try testing.expect(r.submitted);
+    try testing.expectEqualStrings("a\nb", ed.text());
 }
 
 test "replayed input: single-line mode submits on Enter and keeps to one line" {
