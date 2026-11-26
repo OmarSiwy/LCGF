@@ -15,6 +15,7 @@ const switch_zig = @import("../widgets/switch.zig");
 const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
 const tweens = @import("../anim/tweens.zig");
+const keyframes = @import("../anim/keyframes.zig");
 const Parts = style.Parts;
 
 /// HTML constraint validation of a text control (`required`, `minlength`, `maxlength`): it
@@ -99,7 +100,7 @@ pub const Fade = struct {
         return out;
     }
 
-    fn read(c: style.Computed) [channels]f32 {
+    pub fn read(c: style.Computed) [channels]f32 {
         var out: [channels]f32 = undefined;
         inline for (.{ c.box.fill, c.box.border_color, c.text.color }, 0..) |col, k| {
             out[k * 4 ..][0..4].* = .{ @floatFromInt(col.r), @floatFromInt(col.g), @floatFromInt(col.b), @floatFromInt(col.a) };
@@ -108,7 +109,7 @@ pub const Fade = struct {
         return out;
     }
 
-    fn write(c: *style.Computed, v: [channels]f32, t: Transition) void {
+    pub fn write(c: *style.Computed, v: [channels]f32, t: Transition) void {
         if (t.fill) c.box.fill = color(v[0..4].*);
         if (t.border_color) c.box.border_color = color(v[4..8].*);
         if (t.text_color) c.text.color = color(v[8..12].*);
@@ -117,6 +118,59 @@ pub const Fade = struct {
 
     fn color(v: [4]f32) types.Color {
         return .rgba(@intFromFloat(@round(v[0])), @intFromFloat(@round(v[1])), @intFromFloat(@round(v[2])), @intFromFloat(@round(v[3])));
+    }
+};
+
+/// CSS `animation` on a recipe control: keyframes over its root's colours and opacity, by
+/// `Fade` channel (fill 0-3, border colour 4-7, text colour 8-11 as 0 to 255, opacity 12),
+/// `at` in seconds of one iteration. The animated channels override the resolved values.
+pub const Animation = struct {
+    tracks: []const Track = &.{},
+    /// One iteration.
+    seconds: f32 = 0,
+    /// `inf` repeats for ever.
+    iterations: f32 = 1,
+    /// Odd iterations play backwards.
+    alternate: bool = false,
+
+    pub const Track = struct { channel: u8, keys: []const keyframes.Key };
+
+    /// Seconds into the current iteration at `elapsed`: the last iteration holds at its end.
+    pub fn local(a: Animation, elapsed: f32) f32 {
+        if (a.seconds <= 0) return 0;
+        const total = a.seconds * a.iterations;
+        const t = @min(elapsed, total);
+        var n = @floor(t / a.seconds);
+        var u = t - n * a.seconds;
+        if (t >= total) {
+            n = a.iterations - 1;
+            u = a.seconds;
+        }
+        const back = a.alternate and @mod(n, 2) == 1;
+        return if (back) a.seconds - u else u;
+    }
+
+    /// Whether frames are still needed at `elapsed`.
+    pub fn running(a: Animation, elapsed: f32) bool {
+        return a.tracks.len > 0 and elapsed < a.seconds * a.iterations;
+    }
+};
+
+/// How far an `Animation` has played; the caller keeps it, as a `Fade`. Both front ends
+/// advance it once a frame by the input's `dt`. Under reduced motion it holds the first
+/// frame of an endless animation and the end of a finite one.
+pub const Clock = struct {
+    elapsed: f32 = 0,
+
+    /// The next clock, with `a`'s channels sampled into `target`.
+    pub fn next(clock: Clock, target: *style.Computed, a: Animation, dt: f32, reduced_motion: bool) Clock {
+        var out = clock;
+        out.elapsed = if (reduced_motion) (if (std.math.isInf(a.iterations)) 0 else a.seconds * a.iterations) else clock.elapsed + dt;
+        var v = Fade.read(target.*);
+        const t = a.local(out.elapsed);
+        for (a.tracks) |track| v[track.channel] = keyframes.sample(track.keys, t);
+        Fade.write(target, v, .{ .fill = true, .border_color = true, .text_color = true, .opacity = true });
+        return out;
     }
 };
 
@@ -140,6 +194,9 @@ pub const Options = struct {
     /// CSS `transition` of the root, and the state it keeps between frames; both or neither.
     transition: Transition = .{},
     fade: ?*Fade = null,
+    /// CSS `animation` of the root, and its clock; both or neither.
+    animation: Animation = .{},
+    clock: ?*Clock = null,
 };
 
 pub const OpenControl = struct {
@@ -156,6 +213,9 @@ pub const OpenControl = struct {
     fade: ?*Fade = null,
     fade_next: Fade = .{},
     transition: Transition = .{},
+    clock: ?*Clock = null,
+    clock_next: Clock = .{},
+    animation: Animation = .{},
 
     /// Resolve any standard or application-defined part with this control's state and theme.
     pub fn part(control: *const OpenControl, id: types.Id, trace: ?[]style.Origin) style.Error!style.Computed {
@@ -245,6 +305,7 @@ fn resolvedControl(f: *const Frame, recipe: model.Recipe, options: Options, stat
     // a frame (a text field's edit) steps once.
     const transition = options.transition.under(f.ctx.settings.reduced_motion);
     const fade_next = if (options.fade) |fade| fade.next(&root, transition, f.in.dt) else Fade{};
+    const clock_next = if (options.clock) |clock| clock.next(&root, options.animation, f.in.dt, f.ctx.settings.reduced_motion) else Clock{};
     var child = use;
     child.parent = &root;
     child.local = &.{};
@@ -252,6 +313,9 @@ fn resolvedControl(f: *const Frame, recipe: model.Recipe, options: Options, stat
         .fade = options.fade,
         .fade_next = fade_next,
         .transition = transition,
+        .clock = options.clock,
+        .clock_next = clock_next,
+        .animation = options.animation,
         .node = .none,
         .response = .{},
         .states = states,
@@ -302,6 +366,10 @@ pub fn directionalIcon(f: *Frame, control: *const OpenControl, texture: types.Te
 }
 
 pub fn end(f: *Frame, control: *const OpenControl) void {
+    if (control.clock) |clock| {
+        clock.* = control.clock_next;
+        if (control.animation.running(clock.elapsed)) f.ctx.motion = @max(f.ctx.motion, f.in.dt);
+    }
     if (control.fade) |fade| {
         fade.* = control.fade_next;
         f.ctx.motion = @max(f.ctx.motion, control.fade_next.remaining(control.transition));
@@ -429,6 +497,10 @@ pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) st
         const transition = options.transition.under(f.ctx.settings.reduced_motion);
         fade.* = fade.next(&root, transition, f.in.dt);
         f.ctx.motion = @max(f.ctx.motion, fade.remaining(transition));
+    }
+    if (options.clock) |clock| {
+        clock.* = clock.next(&root, options.animation, f.in.dt, f.ctx.settings.reduced_motion);
+        if (options.animation.running(clock.elapsed)) f.ctx.motion = @max(f.ctx.motion, f.in.dt);
     }
     const node = f.open(id, root.box);
     if (interactive) _ = f.interact(node, .{ .hover = true, .click = true });

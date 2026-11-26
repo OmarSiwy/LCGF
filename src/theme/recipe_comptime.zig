@@ -40,6 +40,9 @@ pub const Config = struct {
     /// keeps it between frames. Both or neither.
     transition: controls.Transition = .{},
     fade_field: ?[]const u8 = null,
+    /// CSS `animation` of the root; `clock_field` names the State's `controls.Clock`.
+    animation: controls.Animation = .{},
+    clock_field: ?[]const u8 = null,
     /// Optional fields of the application's State. Their types are checked by the builder.
     states_field: ?[]const u8 = null,
     environment_field: ?[]const u8 = null,
@@ -61,21 +64,27 @@ pub fn box(comptime id: anytype, comptime config: Config, comptime children: any
 
 /// Eases `root` along `config.transition` and keeps the step in its fade field, if any.
 fn stepFade(comptime config: Config, ui: anytype, root: *style.Computed, in: *const Input) void {
-    const field = config.fade_field orelse return;
-    const fade = &@field(ui.signals.state, field);
-    fade.* = fade.next(root, config.transition.under(ui.frame_settings.reduced_motion), in.dt);
+    if (config.fade_field) |field| {
+        const fade = &@field(ui.signals.state, field);
+        fade.* = fade.next(root, config.transition.under(ui.frame_settings.reduced_motion), in.dt);
+    }
+    if (config.clock_field) |field| {
+        const clock = &@field(ui.signals.state, field);
+        clock.* = clock.next(root, config.animation, in.dt, ui.frame_settings.reduced_motion);
+    }
 }
 
 /// Seconds until `config`'s fade lands: 0 asks for the next frame while it moves.
 fn fadeWake(comptime config: Config, ui: anytype) f32 {
-    const left = @field(ui.signals.state, config.fade_field.?).remaining(config.transition.under(ui.frame_settings.reduced_motion));
-    return if (left > 0) 0 else types.inf;
+    const fading = if (config.fade_field) |f| @field(ui.signals.state, f).remaining(config.transition.under(ui.frame_settings.reduced_motion)) > 0 else false;
+    const playing = if (config.clock_field) |f| config.animation.running(@field(ui.signals.state, f).elapsed) else false;
+    return if (fading or playing) 0 else types.inf;
 }
 
 /// Control `W` with a `wakeAfter` while `config`'s fade moves; `W` itself without a fade, so
 /// a control without a transition adds no hook.
 fn FadingControl(comptime config: Config, comptime W: type) type {
-    if (config.fade_field == null) return W;
+    if (config.fade_field == null and config.clock_field == null) return W;
     return struct {
         pub const focusable = W.focusable;
         pub const Payload = W.Payload;
@@ -93,15 +102,10 @@ fn FadingControl(comptime config: Config, comptime W: type) type {
 
 /// As `FadingControl`, for a box.
 fn FadingBox(comptime config: Config, comptime W: type) type {
-    if (config.fade_field == null) return W;
+    if (config.fade_field == null and config.clock_field == null) return W;
     return struct {
         pub const holds_content = true;
         pub const push = W.push;
-
-        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
-            _ = field;
-            return base.fieldError(State, "recipe fade", config.fade_field.?, controls.Fade);
-        }
 
         pub fn wakeAfter(ui: anytype, in: *const Input) f32 {
             _ = in;
@@ -218,6 +222,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             if (config.tokens_field) |f| if (base.fieldError(State, "recipe tokens", f, style.tokens.Table)) |err| return err;
             if (config.recipe_field) |f| if (base.fieldError(State, "recipe", f, model.Recipe)) |err| return err;
             if (config.fade_field) |f| if (base.fieldError(State, "recipe fade", f, controls.Fade)) |err| return err;
+            if (config.clock_field) |f| if (base.fieldError(State, "recipe clock", f, controls.Clock)) |err| return err;
             if (kind == .input) return if (literal) textfield_zig.textError(State, "textfield", bind) else textfield_zig.bindError(State, bind, text);
             if (kind == .slider) return base.fieldError(State, "recipe slider", bind, f32);
             if (kind == .checkbox) {

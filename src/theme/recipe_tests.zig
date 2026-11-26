@@ -440,3 +440,31 @@ test "a transition eases the face to its hover fill over its seconds, the same i
     output = try run.frame(&input);
     try std.testing.expect(output.comptime_.wake > 0);
 }
+
+test "an animation plays its keyframes over the root, alternating, the same in both front ends" {
+    @setEvalBranchQuota(200_000);
+    const Played = struct {
+        const fade_keys = [_]@import("../anim/keyframes.zig").Key{ .{ .at = 0, .value = 1 }, .{ .at = 0.1, .value = 0.2 } };
+        const animation: controls.Animation = .{ .tracks = &.{.{ .channel = 12, .keys = &fade_keys }}, .seconds = 0.1, .iterations = std.math.inf(f32), .alternate = true };
+        const App = struct {
+            clock: controls.Clock = .{},
+            pub fn build(app: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.button(f, .from("go"), "Go", .{ .animation = animation, .clock = &app.clock }) catch unreachable;
+                f.close();
+            }
+        };
+        const State_ = struct { clock: controls.Clock = .{} };
+        const PUi = base.ComptimeUi(State_, spec.col(panel, .{ct.button(.go, "Go", .{ .animation = animation, .clock_field = "clock" })}), .default);
+        const PRun = base.Harness(App, PUi, .{ .nodes = 16, .texts = 4, .customs = 2, .strings = 64, .depth = 8 });
+        var run: PRun = .{};
+    };
+    try std.testing.expectEqual(@as(f32, 0.05), Played.animation.local(0.05));
+    try std.testing.expectApproxEqAbs(@as(f32, 0.05), Played.animation.local(0.15), 1e-6);
+    const run = &Played.run;
+    run.init();
+    const input: Input = .{ .viewport = .{ 320, 200 }, .dt = 0.025 };
+    var output = try run.frame(&input);
+    for (0..9) |_| output = try run.frame(&input);
+    try std.testing.expect(output.comptime_.wake == 0);
+}
