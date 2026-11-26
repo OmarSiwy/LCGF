@@ -46,6 +46,7 @@ pub const Feature = enum {
     native_material,
     custom_material,
     inline_custom,
+    canvas,
 };
 pub const Set = std.enums.EnumSet(Feature);
 pub const Support = enum { exact, approximation, unsupported };
@@ -65,6 +66,9 @@ pub const Profile = struct {
     custom_material: bool = false,
     inline_custom: bool = false,
     depth_scene: bool = false,
+    /// The back end draws `canvas` commands (it declares `drawCanvas`: sw); the others draw
+    /// nothing for them, and `checkDraw` reports a canvas as `UnsupportedFeature`.
+    canvas: bool = false,
 
     pub const stock: Profile = .{};
     pub const portable_sdr: Profile = .{ .portable = true };
@@ -96,11 +100,12 @@ pub fn support(profile: Profile, feature: Feature) Finding {
         .custom_material => if (profile.custom_material) .exact else .unsupported,
         .inline_custom => if (profile.inline_custom) .exact else .unsupported,
         .depth_scene => if (profile.depth_scene) .exact else .unsupported,
+        .canvas => if (profile.canvas) .exact else .unsupported,
         else => .unsupported,
     };
     if (direct != .unsupported) return .{ .feature = feature, .support = direct, .route = .direct };
     const portable = switch (feature) {
-        .linear_hdr, .native_material, .custom_material, .inline_custom, .depth_scene => false,
+        .linear_hdr, .native_material, .custom_material, .inline_custom, .depth_scene, .canvas => false,
         else => profile.portable,
     };
     return .{ .feature = feature, .support = if (portable) (if (feature == .analytic_box_shadow) .approximation else .exact) else .unsupported, .route = .prepared };
@@ -218,6 +223,10 @@ pub fn checkDraw(list: *const draw.DrawList, glyphs: iface.Glyphs, t: ?*const tr
             if (index >= list.custom_len) return error.InvalidDrawList;
             if (!profile.inline_custom) return error.UnsupportedFeature;
         },
+        .canvas => |index| {
+            if (index >= list.custom_len or index >= list.canvases.len) return error.InvalidDrawList;
+            if (!profile.canvas) return error.UnsupportedFeature;
+        },
     };
 }
 
@@ -267,6 +276,23 @@ test "checked rendering rejects stripped shaders before an ordinary backend draw
     try render(&backend, target, &list, .{}, null, .stock, .{});
     try std.testing.expect(pixels[0] != 0);
     try std.testing.expect(pixels[0] != pixels[7]);
+}
+
+test "a canvas command is reported where the profile has no canvas" {
+    const mem = @import("../core/mem.zig");
+    var raw: [8192]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var list = draw.DrawList.init(&carver, 2, 1, 1);
+    var rows: [1]draw.CanvasDraw = undefined;
+    list.canvases = &rows;
+    list.custom_len = 1;
+    list.cmd_len = 1;
+    list.cmd.kind[0] = @backingInt(draw.DrawList.Kind.canvas);
+    list.cmd.first[0] = 0;
+    try std.testing.expectError(error.UnsupportedFeature, checkDraw(&list, .{}, null, .stock, .{}));
+    try checkDraw(&list, .{}, null, .{ .canvas = true }, .{});
+    list.cmd.first[0] = 1;
+    try std.testing.expectError(error.InvalidDrawList, checkDraw(&list, .{}, null, .{ .canvas = true }, .{}));
 }
 
 test "image brush sampling requests preparation rather than a backend-default sampler" {

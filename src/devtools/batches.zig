@@ -54,14 +54,14 @@ pub fn stats(d: *const DrawList, t: *const Tree, rows: u32, text_node: []const u
         const mine = switch (d.command(@intCast(k))) {
             .quads => |b| b.first < s.quads,
             .text => |r| text_node[r] < rows,
-            .custom => |c| custom_node[c] < rows,
+            .custom, .canvas => |c| custom_node[c] < rows,
         };
         if (!mine) break;
         s.cmds += 1;
         switch (d.command(@intCast(k))) {
             .quads => s.batches += 1,
             .text => s.texts += 1,
-            .custom => s.customs += 1,
+            .custom, .canvas => s.customs += 1,
         }
     }
     return s;

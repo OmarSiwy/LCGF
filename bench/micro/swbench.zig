@@ -443,7 +443,7 @@ fn writeDump(io: std.Io, gpa: std.mem.Allocator, path: []const u8, s: *const Sce
     for (s.cmds) |c| switch (c) {
         .quads => |b| try text.print(gpa, "quads {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture) }),
         .text => |run| try text.print(gpa, "text {d} {d}\n", .{ s.first[run], s.count[run] }),
-        .custom => {},
+        .custom, .canvas => {},
     };
     try d.writeFile(io, .{ .sub_path = "cmds.txt", .data = text.items });
 }

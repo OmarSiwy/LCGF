@@ -301,7 +301,7 @@ fn items(d: *const DrawList, out: []Item) u32 {
             out[n] = .{ .kind = 1, .ref = k, .box = cut(d.runs[k].rect, d.runs[k].clip) };
             n += 1;
         },
-        .custom => |k| {
+        .custom, .canvas => |k| {
             out[n] = .{ .kind = 2, .ref = k, .box = cut(d.customs[k].rect, d.customs[k].clip) };
             n += 1;
         },

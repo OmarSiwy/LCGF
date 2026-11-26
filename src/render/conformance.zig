@@ -66,7 +66,7 @@ pub fn fill(s: *const Scene, d: *DrawList) void {
                 d.cmd.count[i] = b.count;
                 d.cmd.key[i] = (@as(u32, @backingInt(b.texture)) << 16) | @backingInt(b.material);
             },
-            .text, .custom => |k| {
+            .text, .custom, .canvas => |k| {
                 d.cmd.first[i] = k;
                 d.cmd.count[i] = 1;
                 d.cmd.key[i] = 0;

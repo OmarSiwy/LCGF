@@ -61,6 +61,7 @@ fn renderPrepared(app: anytype, gfx: *const sw.Software, fb: *sw.Framebuffer, d:
         .quads => |batch| gfx.drawBatch(pass, batch),
         .text => |run| text.drawText(pass, run),
         .custom => |row| if (@hasDecl(App, "drawCustom")) app.drawCustom(fb, &d.customs[row]),
+        .canvas => |row| if (comptime @hasDecl(sw.Software, "drawCanvas")) gfx.drawCanvas(pass, row),
     };
 }
 
@@ -303,7 +304,7 @@ fn samePrimitive(a: DrawView, left: Primitive, b: DrawView, right: Primitive) bo
             break :blk sameRow(TextRun, &first, &second) and
                 std.mem.eql(u8, a.strings[first_start..][0..first.bytes], b.strings[second_start..][0..second.bytes]);
         },
-        .custom => unreachable, // supportsIncremental rejects custom commands.
+        .custom, .canvas => unreachable, // supportsIncremental rejects custom commands.
     };
 }
 
@@ -317,7 +318,7 @@ fn addPrimitiveBounds(bounds: *Bounds, view: DrawView, primitive: Primitive) voi
             const r = &view.runs[primitive.row];
             bounds.add(textBounds(r), r.clip, true);
         },
-        .custom => unreachable,
+        .custom, .canvas => unreachable,
     }
 }
 

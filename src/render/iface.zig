@@ -15,6 +15,9 @@
 //!        One instanced draw of `batch.count` quads from `batch.first`.
 //!   fn drawText(*const B, B.Pass, run: u32) void
 //!        One instanced draw of run `run`'s glyph quads (`Glyphs.first[run]`, `count[run]`).
+//!   fn drawCanvas(*const B, B.Pass, k: u32) void                 (optional, `drawsCanvas`)
+//!        Draws canvas command k (`DrawList.canvases[k]` in `customs[k]`); without it a canvas
+//!        draws nothing.
 //!   fn drawGlyphSpan(*const B, B.Pass, span: [2]u32) void      (optional)
 //!        One instanced draw of `span[1]` glyph quads from `span[0]`: the command loop gives it
 //!        consecutive runs whose glyphs are adjacent, so they cost one draw, not one each.
@@ -90,6 +93,15 @@ pub fn check(comptime B: type) void {
     }
 }
 
+/// Whether back end `B` draws `canvas` commands: it declares `drawCanvas(*const B, B.Pass, k: u32)`,
+/// drawing `DrawList.canvases[k]` inside `customs[k]`. `drawUntilCustom` skips canvas commands
+/// for any other back end, which draws nothing there; `capabilities.checkDraw` with
+/// `Profile.canvas` false reports them as `UnsupportedFeature`. Only sw draws them until each
+/// GPU back end has its canvas pipeline (docs/plans/schemify.md, C4).
+pub fn drawsCanvas(comptime B: type) bool {
+    return @hasDecl(B, "drawCanvas");
+}
+
 /// Draws commands `from`, `from + 1`, ... up to the next custom command and returns its index,
 /// or `draw.cmd_len` when there is none. The host draws the custom one and continues at the
 /// returned index + 1:
@@ -113,6 +125,7 @@ pub fn drawUntilCustom(b: anytype, pass: @TypeOf(b.*).Pass, draw: *const DrawLis
         else
             b.drawText(pass, run),
         .custom => return i,
+        .canvas => |k| if (comptime drawsCanvas(B)) b.drawCanvas(pass, k),
     };
     return i;
 }
@@ -210,6 +223,29 @@ test "contract: quads and text go to the back end, customs stop the loop for the
     var all: Tally.Log = .{};
     render(&gfx, &all, &d);
     try testing.expectEqualSlices(u32, @ptrCast(log.rows[0..3]), @ptrCast(all.rows[0..all.len]));
+}
+
+test "contract: a back end without drawCanvas draws nothing for a canvas command" {
+    const bytes = comptime blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 4, 1, 1);
+        break :blk counter.off;
+    };
+    var buf: [bytes]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, 4, 1, 1);
+    for ([_]DrawList.Kind{ .quads, .canvas, .quads }, [_]u32{ 0, 0, 1 }, 0..) |kind, first, i| {
+        d.cmd.kind[i] = @backingInt(kind);
+        d.cmd.first[i] = first;
+        d.cmd.count[i] = 1;
+    }
+    d.cmd_len = 3;
+    d.quad_len = 2;
+    comptime std.debug.assert(!drawsCanvas(Tally));
+    var gfx: Tally = .{};
+    var log: Tally.Log = .{};
+    try testing.expectEqual(3, drawUntilCustom(&gfx, &log, &d, 0));
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 1, 0, 1, 1 }, @ptrCast(log.rows[0..log.len]));
 }
 
 test "contract: check accepts a back end" {

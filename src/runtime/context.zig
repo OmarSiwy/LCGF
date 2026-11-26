@@ -8,7 +8,8 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const Strings = @import("../core/strings.zig").Strings;
-const DrawList = @import("../draw/draw_list.zig").DrawList;
+const draw_list = @import("../draw/draw_list.zig");
+const DrawList = draw_list.DrawList;
 const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const Input = @import("../core/input.zig").Input;
@@ -174,6 +175,11 @@ pub const Context = struct {
     redraw_all: bool = false,
     /// Viewport and scale of the last `begin`.
     last_view: [3]f32 = @splat(0),
+    /// Set by `enableCanvas`: turns this frame's canvas nodes' custom commands into `canvas`
+    /// commands after paint.
+    canvas_hook: ?*const fn (ctx: *Context) void = null,
+    /// `frame` when `Frame.canvas` last ran: a frame without a canvas skips the marking.
+    canvas_frame: u32 = 0,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -217,6 +223,36 @@ pub const Context = struct {
         _ = ctx.damage.frame(t, tx, cu, strings);
         damage.cull(&ctx.draw, if (ctx.redraw_all) &damage.Region.everything else &ctx.damage.region);
         ctx.redraw_all = false;
+    }
+
+    /// Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `limits.customs` of
+    /// them, the caller's, alive as long as the context) become `DrawList.canvases`, one per
+    /// custom row. Like `trackDamage`, a program that never calls it links none of its code.
+    pub fn enableCanvas(ctx: *Context, rows: []draw_list.CanvasDraw) void {
+        std.debug.assert(rows.len >= ctx.limits.customs);
+        // No stamp may be this frame's or a later one's: those rows would read as canvases.
+        for (rows) |*r| r.stamp = ctx.frame -% 1;
+        ctx.draw.canvases = rows;
+        ctx.canvas_hook = &markCanvases;
+    }
+
+    /// Custom ops and commands whose row was written by `Frame.canvas` this frame become
+    /// canvas ones. The ops too, so a pass that encodes them again (`order.mergeAcrossText`)
+    /// keeps them; both index `customs` and `canvases` by the same row.
+    fn markCanvases(ctx: *Context) void {
+        if (ctx.canvas_frame != ctx.frame) return;
+        const d = &ctx.draw;
+        const custom = @backingInt(DrawList.Kind.custom);
+        const canvas = @backingInt(DrawList.Kind.canvas);
+        const last = d.canvases.len - 1;
+        for (d.op.kind[0..d.op_len], d.op.ref[0..d.op_len]) |*kind, ref| {
+            const is = (kind.* == custom) & (d.canvases[@min(ref, last)].stamp == ctx.frame);
+            kind.* = @intCast(simd.selU(is, canvas, kind.*));
+        }
+        for (d.cmd.kind[0..d.cmd_len], d.cmd.first[0..d.cmd_len]) |*kind, ref| {
+            const is = (kind.* == custom) & (d.canvases[@min(ref, last)].stamp == ctx.frame);
+            kind.* = @intCast(simd.selU(is, canvas, kind.*));
+        }
     }
 
     /// With `trackDamage`: the next frame's draw list covers the whole window, as for a host
@@ -661,6 +697,7 @@ const example = struct {
                 d.quads += batch.count;
             },
             .text => d.texts += 1,
+            .canvas => {},
             .custom => |k| {
                 d.customs += 1;
                 d.viewport = draw.customs[k].rect;

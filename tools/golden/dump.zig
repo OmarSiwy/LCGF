@@ -78,7 +78,7 @@ pub fn main() void {
     for (0..d.cmd_len) |i| switch (d.command(@intCast(i))) {
         .quads => |b| print(6, "quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
         .text => |k| print(6, "text {d} {d}\n", .{ first[k], count[k] }),
-        .custom => |k| print(6, "custom {d} {d} {d} {d} {d}\n", .{ d.customs[k].rect[0], d.customs[k].rect[1], d.customs[k].rect[2], d.customs[k].rect[3], d.customs[k].data }),
+        .custom, .canvas => |k| print(6, "custom {d} {d} {d} {d} {d}\n", .{ d.customs[k].rect[0], d.customs[k].rect[1], d.customs[k].rect[2], d.customs[k].rect[3], d.customs[k].data }),
     };
     const rr = result.tree.rect(result.tree.find(lcgf.types.Id.from("reset")));
     print(6, "reset {d} {d} {d} {d}\n", .{ rr.x0, rr.y0, rr.x1, rr.y1 });

@@ -181,7 +181,7 @@ fn dump(comptime Page: type, replay_src: []const u8, target: u32, io: std.Io, ou
     for (0..d.cmd_len) |i| switch (d.command(@intCast(i))) {
         .quads => |b| try wr.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
         .text => |k| try wr.print("text {d} {d}\n", .{ first[k], count[k] }),
-        .custom => return error.PageHasCustom,
+        .custom, .canvas => return error.PageHasCustom,
     };
     for (textures) |tex| {
         var used = false;

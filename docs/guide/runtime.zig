@@ -126,6 +126,7 @@ test "host loop: init, frames, idle, click" {
             for (0..out.draw.cmd_len) |i| switch (out.draw.command(@intCast(i))) {
                 .quads => |batch| _ = batch, // renderer.drawBatch(pass, batch)
                 .text => |run| _ = run, // renderer.drawText(pass, run)
+                .canvas => |k| _ = k, // renderer.drawCanvas(pass, k), on back ends with one
                 .custom => |k| { // your own pipeline, in paint order
                     customs += 1;
                     viewport = out.draw.customs[k].rect;

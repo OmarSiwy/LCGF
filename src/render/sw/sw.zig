@@ -364,7 +364,7 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
                     const span = iface.glyphSpan(s.glyphs, list, &i, run);
                     s.drawGlyphSpan(t, span);
                 },
-                .custom => {},
+                .custom, .canvas => {},
             };
         }
 

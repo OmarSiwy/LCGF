@@ -8,6 +8,7 @@ const types = @import("../core/types.zig");
 const Texture = types.Texture;
 const Material = types.Material;
 const Region = @import("damage.zig").Region;
+const canvas = @import("canvas.zig");
 
 /// One instance of the quad pipeline. This is the GPU vertex-buffer layout,
 /// so the whole array uploads with a single copy.
@@ -65,6 +66,18 @@ pub const CustomDraw = extern struct {
     opacity: f32 = 1,
 };
 
+/// A canvas node's batch (`Frame.canvas`): `ranges` of `instances` under `camera`. Row k goes
+/// with custom draw k, which holds the node's rect, clip and opacity. The instances are the
+/// caller's and must outlive the frame's drawing.
+pub const CanvasDraw = struct {
+    /// The front end's frame counter when the row was written: a custom row whose stamp is not
+    /// this frame's is an ordinary custom draw.
+    stamp: u32 = 0,
+    instances: *const canvas.Instances,
+    camera: canvas.Camera,
+    ranges: []const canvas.Range,
+};
+
 /// A run of quads sharing one texture and material: one instanced draw.
 pub const Batch = struct { first: u32, count: u32, texture: Texture, material: Material };
 
@@ -76,6 +89,9 @@ pub const Cmd = union(DrawList.Kind) {
     text: u32,
     /// Index into `customs`: the caller draws this one itself.
     custom: u32,
+    /// Index into `customs` (the node) and `canvases` (what it draws): a back end that declares
+    /// `drawCanvas` draws it (src/render/iface.zig); others draw nothing for it.
+    canvas: u32,
 };
 
 /// One frame's paint output. Rows are carved from the caller's buffer by `init`; `paint.emit`
@@ -87,6 +103,9 @@ pub const DrawList = struct {
     run_len: u32 = 0,
     customs: []CustomDraw,
     custom_len: u32 = 0,
+    /// One row per custom row, carved by a front end that makes canvases (`Limits.canvas`),
+    /// empty otherwise.
+    canvases: []CanvasDraw = &.{},
     /// Storage that `TextRun.start` indexes.
     strings: []const u8 = "",
     /// Commands are stored as columns so they can be produced without
@@ -104,7 +123,7 @@ pub const DrawList = struct {
     depth: Depth = .{ .quad = &.{}, .cmd = &.{}, .opaques = &.{} },
     opaque_len: u32 = 0,
 
-    pub const Kind = enum(u8) { quads, text, custom };
+    pub const Kind = enum(u8) { quads, text, custom, canvas };
     /// `key` is texture << 16 | material for quad batches, 0 otherwise. `first` indexes `quads`,
     /// `runs` or `customs` by kind; `count` is the batch length for quads.
     pub const CmdColumns = struct { kind: []u8, first: []u32, count: []u32, key: []u32 };
@@ -141,6 +160,7 @@ pub const DrawList = struct {
             } },
             .text => .{ .text = d.cmd.first[i] },
             .custom => .{ .custom = d.cmd.first[i] },
+            .canvas => .{ .canvas = d.cmd.first[i] },
         };
     }
 

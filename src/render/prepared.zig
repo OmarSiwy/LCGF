@@ -264,6 +264,8 @@ pub fn drawRange(dst: surface.Surface, scratch: surface.Surface, list: *const dr
             try validImage(resources.customs[custom], dst, scratch);
             if (view.tree) |input| if ((try treeClips(input.value, list.customs[custom].node, input.scratch)).len + view.clips.len > limits.clips) return error.BudgetExceeded;
         },
+        // ponytail: no prepared route for a canvas yet; draw it with a back end that has one.
+        .canvas => return error.UnsupportedFeature,
     };
     for (first..first + count) |command| switch (list.command(@intCast(command))) {
         .quads => |batch| for (batch.first..batch.first + batch.count) |i| {
@@ -286,6 +288,7 @@ pub fn drawRange(dst: surface.Surface, scratch: surface.Surface, list: *const dr
             const q: draw.Quad = .{ .rect = c.rect, .clip = c.clip, .params = @splat(0), .uv = .{ 0, 0, 1, 1 }, .radii = @splat(0), .fill = 0xffffffff, .border_color = 0, .border = 0, .opacity = c.opacity, .xform = c.xform, .clip_radii = c.clip_radii };
             try paintQuad(dst, scratch, q, resources.customs[custom], view, clips);
         },
+        .canvas => unreachable, // rejected by the validation above
     };
 }
 

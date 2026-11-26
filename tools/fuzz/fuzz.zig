@@ -63,7 +63,7 @@ fn checkFrame(out: lcgf.context.Output, pointer: [2]f32) !void {
     for (0..draw.cmd_len) |i| switch (draw.command(@intCast(i))) {
         .quads => |batch| try std.testing.expect(batch.first + batch.count <= draw.quad_len),
         .text => |index| try std.testing.expect(index < draw.run_len),
-        .custom => |index| try std.testing.expect(index < draw.custom_len),
+        .custom, .canvas => |index| try std.testing.expect(index < draw.custom_len),
     };
     try std.testing.expectEqual(draw.quad_len * @sizeOf(lcgf.draw_list.Quad), draw.quadBytes().len);
 }

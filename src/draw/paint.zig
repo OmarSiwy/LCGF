@@ -367,6 +367,7 @@ test "a renderer's one switch per command draws every quad, run and custom once,
             try testing.expectEqual(runs, k);
             runs += 1;
         },
+        .canvas => return error.TestUnexpectedResult,
         .custom => |k| {
             try testing.expectEqual(customs, k);
             try testing.expectEqual(sc.t.rect(Scene.view).array(), d.customs[k].rect);

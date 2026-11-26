@@ -2228,18 +2228,24 @@ A rectangle handed back to the host, which draws it with its own pipeline.
 Fields: `rect`, `clip`, `data`, `id`, `node`, `xform`, `clip_radii`, `opacity`
 
 
+### `CanvasDraw` (struct)
+A canvas node's batch (`Frame.canvas`): `ranges` of `instances` under `camera`.
+
+Fields: `stamp`, `instances`, `camera`, `ranges`
+
+
 ### `Cmd` (union)
 One step for the renderer, in paint order.
 
-Fields: `quads`, `text`, `custom`
+Fields: `quads`, `text`, `custom`, `canvas`
 
 
 ### `DrawList` (struct)
 One frame's paint output.
 
-Fields: `quads`, `quad_len`, `runs`, `run_len`, `customs`, `custom_len`, `strings`, `cmd`, `cmd_len`, `op`, `op_len`, `damage`, `depth`, `opaque_len`
+Fields: `quads`, `quad_len`, `runs`, `run_len`, `customs`, `custom_len`, `canvases`, `strings`, `cmd`, `cmd_len`, `op`, `op_len`, `damage`, `depth`, `opaque_len`
 
-- `Kind = enum(u8) { quads, text, custom }`
+- `Kind = enum(u8) { quads, text, custom, canvas }`
 - `CmdColumns = struct { kind: []u8, first: []u32, count: []u32, key: []u32 }`: `key` is texture << 16 | material for quad batches, 0 otherwise.
 - `OpColumns = struct { kind: []u8, key: []u32, ref: []u32 }`: Paint's intermediate stream: one op per painted quad, text run or custom draw, in paint order, before quads with equal keys merge into commands.
 - `Depth = struct { quad: []f32, cmd: []f32, opaques: []u32 }`: `quad[i]` is quad i's depth and `cmd[k]` that of text or custom command k, in (0, 1), smaller in front (later in paint order).
@@ -2906,6 +2912,7 @@ The back-end contract: what every renderer (software, Vulkan, Metal, D3D12, GL E
 
 - `required = [_][]const u8{ "Queue", "Pass", "prepare", "drawBatch", "drawText" }`: The declarations `check` requires of a back end.
 - `fn check(comptime B: type) void`: Compile error unless `B` declares everything in `required`.
+- `fn drawsCanvas(comptime B: type) bool`: Whether back end `B` draws `canvas` commands: it declares `drawCanvas(*const B, B.Pass, k: u32)`, drawing `DrawList.canvases[k]` inside `customs[k]`.
 - `fn drawUntilCustom(b: anytype, pass: @TypeOf(b.*).Pass, draw: *const DrawList, from: u32) u32`: Draws commands `from`, `from + 1`, ...
 - `fn glyphSpan(g: Glyphs, list: anytype, i: *u32, run: u32) [2]u32`: Text command `i.*`'s glyphs (run `run`) and those of the text commands after it, while each run's glyphs start where the last one's end; `i.*` is left at the last command taken.
 - `fn render(b: anytype, pass: @TypeOf(b.*).Pass, draw: *const DrawList) void`: Diagonal: the whole list, skipping custom draws.
@@ -3301,10 +3308,11 @@ Fields: `draw`, `tree`, `texts`, `platform`, `status`, `wake`, `pace`
 ### `Context` (struct)
 Everything that outlives a frame.
 
-Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`, `damage`, `damage_hook`, `redraw_all`, `last_view`
+Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`, `damage`, `damage_hook`, `redraw_all`, `last_view`, `canvas_hook`, `canvas_frame`
 
 - `needsFrame = scheduler.needsFrame`
 - `fn trackDamage(ctx: *Context) void`: From the next frame on, keeps in the draw list only the quads that reach what changed since the last frame, with `DrawList.damage` saying where: for a host that keeps last frame's pixels and redraws only that (`sw.Setup.draw`, the X11 and Wayland shells, the bare-metal flush).
+- `fn enableCanvas(ctx: *Context, rows: []draw_list.CanvasDraw) void`: Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `limits.customs` of them, the caller's, alive as long as the context) become `DrawList.canvases`, one per custom row.
 - `fn redrawAll(ctx: *Context) void`: With `trackDamage`: the next frame's draw list covers the whole window, as for a host that has lost last frame's pixels (a new buffer).
 - `fn requiredBytes(limits: Limits) usize`: Bytes `init` needs.
 - `fn init(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context`: The buffer is the only memory the library will ever use.
@@ -3318,6 +3326,7 @@ Frame: one frame under construction in the runtime front end (tier 1).
 
 ### Top level
 
+- `CanvasOptions = struct { camera: canvas_mod.Camera = .{}, ranges: []const canvas_mod.Range }`: `Frame.canvas`'s camera and the instance ranges it draws, in order (layers; a selection on top).
 - `fn resolve(t: *Tree, lv: *const levels.Levels, axis: types.Axis, viewport: f32, kept: []const u32) void`: `incremental.resolveKept`, or `levels.resolve` (`lv` built) when nothing is kept.
 
 ### `Frame` (struct)
@@ -3344,6 +3353,7 @@ Fields: `ctx`, `in`
 - `fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node`: `text` with full control over the leaf (padding, sizing, background).
 - `fn custom(f: *Frame, id: Id, style: Style, data: u64) Node`: Reserves a rect that the caller draws itself.
 - `fn customRow(f: *Frame, id: Id, row: anytype, data: u64) Node`: `custom` from a row (`openRow`).
+- `fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node`: A node that draws `o.ranges` of `shapes` under `o.camera`: a `canvas` command in paint order, clipped to the node.
 - `fn interact(f: *Frame, node: Node, sense: Sense) Response`: Makes `node` interactive and reports what happened to it this frame.
 - `fn drag(f: *const Frame, id: Id) [2]f32`: Pointer movement this frame while `id` is dragged; zero otherwise.
 - `fn lastRect(f: *const Frame, id: Id) Rect`: Where `id` was laid out last frame.
@@ -8624,7 +8634,7 @@ Fields: `preparation`, `approximations`
 
 ### `Profile` (struct)
 
-Fields: `native`, `portable`, `linear_hdr`, `native_material`, `custom_material`, `inline_custom`, `depth_scene`
+Fields: `native`, `portable`, `linear_hdr`, `native_material`, `custom_material`, `inline_custom`, `depth_scene`, `canvas`
 
 - `stock: Profile = .{}`
 - `portable_sdr: Profile = .{ .portable = true }`

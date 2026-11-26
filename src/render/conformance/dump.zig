@@ -39,7 +39,7 @@ pub fn main(init: std.process.Init) !void {
         for (0..d.cmd_len) |i| switch (d.command(@intCast(i))) {
             .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
             .text => |k| try w.print("text {d} {d}\n", .{ st.first[k], st.count[k] }),
-            .custom => |k| try w.print("custom {d} {d} {d} {d} {d}\n", .{ d.customs[k].rect[0], d.customs[k].rect[1], d.customs[k].rect[2], d.customs[k].rect[3], d.customs[k].data }),
+            .custom, .canvas => |k| try w.print("custom {d} {d} {d} {d} {d}\n", .{ d.customs[k].rect[0], d.customs[k].rect[1], d.customs[k].rect[2], d.customs[k].rect[3], d.customs[k].data }),
         };
         try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = w.buffered() });
     }

@@ -37,6 +37,11 @@ const levels = @import("../layout/levels.zig");
 const paint = @import("../draw/paint.zig");
 const outlines = @import("../draw/outline.zig");
 const scheduler = @import("scheduler.zig");
+const canvas_mod = @import("../draw/canvas.zig");
+
+/// `Frame.canvas`'s camera and the instance ranges it draws, in order (layers; a selection
+/// on top).
+pub const CanvasOptions = struct { camera: canvas_mod.Camera = .{}, ranges: []const canvas_mod.Range };
 
 // Ordinary text leaves differ only in whether they may shrink to wrap.
 const label_rows = [2]Template{
@@ -187,6 +192,32 @@ pub const Frame = struct {
         const ctx = f.ctx;
         const n = f.leafRow(id, row);
         f.tree().c.custom[n.ix()] = ctx.customs[ctx.cur].push(n.ix(), id, data);
+        return n;
+    }
+
+    /// A node that draws `o.ranges` of `shapes` under `o.camera`: a `canvas` command in paint
+    /// order, clipped to the node. Needs `Context.enableCanvas`. It is a custom row, so it
+    /// takes a `Limits.customs` row, orders, layers and damages like a custom node; its damage
+    /// covers the camera, the ranges and `shapes.revision`, so a pan or an edit redraws it.
+    /// `shapes` and `o.ranges` are the caller's and must outlive the frame's drawing. Not for
+    /// a subtree kept by `reuse`, whose copied custom rows are ordinary custom draws.
+    pub fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node {
+        const ctx = f.ctx;
+        std.debug.assert(ctx.canvas_hook != null);
+        const view = extern struct { origin: [2]i64, scale: f32, offset: [2]f32, revision: u32, len: u32, verts: u32, shapes: u64 }{
+            .origin = o.camera.origin,
+            .scale = o.camera.scale,
+            .offset = o.camera.offset,
+            .revision = shapes.revision,
+            .len = shapes.len,
+            .verts = shapes.vert_len,
+            .shapes = @intFromPtr(shapes),
+        };
+        const key = std.hash.Wyhash.hash(std.hash.Wyhash.hash(3, std.mem.asBytes(&view)), std.mem.sliceAsBytes(o.ranges));
+        const n = f.custom(id, style, key);
+        const k = f.tree().c.custom[n.ix()];
+        ctx.canvas_frame = ctx.frame;
+        ctx.draw.canvases[k] = .{ .stamp = ctx.frame, .instances = shapes, .camera = o.camera, .ranges = o.ranges };
         return n;
     }
 
@@ -526,6 +557,7 @@ pub const Frame = struct {
         t.seal(0);
         const cu = &ctx.customs[ctx.cur];
         paint.emit(t, tx, cu, strings.buf[0..strings.len], &ctx.draw);
+        if (ctx.canvas_hook) |mark| mark(ctx);
         if (ctx.damage_hook) |record| record(ctx, t, tx, cu, strings.buf[0..strings.len]);
         ctx.anims.sweep(ctx.frame);
         ctx.tweens.sweep(ctx.frame);
@@ -575,6 +607,7 @@ fn rowRect(t: *const Tree, i: u32) Rect {
 
 const std = @import("std");
 const testing = std.testing;
+const DrawKind = @import("../draw/draw_list.zig").DrawList.Kind;
 const mem = @import("../core/mem.zig");
 
 /// A context over a static buffer, for tests.
@@ -757,6 +790,70 @@ test "custom: links the leaf to a row carrying its id and data" {
     try testing.expectEqual(@backingInt(Id.from("view")), cu.c.id[k]);
     try testing.expectEqual(@as(u64, 42), cu.c.data[k]);
     try testing.expectEqual(n.ix(), f.tree().find(.from("view")));
+}
+
+test "canvas: a canvas command in paint order, clipped to its node; other customs stay custom" {
+    const limits: @import("context.zig").Limits = .{ .nodes = 8, .texts = 1, .customs = 3, .strings = 16, .depth = 4, .damage = true };
+    const Fx = Fixture(limits);
+    var ctx = try Fx.context();
+    var rows: [limits.customs]@import("../draw/draw_list.zig").CanvasDraw = undefined;
+    ctx.enableCanvas(&rows);
+    ctx.trackDamage();
+    var buf: [canvas_mod.Instances.requiredBytes(4, 0)]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var shapes: canvas_mod.Instances = .init(&carver, 4, 0);
+    _ = shapes.segment(.{ 0, 0 }, .{ 1_000, 0 }, .{ .width = 100 });
+    const wires = shapes.since(0);
+    const in: Input = .{ .viewport = .{ 200, 100 } };
+
+    const Build = struct {
+        fn frame(c: *Context, input: *const Input, sh: *const canvas_mod.Instances, ranges: []const canvas_mod.Range, cam: canvas_mod.Camera) Output {
+            var f = c.begin(input);
+            _ = f.open(.none, .{ .dir = .x, .size = .{ .fill, .fill } });
+            _ = f.custom(.from("host"), .{ .size = .{ .px(50), .fill } }, 1);
+            _ = f.canvas(.from("schematic"), .{ .size = .{ .fill, .fill } }, sh, .{ .camera = cam, .ranges = ranges });
+            f.close();
+            return f.end(.{});
+        }
+    };
+    const cam: canvas_mod.Camera = .{ .origin = .{ 500, 0 }, .scale = 0.1, .offset = .{ 75, 50 } };
+    var out = Build.frame(&ctx, &in, &shapes, &.{wires}, cam);
+    var kinds: [2]DrawKind = undefined;
+    var n: u32 = 0;
+    for (0..out.draw.cmd_len) |i| switch (out.draw.command(@intCast(i))) {
+        .quads, .text => {},
+        .custom, .canvas => {
+            kinds[n] = @fromBackingInt(out.draw.cmd.kind[i]);
+            n += 1;
+        },
+    };
+    try testing.expectEqual(2, n);
+    try testing.expectEqualSlices(DrawKind, &.{ .custom, .canvas }, &kinds);
+    const k = out.draw.command(out.draw.cmd_len - 1).canvas;
+    try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.customs[k].rect);
+    try testing.expectEqual(&shapes, out.draw.canvases[k].instances);
+    try testing.expectEqualSlices(canvas_mod.Range, &.{wires}, out.draw.canvases[k].ranges);
+    try testing.expectEqual(cam, out.draw.canvases[k].camera);
+
+    // The same frame again changes nothing; a pan damages the canvas node, an edit too.
+    out = Build.frame(&ctx, &in, &shapes, &.{wires}, cam);
+    try testing.expectEqual(0, out.draw.damage.pixels());
+    var panned = cam;
+    panned.origin[0] += 10;
+    out = Build.frame(&ctx, &in, &shapes, &.{wires}, panned);
+    try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.damage.bounds());
+    out = Build.frame(&ctx, &in, &shapes, &.{wires}, panned);
+    try testing.expectEqual(0, out.draw.damage.pixels());
+    _ = shapes.segment(.{ 0, 0 }, .{ 0, 1_000 }, .{ .width = 100 });
+    out = Build.frame(&ctx, &in, &shapes, &.{shapes.since(0)}, panned);
+    try testing.expectEqual([4]f32{ 50, 0, 200, 100 }, out.draw.damage.bounds());
+
+    // A frame without the canvas: its custom row is an ordinary custom draw again.
+    var f = ctx.begin(&in);
+    _ = f.custom(.from("host"), .{ .size = .{ .px(50), .fill } }, 1);
+    _ = f.custom(.from("other"), .{ .size = .{ .px(50), .fill } }, 2);
+    out = f.end(.{});
+    for (0..out.draw.cmd_len) |i| try testing.expect(out.draw.command(@intCast(i)) != .canvas);
 }
 
 /// Two 40 x 40 buttons, "a" at x 0..40 and "b" at 50..90, laid out by hand (Frame.end comes later).

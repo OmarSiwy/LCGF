@@ -250,7 +250,7 @@ pub fn main(init: std.process.Init) !void {
     for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     for (0..sc.d.cmd_len) |i| switch (sc.d.command(@intCast(i))) {
         .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
-        .text, .custom => return error.SceneHasTextOrCustom,
+        .text, .custom, .canvas => return error.SceneHasTextOrCustom,
     };
     try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = w.buffered() });
 }
