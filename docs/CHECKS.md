@@ -108,6 +108,10 @@ jump those merges added was removed). Each remaining jump was read in the disass
 - `p_grid_resolve` jcc 11 -> 16, back 4 -> 5: a subgrid copies its parent's tracks instead of
   sizing its own, once per grid, and the copy loop's bound and alias checks. Running
   `sizeTracks` for every grid to drop the test still leaves the copy loop.
+  Then 16 -> 17: on x, a `Decl.repeat` grid (`repeat(auto-fill/auto-fit)`, `columns: W`)
+  counts its columns from its laid-out width, one test of `repeat_count` per grid. The work
+  itself is out of line (`repeatColumns`); calling it for every grid to drop the test would
+  cost a call per grid on every grid page.
 - `p_flip` short_fwd 4 -> 5 and `p_damage_frame` back 7 -> 8: trip-count dispatch of an
   auto-vectorized loop and a loop-entry test placed before its loop; the sources are unchanged.
 

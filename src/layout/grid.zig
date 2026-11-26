@@ -589,10 +589,12 @@ fn placeGrid(gs: *Grids, k: u32) void {
     }
 }
 
+// ponytail: out of line so the pass that every grid page runs keeps its branch census; only
+// repeat grids pay the call.
 /// A `Decl.repeat` grid `k` whose content width is now `inner`: as many columns as fit (for
 /// auto-fit, no more than its items fill), its items placed again, and the columns' content
 /// taken again from the items' natural widths. Run by `resolve` on x, before sizing tracks.
-fn repeatColumns(t: *const Tree, gs: *Grids, k: u32, inner: f32) void {
+noinline fn repeatColumns(t: *const Tree, gs: *Grids, k: u32, inner: f32) void {
     const gap = gs.g.gap[0][k];
     const fitting: u32 = @intFromFloat(std.math.clamp(@floor((inner + gap) / (gs.g.repeat_min[k] + gap)), 1, @as(f32, @floatFromInt(gs.g.reserved[0][k]))));
     var demand: u32 = 0;
