@@ -151,21 +151,22 @@ pub const Node = struct {
     decoration: ?lcgf.text_decorations.Style = null,
     /// A label's style runs (inline runs, `spec.spans`), or empty.
     spans: []const lcgf.protocol.Span = &.{},
-    /// A text field that is `<input type=password>`: `widgets_textfield.password`.
-    secure: bool = false,
     /// A component's props, in attribute order.
     props: []const Prop = &.{},
     /// A part of the widget that CSS restyles apart from its root; none for the theme's.
     part: Part = .none,
-    /// A widget with state CSS (`button:hover`) is a recipe widget: these rules follow the
-    /// stock recipe's, in cascade order. Empty for the theme widget.
-    recipe: []const RecipeRule = &.{},
-    /// What a recipe widget or box takes beside its rules.
+    /// A widget's input attributes and what makes it a recipe one; one field, as `Part` is,
+    /// since one more Node field exceeds `std.MultiArrayList(Node)`'s comptime branch quota.
     live: Live = .{},
 };
 
-/// A recipe widget's or box's options beside its rules.
+/// A recipe widget's or box's rules and options; one Node field, as `Part` is.
 pub const Live = struct {
+    /// A text field that is `<input type=password>`: `widgets_textfield.password`.
+    secure: bool = false,
+    /// A widget with state CSS (`button:hover`) is a recipe widget: these rules follow the
+    /// stock recipe's, in cascade order. Empty for the theme widget.
+    recipe: []const RecipeRule = &.{},
     /// HTML disabled (its attribute or a `<fieldset disabled>`): the recipe's `States.disabled`.
     disabled: bool = false,
     /// A text field's `required`, `minlength` and `maxlength`, for `:invalid` and `:valid`.

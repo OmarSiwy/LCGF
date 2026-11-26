@@ -4,10 +4,10 @@
   <title>Supports</title>
   <style>
     @supports (gap: 4px) { .bar { display: flex; gap: 6px; } }
-    @supports (display: grid) { .bar { display: grid; } }
+    @supports (float: left) { .bar { display: block; } }
     @supports not (frobnicate: 1) { .bar { padding: 4px; } }
-    @supports (color: red) and ((opacity: 1) or (display: grid)) { span { color: #80c0ff; } }
-    @supports (display: flex) and (display: grid) { span { color: red; } }
+    @supports (color: red) and ((opacity: 1) or (float: left)) { span { color: #80c0ff; } }
+    @supports (display: flex) and (float: left) { span { color: red; } }
     .bar { transition: opacity 0.2s ease-in-out; }
     span { transition: none; }
   </style>

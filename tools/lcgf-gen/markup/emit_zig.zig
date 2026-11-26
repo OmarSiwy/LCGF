@@ -352,7 +352,7 @@ pub const Emit = struct {
         if (n.placed.sticky) |top| pos_close.print(e.arena, ", {d})", .{top}) catch unreachable;
         if (n.placed.layer != 0) pos_close.print(e.arena, ", {d})", .{n.placed.layer}) catch unreachable;
         // A recipe widget's CSS is in its recipe's rules.
-        const restyle = n.recipe.len == 0 and (!std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0);
+        const restyle = n.live.recipe.len == 0 and (!std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0);
         const has_children = switch (n.kind) {
             .container, .landmark, .when, .choice, .list, .dialog, .section, .popover, .scroll => true,
             .component => e.hasChild(i),
@@ -379,7 +379,7 @@ pub const Emit = struct {
             e.write(", .{");
             inner_close.appendSlice(e.arena, "})") catch unreachable;
         } else switch (n.kind) {
-            .container => if (n.recipe.len > 0) {
+            .container => if (n.live.recipe.len > 0) {
                 if (boxInteractive(n)) e.print("recipes.ct.box(.{f}, ", .{std.zig.fmtId(n.id)}) else e.write("recipes.ct.box(null, ");
                 e.print("{s}, .{{", .{e.config(n, false)});
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
@@ -414,7 +414,7 @@ pub const Emit = struct {
                 e.caption(n.text_kind, n.text);
                 e.write(")");
             },
-            .button, .link => if (n.recipe.len > 0) {
+            .button, .link => if (n.live.recipe.len > 0) {
                 e.print("recipes.ct.{s}(.{f}, ", .{ @tagName(n.kind), std.zig.fmtId(n.id) });
                 e.caption(n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
@@ -429,17 +429,17 @@ pub const Emit = struct {
                 }
                 e.write(")");
             },
-            .checkbox, .@"switch" => if (n.recipe.len > 0) {
+            .checkbox, .@"switch" => if (n.live.recipe.len > 0) {
                 e.print("recipes.ct.{s}(.{f}, .{f}, ", .{ if (n.kind == .checkbox) "checkbox" else "switchControl", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
             } else e.boolSpec(n),
-            .toggle => if (n.recipe.len > 0) {
+            .toggle => if (n.live.recipe.len > 0) {
                 e.print("recipes.ct.toggle(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
             } else e.boolSpec(n),
-            .slider => if (n.recipe.len > 0) {
+            .slider => if (n.live.recipe.len > 0) {
                 e.print("recipes.ct.slider(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.structure(lcgf.widgets_slider.Range{ .lo = n.range[0], .hi = n.range[1] }, .{});
                 e.print(", {s})", .{e.config(n, false)});
@@ -452,13 +452,13 @@ pub const Emit = struct {
             .separator => e.print("{s}.ct.separator(theme, .{s})", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" }),
             .spacer => e.print("{s}.ct.spacer(.{s})", .{ e.use("spacer"), if (n.dir == .x) "x" else "y" }),
             .section => {
-                const faced_ = n.recipe.len == 0 and (restyle or n.part == .header);
-                if (n.recipe.len > 0)
+                const faced_ = n.live.recipe.len == 0 and (restyle or n.part == .header);
+                if (n.live.recipe.len > 0)
                     e.print("recipes.ct.details(theme, .{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) })
                 else
                     e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("accordion"), if (faced_) "sectionFace" else "section", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
-                if (n.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
+                if (n.live.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
                 if (faced_) {
                     e.write(", ");
                     e.fields(n.style, types.Style{}, &.{}, n.params_expr);
@@ -483,16 +483,16 @@ pub const Emit = struct {
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
             .number => {
-                if (n.recipe.len > 0)
+                if (n.live.recipe.len > 0)
                     e.print("recipes.ct.number(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) })
                 else
                     e.print("{s}.ct.number(theme, .{f}, .{f}, ", .{ e.use("number"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.structure(lcgf.widgets_number.Range{ .lo = n.range[0], .hi = n.range[1], .step = n.range[2] }, .{});
-                if (n.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
+                if (n.live.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
                 e.write(")");
             },
             .radio => {
-                if (n.recipe.len > 0)
+                if (n.live.recipe.len > 0)
                     e.print("recipes.ct.radio(.{f}, .{f}, .{{", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) })
                 else
                     e.print("{s}.ct.radio(theme, .{f}, .{f}, .{{", .{ e.use("radio"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
@@ -501,20 +501,20 @@ pub const Emit = struct {
                     e.string(c);
                 }
                 e.write(" }");
-                if (n.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
+                if (n.live.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
                 e.write(")");
             },
-            .textfield, .search => if (n.recipe.len > 0) {
+            .textfield, .search => if (n.live.recipe.len > 0) {
                 e.print("recipes.ct.{s}(.{f}, .{f}, ", .{ @tagName(n.kind), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
             } else {
                 const m = if (n.kind == .search) "search" else "textfield";
-                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use(m), if (n.secure) "password" else m, std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use(m), if (n.live.secure) "password" else m, std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(")");
             },
-            .textarea => if (n.recipe.len > 0) {
+            .textarea => if (n.live.recipe.len > 0) {
                 e.print("recipes.ct.textarea(.{f}, .{f}, {d}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind), n.level });
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.print(", {s})", .{e.config(n, false)});
@@ -657,7 +657,7 @@ pub const Emit = struct {
     /// The button of recipe select `n` (the button or its list), or null when it is a theme one.
     fn selectOf(e: *Emit, n: ir.Node) ?ir.Node {
         const nodes = e.page.nodes.slice();
-        for (0..nodes.len) |i| if (nodes.items(.kind)[i] == .select and nodes.items(.recipe)[i].len > 0 and std.mem.eql(u8, nodes.items(.id)[i], n.id)) return nodes.get(i);
+        for (0..nodes.len) |i| if (nodes.items(.kind)[i] == .select and nodes.items(.live)[i].recipe.len > 0 and std.mem.eql(u8, nodes.items(.id)[i], n.id)) return nodes.get(i);
         return null;
     }
 
@@ -759,11 +759,11 @@ pub const Emit = struct {
     /// `&ui.signals.state.<name>`, or inside an lcgf-each region this copy's entry of it, null
     /// past the copies it holds (those restyle instantly).
     fn copyRef(e: *Emit, name: []const u8) []const u8 {
-        const copies = for (e.page.fields.items) |f| {
+        const cap = for (e.page.fields.items) |f| {
             if (std.mem.eql(u8, f.name, name)) break f.cap;
         } else 0;
-        if (copies == 0) return std.fmt.allocPrint(e.arena, "&ui.signals.state.{f}", .{std.zig.fmtId(name)}) catch unreachable;
-        return std.fmt.allocPrint(e.arena, "if (copy0 < {d}) &ui.signals.state.{f}[copy0] else null", .{ copies, std.zig.fmtId(name) }) catch unreachable;
+        if (cap == 0) return std.fmt.allocPrint(e.arena, "&ui.signals.state.{f}", .{std.zig.fmtId(name)}) catch unreachable;
+        return std.fmt.allocPrint(e.arena, "if (copy0 < {d}) &ui.signals.state.{f}[copy0] else null", .{ cap, std.zig.fmtId(name) }) catch unreachable;
     }
 
     fn clockName(e: *Emit, n: ir.Node) []const u8 {
@@ -775,26 +775,26 @@ pub const Emit = struct {
     }
 
     fn inked(n: ir.Node) bool {
-        for (n.recipe) |r| for (r.set) |d| if (d.property == .text_color) return true;
+        for (n.live.recipe) |r| for (r.set) |d| if (d.property == .text_color) return true;
         return false;
     }
 
     /// A box whose rules ask for a state takes hover and press: it is a widget.
     fn boxInteractive(n: ir.Node) bool {
         if (n.live.follows.len > 0) return false; // a shadow takes its box's states
-        for (n.recipe) |r| if (r.require.hovered or r.require.held) return true;
+        for (n.live.recipe) |r| if (r.require.hovered or r.require.held) return true;
         return false;
     }
 
     /// The runtime box finds its subtree by id for `:focus-within`, so it needs one then too.
     fn boxNamed(n: ir.Node) bool {
         if (n.live.follows.len > 0) return false;
-        for (n.recipe) |r| if (r.require.hovered or r.require.held or r.require.focus_within) return true;
+        for (n.live.recipe) |r| if (r.require.hovered or r.require.held or r.require.focus_within) return true;
         return false;
     }
 
     fn hasRecipes(e: *const Emit) bool {
-        for (e.page.nodes.items(.recipe)) |r| if (r.len > 0) return true;
+        for (e.page.nodes.items(.live)) |v| if (v.recipe.len > 0) return true;
         return false;
     }
 
@@ -817,7 +817,7 @@ pub const Emit = struct {
         );
         for (0..nodes.len) |i| {
             const n = nodes.get(i);
-            if (n.recipe.len == 0) continue;
+            if (n.live.recipe.len == 0) continue;
             if (n.kind == .container) {
                 // A box: its static style is the base, its rules are its CSS's alone.
                 e.print("/// The recipe of box `{s}` ({s}): its static style, then its CSS in cascade order.\n", .{ n.id, e.where(n.loc) });
@@ -835,7 +835,7 @@ pub const Emit = struct {
                     e.value(n.margin orelse @as([4]f32, @splat(0)));
                 }
                 e.write(" } }}, .rules = &[_]style.Rule{\n");
-                for (n.recipe) |r| e.rule(r, "root", .all);
+                for (n.live.recipe) |r| e.rule(r, "root", .all);
                 e.write("} };\n\n");
                 continue;
             }
@@ -868,7 +868,7 @@ pub const Emit = struct {
             };
             e.print("/// The recipe of `{s}` ({s}): the stock {s}'s, then its CSS in cascade order.\n", .{ n.id, e.where(n.loc), stock });
             e.print("const {s}: recipes.Recipe = .{{ .parts = recipes.model.{s}.parts, .rules = &(recipes.model.{s}_rules ++ [_]style.Rule{{\n", .{ e.recipeName(n), stock, rules });
-            for (n.recipe, 0..) |r, k| {
+            for (n.live.recipe, 0..) |r, k| {
                 // A radio group's static CSS styles the group, its state rules each option.
                 if (n.kind == .radio) {
                     e.rule(r, if (k == 0) "root" else "row", .all);
@@ -1162,7 +1162,7 @@ pub const Emit = struct {
         e.text_uses = n.text_uses;
         switch (n.kind) {
             .container, .landmark => {
-                if (n.recipe.len > 0) {
+                if (n.live.recipe.len > 0) {
                     var box_config = e.config(n, true);
                     // A shadow takes its box's states, by the box's id (with the copy's, in a region).
                     if (n.live.follows.len > 0) box_config = std.fmt.allocPrint(e.arena, "{s}, .follows = {s} }}", .{ box_config[0 .. box_config.len - 2], e.rtId(n.live.follows, list_depth) }) catch unreachable;
@@ -1177,7 +1177,7 @@ pub const Emit = struct {
                 return "f.close();";
             },
             .section => {
-                if (n.recipe.len > 0) {
+                if (n.live.recipe.len > 0) {
                     _ = e.use("accordion"); // for accordion.close
                     e.print("_ = recipes.details(f, &theme, {s}, {s}, ", .{ e.rtId(n.id, list_depth), e.ref(n.bind) });
                     e.rtCaption(n.text_kind, n.text);
@@ -1227,10 +1227,10 @@ pub const Emit = struct {
             },
             .button, .link => {
                 const h = e.clickHandler(n.id);
-                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
-                const ts = n.recipe.len == 0 and n.kind == .button and !std.meta.eql(n.text_style, n.base_text);
+                const face = if (n.live.recipe.len == 0) e.rtFace(n) else "";
+                const ts = n.live.recipe.len == 0 and n.kind == .button and !std.meta.eql(n.text_style, n.base_text);
                 const name = if (face.len > 0) e.faced(@tagName(n.kind), face) else if (ts) "buttonStyled" else @tagName(n.kind);
-                if (n.recipe.len > 0)
+                if (n.live.recipe.len > 0)
                     e.print("{s}(recipes.{s}(f, {s}, ", .{ if (h != null) "if (" else "_ = ", @tagName(n.kind), e.rtId(n.id, list_depth) })
                 else
                     e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), name, e.rtId(n.id, list_depth) });
@@ -1241,7 +1241,7 @@ pub const Emit = struct {
                     e.structure(n.text_style, types.TextStyle{});
                 } else if (face.len > 0 and n.kind == .button) e.print(", {s}.labelText(&theme)", .{e.use("label")});
                 e.write(face);
-                if (n.recipe.len > 0) e.print(", {s}) catch unreachable", .{e.config(n, true)});
+                if (n.live.recipe.len > 0) e.print(", {s}) catch unreachable", .{e.config(n, true)});
                 if (h == null) e.write(");") else if (e.eachOf(i) != none)
                     e.print(").clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) })
                 else
@@ -1261,7 +1261,7 @@ pub const Emit = struct {
                     else => "toggleFace",
                 } else if (n.kind == .@"switch") "@\"switch\"" else m;
                 const item = e.eachOf(i) != none;
-                if (n.recipe.len > 0) {
+                if (n.live.recipe.len > 0) {
                     if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
                     e.print("_ = recipes.{s}(f, {s}, {s}, ", .{ switch (n.kind) {
                         .checkbox => "checkbox",
@@ -1283,7 +1283,7 @@ pub const Emit = struct {
             },
             .slider => {
                 const item = e.eachOf(i) != none;
-                if (n.recipe.len > 0) {
+                if (n.live.recipe.len > 0) {
                     if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
                     e.print("_ = recipes.slider(f, {s}, {s}, {d}, {d}, {s}) catch unreachable;", .{ e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind), n.range[0], n.range[1], e.config(n, true) });
                     if (item) e.itemChange(n);
@@ -1309,18 +1309,18 @@ pub const Emit = struct {
                 return "";
             },
             .number => {
-                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
-                if (n.recipe.len > 0)
+                const face = if (n.live.recipe.len == 0) e.rtFace(n) else "";
+                if (n.live.recipe.len > 0)
                     e.print("_ = recipes.number(f, {s}, &{s}, ", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind) })
                 else
                     e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use("number"), e.faced("number", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.structure(lcgf.widgets_number.Range{ .lo = n.range[0], .hi = n.range[1], .step = n.range[2] }, .{});
-                if (n.recipe.len > 0) e.print(", {s}) catch unreachable;", .{e.config(n, true)}) else e.print("{s});", .{face});
+                if (n.live.recipe.len > 0) e.print(", {s}) catch unreachable;", .{e.config(n, true)}) else e.print("{s});", .{face});
                 return "";
             },
             .radio => {
-                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
-                if (n.recipe.len > 0)
+                const face = if (n.live.recipe.len == 0) e.rtFace(n) else "";
+                if (n.live.recipe.len > 0)
                     e.print("_ = recipes.radio(f, {s}, &{s}, &.{{", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind) })
                 else
                     e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, &.{{", .{ e.use("radio"), e.faced("radio", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
@@ -1328,23 +1328,23 @@ pub const Emit = struct {
                     e.write(if (k == 0) " " else ", ");
                     e.string(c);
                 }
-                if (n.recipe.len > 0) e.print(" }}, {s}) catch unreachable;", .{e.config(n, true)}) else e.print(" }}{s});", .{face});
+                if (n.live.recipe.len > 0) e.print(" }}, {s}) catch unreachable;", .{e.config(n, true)}) else e.print(" }}{s});", .{face});
                 return "";
             },
             .textfield, .search, .textarea => if (e.eachOf(i) != none) {
                 e.itemText(n, list_depth);
                 return "";
             } else if (n.kind == .textarea) {
-                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
-                if (n.recipe.len > 0)
+                const face = if (n.live.recipe.len == 0) e.rtFace(n) else "";
+                if (n.live.recipe.len > 0)
                     e.print("_ = recipes.textarea(f, {s}, &{s}, {d}, ", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level })
                 else
                     e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.faced("textarea", face), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
-                if (n.recipe.len > 0) e.print(", {s}) catch unreachable;", .{e.config(n, true)}) else e.print("{s});", .{face});
+                if (n.live.recipe.len > 0) e.print(", {s}) catch unreachable;", .{e.config(n, true)}) else e.print("{s});", .{face});
                 e.submitFlag(n);
                 return "";
-            } else if (n.recipe.len > 0) {
+            } else if (n.live.recipe.len > 0) {
                 e.print("_ = recipes.{s}(f, {s}, &{s}, ", .{ @tagName(n.kind), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.print(", {s}) catch unreachable;", .{e.config(n, true)});
@@ -1353,7 +1353,7 @@ pub const Emit = struct {
             } else {
                 const m = if (n.kind == .search) "search" else "textfield";
                 const face = e.rtFace(n);
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), e.faced(if (n.secure) "password" else m, face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), e.faced(if (n.live.secure) "password" else m, face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(face);
                 e.write(");");
@@ -1431,13 +1431,13 @@ pub const Emit = struct {
                 return "";
             },
             .select => {
-                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
-                if (n.recipe.len > 0)
+                const face = if (n.live.recipe.len == 0) e.rtFace(n) else "";
+                if (n.live.recipe.len > 0)
                     e.print("_ = recipes.select(f, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) })
                 else
                     e.print("_ = {s}.{s}(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), e.faced("button", face), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
                 e.rtTexts(n.captions);
-                if (n.recipe.len > 0) e.print(" }}, {s}) catch unreachable;", .{e.config(n, true)}) else e.print(" }}{s});", .{face});
+                if (n.live.recipe.len > 0) e.print(" }}, {s}) catch unreachable;", .{e.config(n, true)}) else e.print(" }}{s});", .{face});
                 return "";
             },
             .select_list => {
@@ -1625,7 +1625,7 @@ pub const Emit = struct {
         const o = e.owner;
         e.print("{{ const editing = {s}.edit_{s}_row == @as(u32, @intCast(copy0)); var scratch: lcgf.widgets_textfield.Text(256) = .{{}}; if (!editing) scratch.set({s}); const st = if (editing) &{s}.edit_{s} else &scratch; ", .{ o, id, e.stateRef(n.bind), o, id });
         const face = e.rtFace(n);
-        e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), e.faced(if (n.secure) "password" else m, face), e.rtId(id, list_depth) });
+        e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), e.faced(if (n.live.secure) "password" else m, face), e.rtId(id, list_depth) });
         if (n.kind == .textarea) e.print("{d}, ", .{n.level});
         e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
         e.write(face);
@@ -2337,7 +2337,7 @@ pub const Emit = struct {
     fn rtOpenFlex(e: *Emit, i: u32, list_depth: u32) []const u8 {
         const fs = flexOf(e.page.nodes.get(i)) orelse return e.rtOpen(i, list_depth);
         const n = e.page.nodes.get(i);
-        if (n.kind == .container and n.recipe.len > 0 and movesMargin(n)) {
+        if (n.kind == .container and n.live.recipe.len > 0 and movesMargin(n)) {
             // A recipe box's margins this frame are known once it opens, as `rbox_<id>`.
             const close = e.rtOpen(i, list_depth);
             e.write(" { var moved: lcgf.flex.Flex.Style = ");
@@ -2470,7 +2470,7 @@ pub const Emit = struct {
         };
         // A recipe text widget's lines carry a clipped text copy per selection section.
         const line_rows = lcgf.widgets_textfield.bands + 1 + 2 * lcgf.theme_recipes.controls.selection_sections;
-        for (0..n) |i| if (e.page.nodes.items(.recipe)[i].len > 0) switch (e.page.nodes.items(.kind)[i]) {
+        for (0..n) |i| if (e.page.nodes.items(.live)[i].recipe.len > 0) switch (e.page.nodes.items(.kind)[i]) {
             .textfield, .search => {
                 nodes += line_rows + 4;
                 texts += line_rows;
@@ -2954,7 +2954,7 @@ fn flexOf(n: ir.Node) ?FlexStyle {
 
 /// Whether recipe box `n`'s rules set a margin.
 fn movesMargin(n: ir.Node) bool {
-    for (n.recipe) |r| for (r.set) |d| switch (d.property) {
+    for (n.live.recipe) |r| for (r.set) |d| switch (d.property) {
         .margin_left, .margin_top, .margin_right, .margin_bottom => return true,
         else => {},
     };

@@ -549,7 +549,7 @@ pub const Lowerer = struct {
         for (0..l.doc.nodes.len) |n_| {
             const n: u32 = @intCast(n_);
             const x = l.ir_of[n];
-            if (x == none or nodes.items(.recipe)[x].len > 0) continue;
+            if (x == none or nodes.items(.live)[x].recipe.len > 0) continue;
             const kind = nodes.items(.kind)[x];
             const control = l.recipeWidget(n, x) and kind != .container and !l.composite(kind);
             const eases = l.transitionOf(n) != null and control;
@@ -581,6 +581,7 @@ pub const Lowerer = struct {
     fn transitionOf(l: *Lowerer, n: u32) ?[2]u32 {
         const e = l.k.get(n, .transition);
         if (e.decl == none) return null;
+        ok(l.reads.put(l.arena, (@as(u64, n) << 32) | e.decl, {}));
         const d = l.c.decls.get(e.decl);
         const r = l.substitute(n, d.first, d.end, d.loc) orelse return null;
         for (r[0]..r[1]) |t| {
@@ -603,7 +604,7 @@ pub const Lowerer = struct {
             const r = l.transitionOf(n) orelse continue;
             const at = l.c.decls.items(.loc)[l.k.get(n, .transition).decl];
             const node = l.page.nodes.get(x);
-            if (node.recipe.len > 0 and !l.composite(node.kind)) {
+            if (node.live.recipe.len > 0 and !l.composite(node.kind)) {
                 const t = l.transition(r, at) orelse continue;
                 const copies = l.copiesOf(n, at, "a transition") orelse continue;
                 l.page.nodes.items(.live)[x].transition = t;
@@ -626,11 +627,12 @@ pub const Lowerer = struct {
             const x = l.ir_of[n];
             const e = l.k.get(n, .animation);
             if (x == none or e.decl == none) continue;
+            ok(l.reads.put(l.arena, (@as(u64, n) << 32) | e.decl, {}));
             const d = l.c.decls.get(e.decl);
             const r = l.substitute(n, d.first, d.end, d.loc) orelse continue;
             if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "none")) continue;
             const node = l.page.nodes.get(x);
-            if (node.recipe.len == 0 or l.composite(node.kind)) {
+            if (node.live.recipe.len == 0 or l.composite(node.kind)) {
                 l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text or number field outside lcgf-each", .{l.tag(n)});
                 continue;
             }
@@ -709,7 +711,7 @@ pub const Lowerer = struct {
         // One track per channel of each property a stop sets; every property at 0% and 100%.
         const Channels = struct { prop: []const u8, first: u8, count: u8 };
         const props = [_]Channels{ .{ .prop = "background-color", .first = 0, .count = 4 }, .{ .prop = "border-color", .first = 4, .count = 4 }, .{ .prop = "color", .first = 8, .count = 4 }, .{ .prop = "opacity", .first = 12, .count = 1 } };
-        var tracks: std.ArrayList(lcgf.theme_recipes.controls.Animation.Track) = .empty;
+        var anim_tracks: std.ArrayList(lcgf.theme_recipes.controls.Animation.Track) = .empty;
         for (props) |pc| {
             var keys: [4]std.ArrayList(Key) = @splat(.empty);
             for (kf.stops) |stop| for (stop.decl_first..stop.decl_first + stop.decl_count) |di| {
@@ -737,7 +739,7 @@ pub const Lowerer = struct {
                 l.ds.err(kf.loc, "@keyframes {s}: give {s} at from and at to; a keyframe taking the element's own value is not lowered", .{ name, pc.prop });
                 return null;
             }
-            for (0..pc.count) |k| ok(tracks.append(l.arena, .{ .channel = @intCast(pc.first + k), .keys = keys[k].items }));
+            for (0..pc.count) |k| ok(anim_tracks.append(l.arena, .{ .channel = @intCast(pc.first + k), .keys = keys[k].items }));
         }
         for (kf.stops) |stop| for (stop.decl_first..stop.decl_first + stop.decl_count) |di| {
             const nm = l.c.decls.items(.name)[di];
@@ -746,7 +748,7 @@ pub const Lowerer = struct {
             } else false;
             if (!known) l.ds.err(l.c.decls.items(.loc)[di], "{s} in a keyframe is not lowered; background-color, border-color, color and opacity animate", .{nm});
         };
-        out.tracks = tracks.items;
+        out.tracks = anim_tracks.items;
         return out;
     }
 
@@ -1106,11 +1108,11 @@ pub const Lowerer = struct {
             for (rules.items[group..]) |*g| g.set = r.set;
         }
         l.shadow = null;
-        nodes.items(.recipe)[x] = rules.items;
+        nodes.items(.live)[x].recipe = rules.items;
         const sh = nodes.items(.live)[x].shadow;
         if (shadowed and sh != none) {
             // The shadow node is a recipe box over its static look that takes the box's states.
-            nodes.items(.recipe)[sh] = ok(std.mem.concat(l.arena, ir.RecipeRule, &.{ &.{.{}}, shadows.items }));
+            nodes.items(.live)[sh].recipe = ok(std.mem.concat(l.arena, ir.RecipeRule, &.{ &.{.{}}, shadows.items }));
             nodes.items(.live)[sh].follows = nodes.items(.id)[x];
             nodes.items(.id)[sh] = ok(std.fmt.allocPrint(l.arena, "{s}_shadow", .{nodes.items(.id)[x]}));
         }
@@ -1126,7 +1128,7 @@ pub const Lowerer = struct {
         };
         return switch (l.page.nodes.items(.kind)[x]) {
             .button, .link, .toggle, .checkbox, .radio, .@"switch", .container, .slider => true,
-            .textfield, .search => !l.page.nodes.items(.secure)[x],
+            .textfield, .search => !l.page.nodes.items(.live)[x].secure,
             .textarea, .number, .select => true,
             // A <details>'s state CSS is its <summary>'s, the section's header.
             .section => l.doc.isElement(n, "summary"),
@@ -3574,7 +3576,7 @@ pub const Lowerer = struct {
             // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
             // rules (margins) go on the row a widget pushes first, its root. A recipe
             // widget's CSS is in its recipe, which the runtime call takes.
-            const faced = nodes.items(.recipe)[i].len > 0 or switch (kind) {
+            const faced = nodes.items(.live)[i].recipe.len > 0 or switch (kind) {
                 .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio, .select, .dialog, .section => true,
                 else => false,
             };
@@ -4338,7 +4340,7 @@ pub const Lowerer = struct {
             return true;
         }
         var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind, .one_way = one_way };
-        node.secure = kind == .textfield and css.eq(l.attr(n, "type") orelse "", "password");
+        node.live.secure = kind == .textfield and css.eq(l.attr(n, "type") orelse "", "password");
         if (l.attr(n, "required") != null) node.live.validation.required = true;
         if (l.numberAttr(n, "minlength")) |v| node.live.validation.min_length = @intFromFloat(@max(0, v));
         if (l.numberAttr(n, "maxlength")) |v| node.live.validation.max_length = @intFromFloat(@max(0, v));

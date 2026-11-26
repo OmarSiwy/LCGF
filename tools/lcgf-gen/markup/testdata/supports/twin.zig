@@ -1,6 +1,6 @@
 //! supports, written by hand: `@supports` is decided at build time. The rules whose
 //! condition the compiler maps apply as if written without it (gap, not (unknown),
-//! and/or); the ones that ask for display: grid, which is not lowered, are dropped. Nothing
+//! and/or); the ones that ask for float, which is not lowered, are dropped. Nothing
 //! restyles `.bar` at run time, so its transition never runs and adds nothing.
 
 const lcgf = @import("lcgf");
