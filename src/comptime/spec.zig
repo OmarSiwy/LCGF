@@ -66,7 +66,7 @@ pub const Format = struct { text: []const u8, args: []const []const u8 };
 pub const Region = struct {
     kind: RegionKind,
     /// The state field: a list's count (an integer), a `when`'s condition (a bool), a
-    /// `choice`'s alternative (an enum or an integer).
+    /// `choice`'s alternative (an enum, an integer or a bool).
     bind: []const u8,
     /// A windowed list binds its pixel offset and uses a fixed item height.
     window: ?struct { scroll: []const u8, height: f32 } = null,
@@ -299,8 +299,9 @@ pub fn when(comptime condition: @EnumLiteral(), comptime subtree: Spec) Spec {
 }
 
 /// A container (laid out by `style`) of `alternatives`, of which only the one at the index of
-/// the state field `selector` (an enum, by its value, or an integer) is live: `choice(.mode,
-/// .{}, .{ compact, detailed })`. The alternatives share the container's place in its parent:
+/// the state field `selector` (an enum, by its value, an integer, or a bool, false selecting the
+/// first) is live: `choice(.mode, .{}, .{ compact, detailed })`, or an if/else as `choice(.on,
+/// .{}, .{ otherwise, then })`. The alternatives share the container's place in its parent:
 /// the parent always has one child there, sized as the live alternative. Static tables describe all
 /// alternatives. Their retained geometry shares the space of the largest alternative. A
 /// selector past the last alternative shows none.

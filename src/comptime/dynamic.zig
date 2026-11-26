@@ -383,6 +383,20 @@ test "Regions.mask: a list keeps its first count copies (max past max); a when i
     };
 }
 
+test "choice: a bool selector is an if/else, false the first alternative, true the second" {
+    const s = @import("spec.zig");
+    const ui = comptime s.col(.{}, .{s.choice(.on, .{}, .{ s.label("off"), s.label("on") })});
+    const State = struct { on: bool = false };
+    comptime std.debug.assert(@import("validate.zig").regionError(State, ui.children[0].region.?) == null);
+    const D = Regions(ui);
+    const r = D.regions[0];
+    for ([_]bool{ false, true }) |on| {
+        const m = D.mask(D.select(State, &.{ .on = on }));
+        try testing.expectEqual(!on, m[r.row + 1] != 0);
+        try testing.expectEqual(on, m[r.row + 2] != 0);
+    }
+}
+
 test "nested choices share geometry, and the following sibling has its own row" {
     const s = spec_zig;
     const item = s.col(.{ .size = .{ .px(6), .px(10) } }, .{});
