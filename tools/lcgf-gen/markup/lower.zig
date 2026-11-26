@@ -1106,6 +1106,17 @@ pub const Lowerer = struct {
         var margin: ?[4]f32 = null;
         var s = l.boxStyle(n, .{}, pdir, &params, &margin);
         s.dir = dir;
+        if (disp == .flex) if (l.keyword(n, .@"flex-wrap")) |kw| {
+            const at = l.declared(n, .@"flex-wrap").?.loc;
+            // Flex.Style.wrap: a row's lines stack down it, one gap apart both ways.
+            if (css.eq(kw, "wrap")) {
+                if (dir != .x) l.ds.err(at, "flex-wrap: wrap is lowered on rows only (flex-direction: row)", .{}) else l.flex.wrap = true;
+                const rg = l.px(n, .@"row-gap");
+                if (rg != null and rg.? != (l.px(n, .@"column-gap") orelse 0)) l.ds.err(l.declared(n, .@"row-gap").?.loc, "a wrapping row has one gap: give row-gap and column-gap the same length", .{});
+            } else if (css.eq(kw, "wrap-reverse")) {
+                l.ds.err(at, "flex-wrap: wrap-reverse changes visual but not focus order; not supported", .{});
+            } else if (!css.eq(kw, "nowrap")) l.badValue(l.declared(n, .@"flex-wrap").?.first, .@"flex-wrap", l.declared(n, .@"flex-wrap").?.end);
+        };
         // gap along the main axis; CSS's column-gap is the gap between items of a row.
         const gp: Prop = if (dir == .x) .@"column-gap" else .@"row-gap";
         if (l.px(n, gp)) |g| {
@@ -1118,7 +1129,7 @@ pub const Lowerer = struct {
         if (l.keyword(n, .@"align-items")) |kw| {
             if (alignOf(kw)) |a| s.cross = a else if (css.eq(kw, "baseline")) {
                 // Flex.Style.baseline lines up a row's children; a column has one per line.
-                if (dir == .x) l.flex.baseline = true else l.ds.err(l.declared(n, .@"align-items").?.loc, "align-items: baseline is lowered on rows only (flex-direction: row)", .{});
+                if (l.flex.wrap) l.ds.err(l.declared(n, .@"align-items").?.loc, "align-items: baseline is not lowered on a wrapping row", .{}) else if (dir == .x) l.flex.baseline = true else l.ds.err(l.declared(n, .@"align-items").?.loc, "align-items: baseline is lowered on rows only (flex-direction: row)", .{});
             } else if (!css.eq(kw, "stretch") and !css.eq(kw, "normal")) {
                 if (!l.refused("value", kw, "align-items", l.declared(n, .@"align-items").?.loc)) l.badValue(l.declared(n, .@"align-items").?.first, .@"align-items", l.declared(n, .@"align-items").?.end);
             }

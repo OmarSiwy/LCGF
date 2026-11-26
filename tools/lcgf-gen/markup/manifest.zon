@@ -148,7 +148,7 @@
         .{ .kind = "property", .name = "flex-shrink", .status = .mapped, .target = "Style.shrink", .fixture = "landmarks" },
         .{ .kind = "property", .name = "margin", .status = .mapped, .target = "spec.flexed(s, .{ .margin }) (Flex.Style.margin flex.zig:119)", .fixture = "flexitems" },
         .{ .kind = "property", .name = "order", .status = .rejected, .diagnostic = "order changes visual but not focus order; reorder the markup" },
-        .{ .kind = "property", .name = "flex-wrap", .status = .planned, .diagnostic = "flex-wrap is not lowered yet (engine spec F2)", .spec = "F2" },
+        .{ .kind = "property", .name = "flex-wrap", .status = .mapped, .target = "wrap on a row: spec.flexed(s, .{ .wrap = true }) (Flex.Style.wrap, one gap both ways); on a column, wrap-reverse and baseline with it an error", .fixture = "flexitems", .spec = "F2" },
         .{ .kind = "property", .name = "align-content", .status = .planned, .diagnostic = "align-content is not lowered yet (engine spec F2)", .spec = "F2" },
         .{ .kind = "property", .name = "aspect-ratio", .status = .planned, .diagnostic = "aspect-ratio is not lowered yet (engine spec F2)", .spec = "F2" },
         .{ .kind = "property", .name = "overflow", .status = .mapped, .target = "hidden/clip -> Style.clip", .fixture = "landmarks" },

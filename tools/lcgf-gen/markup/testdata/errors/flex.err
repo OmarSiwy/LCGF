@@ -1,3 +1,15 @@
 flex.html:3:49: error: align-items: baseline is lowered on rows only (flex-direction: row)
   .col { display: flex; flex-direction: column; align-items: baseline; }
                                                 ^
+flex.html:4:48: error: flex-wrap: wrap is lowered on rows only (flex-direction: row)
+  .cw { display: flex; flex-direction: column; flex-wrap: wrap; }
+                                               ^
+flex.html:5:24: error: flex-wrap: wrap-reverse changes visual but not focus order; not supported
+  .rw { display: flex; flex-wrap: wrap-reverse; }
+                       ^
+flex.html:6:43: error: a wrapping row has one gap: give row-gap and column-gap the same length
+  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; }
+                                          ^
+flex.html:6:74: error: align-items: baseline is not lowered on a wrapping row
+  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; }
+                                                                         ^
