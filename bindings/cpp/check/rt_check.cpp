@@ -58,6 +58,25 @@ int rows(const char* path) {
     if (bad) std::fprintf(stderr, "%zu of %zu rows differ\n", bad, data.size() / pair);
     return bad ? 1 : 0;
 }
+// `lcgf-rt-dump ids`: each name's Id::From and its With(n) must be Zig's Id.hash and with.
+int ids(const char* path) {
+    std::ifstream file(path, std::ios::binary);
+    const std::vector<char> data{std::istreambuf_iterator<char>(file), {}};
+    auto word = [&](std::size_t at) { std::uint32_t w; std::memcpy(&w, data.data() + at, 4); return w; };
+    std::size_t at = 0, bad = 0, n = 0;
+    while (at + 4 <= data.size()) {
+        const std::uint32_t len = word(at);
+        const std::string_view name(data.data() + at + 4, len);
+        at += 4 + len;
+        const std::uint32_t k = word(at), zig = word(at + 4), zig_with = word(at + 8);
+        at += 12;
+        const lcgf::Id id = lcgf::Id::From(name);
+        if (id.value != zig || id.With(k).value != zig_with) ++bad;
+        ++n;
+    }
+    if (bad) std::fprintf(stderr, "%zu of %zu ids differ\n", bad, n);
+    return bad || n == 0 ? 1 : 0;
+}
 // bindings/check/rt_dump.zig's `Kit`, in this header's words.
 struct Kit {
     bool on = false;
@@ -152,6 +171,7 @@ struct Plot {
 
 int main(int argc, char** argv) {
     if (argc == 3 && std::strcmp(argv[1], "rows") == 0) return rows(argv[2]);
+    if (argc == 3 && std::strcmp(argv[1], "ids") == 0) return ids(argv[2]);
     if (argc != 4 && argc != 6) return 2;
     const bool plot_scene = std::strcmp(argv[1], "canvas") == 0;
     const bool kit_scene = plot_scene || std::strcmp(argv[1], "kit") == 0;

@@ -279,10 +279,7 @@ struct Components<T, std::enable_if_t<std::is_arithmetic_v<T>>> {
             return T(x[0]);
         } else {
             static_assert(sizeof(T) <= 4, "lcgf::Animate: integers of up to 32 bits");
-            if (x[0] != x[0]) return T(0);
-            // Clamped in double, where the type's ends are exact (Zig's `values.take`).
-            const double lo = double(std::numeric_limits<T>::lowest()), hi = double(std::numeric_limits<T>::max());
-            return T(std::clamp(double(std::round(x[0])), lo, hi));
+            return T(lcgf_anim_int(x[0], std::numeric_limits<T>::lowest(), std::numeric_limits<T>::max()));
         }
     }
 };

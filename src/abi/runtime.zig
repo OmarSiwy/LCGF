@@ -246,6 +246,12 @@ fn cRowFromStyle(s: [*]const u32, out: [*]u32) callconv(.c) void {
     plan.put(Template, .from(&st), out[0..row_words]);
 }
 
+/// An animated number as an integer of [lo, hi] (`values.intOf`): what C++'s `Components` and
+/// Rust's `Animatable` return for an integer type.
+fn cAnimInt(x: f32, lo: i64, hi: i64) callconv(.c) i64 {
+    return @import("../anim/values.zig").intOf(x, lo, hi);
+}
+
 fn cLayout() callconv(.c) u32 {
     return layout;
 }
@@ -361,6 +367,7 @@ pub const exports = .{
     .{ "lcgf_rt_leaf_row", &cLeafRow },
     .{ "lcgf_rt_custom_row", &cCustomRow },
     .{ "lcgf_row_from_style", &cRowFromStyle },
+    .{ "lcgf_anim_int", &cAnimInt },
     .{ "lcgf_rt_layout", &cLayout },
     .{ "lcgf_rt_view", &cView },
     .{ "lcgf_rt_canvas_bytes", &cCanvasBytes },

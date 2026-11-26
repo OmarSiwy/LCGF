@@ -347,6 +347,30 @@ const PANEL: Row = Row::from(&Style {
 const _: () = assert!(PANEL.min[0] == 120.0 && PANEL.max[0] == 120.0 && PANEL.grow[1] == 1.0);
 const _: () = assert!(PANEL.text == u32::MAX && PANEL.own == 0 && PANEL.radii[0] == 0.0);
 
+/// `lcgf-rt-dump ids`: each name's `Id::from_bytes` and its `with(n)` must be Zig's `Id.hash`
+/// and `with`.
+fn ids(path: &str) {
+    let data = std::fs::read(path).expect("read");
+    let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+    let (mut at, mut bad, mut n) = (0, 0, 0);
+    while at + 4 <= data.len() {
+        let len = word(at) as usize;
+        let name = &data[at + 4..at + 4 + len];
+        at += 4 + len;
+        let (k, zig, zig_with) = (word(at), word(at + 4), word(at + 8));
+        at += 12;
+        let id = lcgf::runtime::Id::from_bytes(name);
+        if id.0 != zig || id.with(k).0 != zig_with {
+            bad += 1;
+        }
+        n += 1;
+    }
+    if bad > 0 || n == 0 {
+        eprintln!("{bad} of {n} ids differ");
+        std::process::exit(1);
+    }
+}
+
 fn rows(path: &str) {
     let data = std::fs::read(path).expect("read");
     let (sw, rw) = (std::mem::size_of::<Style>(), std::mem::size_of::<Row>());
@@ -383,6 +407,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() == 3 && args[1] == "rows" {
         return rows(&args[2]);
+    }
+    if args.len() == 3 && args[1] == "ids" {
+        return ids(&args[2]);
     }
     assert!(
         args.len() == 4 || args.len() == 6,

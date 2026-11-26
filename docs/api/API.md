@@ -7390,6 +7390,7 @@ Values: what `Frame.animate` and `Frame.tween` can move.
 - `fn count(comptime T: type) comptime_int`: How many numbers a value of `T` is made of; a compile error naming the first part of `T` that is not a number (a bool, a pointer, an optional, a union).
 - `fn flatten(comptime T: type, v: T) [count(T)]f32`: The components of `v`, in order.
 - `fn build(comptime T: type, xs: *const [count(T)]f32) T`: The value made of `xs`, in `flatten`'s order.
+- `fn intOf(x: f32, lo: i64, hi: i64) i64`: An animated number as an integer of the range [lo, hi]: rounded half away from zero, clamped in f64 (where the ends of every type up to 32 bits are exact: an f32 of maxInt(u32) is 2^32), NaN to 0.
 
 ### `Of(..)` (generic struct)
 The type a target of type `T` animates as: an untyped number literal moves as an f32.

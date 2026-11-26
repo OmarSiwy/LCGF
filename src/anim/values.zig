@@ -78,6 +78,14 @@ fn put(comptime T: type, v: T, out: []f32, at: *usize) void {
     }
 }
 
+/// An animated number as an integer of the range [lo, hi]: rounded half away from zero, clamped
+/// in f64 (where the ends of every type up to 32 bits are exact: an f32 of maxInt(u32) is 2^32),
+/// NaN to 0. What `build` does for an integer, and what the C++ and Rust bindings call.
+pub fn intOf(x: f32, lo: i64, hi: i64) i64 {
+    if (x != x) return 0;
+    return @intFromFloat(@min(@max(@as(f64, @round(x)), @as(f64, @floatFromInt(lo))), @as(f64, @floatFromInt(hi))));
+}
+
 fn take(comptime T: type, xs: []const f32, at: *usize) T {
     if (T == Color) {
         var c: [4]u8 = undefined;
@@ -92,11 +100,7 @@ fn take(comptime T: type, xs: []const f32, at: *usize) T {
         .int => |info| {
             if (info.bits > 32) @compileError("cannot animate a " ++ @typeName(T) ++ ": integers of up to 32 bits");
             at.* += 1;
-            // Clamped in f64, where the type's ends are exact (an f32 of maxInt(u32) is 2^32).
-            const lo: f64 = @floatFromInt(std.math.minInt(T));
-            const hi: f64 = @floatFromInt(std.math.maxInt(T));
-            const x = xs[at.* - 1];
-            return if (x != x) 0 else @intFromFloat(@min(@max(@as(f64, @round(x)), lo), hi));
+            return @intCast(intOf(xs[at.* - 1], std.math.minInt(T), std.math.maxInt(T)));
         },
         .array => |a| {
             var out: T = undefined;

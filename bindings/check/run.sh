@@ -151,6 +151,17 @@ if [ $have_rust = yes ]; then
 fi
 echo "ok   rows: 4096 styles, the same 66-word row from Zig, the library, $langs"
 
+# Ids: C++'s and Rust's compile-time Id (FNV-1a, `with`) against Zig's Id.hash over a sweep of
+# names of every length to 40 and every byte value.
+"$prefix/bin/lcgf-rt-dump" ids 4096 "$work/ids.bin"
+"$work/cpp/lcgf-cpp-rt-check" ids "$work/ids.bin"
+langs="C++"
+if [ $have_rust = yes ]; then
+    "$work/rust/release/lcgf-rt-check" ids "$work/ids.bin"
+    langs="$langs, Rust"
+fi
+echo "ok   ids: 4096 names, the same id and child id in Zig, $langs"
+
 # The runtime front end: bench/scenes' scenes (and the gate's `kit` and `canvas`) built each frame from C++ (lcgf/runtime.hpp) and
 # Rust (lcgf::runtime), against the same scenes built in Zig.
 for scene in form list text springs resize idle kit canvas; do

@@ -15,6 +15,11 @@
 //!
 //! `rows` writes a sweep of styles, each as its 50 lcgf_style words then the 55 lcgf_row words
 //! `Template.from` makes of it: the rows C++'s `lcgf::Row` and Rust's `Row::from` must equal.
+//!   lcgf-rt-dump ids <count> <out.bin>
+//!
+//! `ids` writes a sweep of names (0 to 40 bytes, every byte value), each as its length (u32), its
+//! bytes, `Id.hash` of it and `.with(k)` of that for a k that changes with the name (u32 each):
+//! the ids C++'s `Id::From`/`With` and Rust's `Id::new`/`with` must equal.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -30,6 +35,20 @@ pub fn main(init: std.process.Init) !void {
     const name = args.next() orelse return error.Usage;
     const frames = try std.fmt.parseInt(u32, args.next() orelse return error.Usage, 10);
     const out_path = args.next() orelse return error.Usage;
+    if (std.mem.eql(u8, name, "ids")) {
+        var out: std.ArrayList(u8) = .empty;
+        var name_buf: [40]u8 = undefined;
+        for (0..frames) |k| {
+            const len = k % 41;
+            for (name_buf[0..len], 0..) |*b, j| b.* = @truncate(k *% 131 +% j *% 29);
+            const id = lcgf.types.Id.hash(name_buf[0..len]);
+            const n: u32 = @truncate(k *% 2654435761);
+            for ([_]u32{@intCast(len)}) |w| try out.appendSlice(arena, std.mem.asBytes(&w));
+            try out.appendSlice(arena, name_buf[0..len]);
+            for ([_]u32{ n, @backingInt(id), @backingInt(id.with(n)) }) |w| try out.appendSlice(arena, std.mem.asBytes(&w));
+        }
+        return std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = out_path, .data = out.items });
+    }
     if (std.mem.eql(u8, name, "rows")) {
         const words = try rowSweep(arena, frames);
         return std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = out_path, .data = std.mem.sliceAsBytes(words) });

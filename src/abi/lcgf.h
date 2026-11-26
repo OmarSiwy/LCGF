@@ -275,6 +275,9 @@ uint32_t lcgf_rt_open_row(void *rt, uint32_t id, const lcgf_row *row);
 uint32_t lcgf_rt_leaf_row(void *rt, uint32_t id, const lcgf_row *row);
 uint32_t lcgf_rt_custom_row(void *rt, uint32_t id, const lcgf_row *row, uint64_t data);
 void lcgf_row_from_style(const lcgf_style *style, lcgf_row *out);
+/* An animated number as an integer of [lo, hi]: rounded half away from zero, clamped, NaN to 0
+ * (src/anim/values.zig `intOf`), for a binding's animated integer types. */
+int64_t lcgf_anim_int(float x, int64_t lo, int64_t hi);
 uint32_t lcgf_rt_layout(void);
 void lcgf_rt_view(void *rt, lcgf_view *out);
 

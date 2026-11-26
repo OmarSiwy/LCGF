@@ -23,7 +23,10 @@ pub struct Id(pub u32);
 impl Id {
     pub const NONE: Self = Self(0);
     pub const fn from(name: &str) -> Self {
-        let b = name.as_bytes();
+        Self::from_bytes(name.as_bytes())
+    }
+    /// The id of a name of any bytes.
+    pub const fn from_bytes(b: &[u8]) -> Self {
         let mut h: u32 = 0x811c9dc5;
         let mut i = 0;
         while i < b.len() {
@@ -609,6 +612,7 @@ type Rt = *mut u8;
 
 unsafe extern "C" {
     fn lcgf_rt_bytes(l: *const Limits) -> usize;
+    fn lcgf_anim_int(x: f32, lo: i64, hi: i64) -> i64;
     fn lcgf_rt_init(buf: *mut u8, len: usize, l: *const Limits) -> i32;
     fn lcgf_rt_needs_frame(rt: Rt, input: *const Input) -> i32;
     fn lcgf_rt_begin(rt: Rt, input: *const Input);
@@ -957,13 +961,8 @@ macro_rules! animatable_int {
                 out[0] = *self as f32;
             }
             fn take(x: &[f32]) -> Self {
-                // Rounded half away from zero, clamped in f64 (where the type's ends are
-                // exact), NaN to 0: Zig's `values.take`.
-                let v = x[0];
-                if v.is_nan() {
-                    return 0;
-                }
-                (round_f32(v) as f64).clamp(<$t>::MIN as f64, <$t>::MAX as f64) as $t
+                // Zig's `values.intOf`: rounded half away from zero, clamped, NaN to 0.
+                unsafe { lcgf_anim_int(x[0], <$t>::MIN as i64, <$t>::MAX as i64) as $t }
             }
         }
     )*};
@@ -1005,23 +1004,6 @@ impl<A: Animatable, B: Animatable> Animatable for (A, B) {
     }
     fn take(x: &[f32]) -> Self {
         (A::take(x), B::take(&x[A::N..]))
-    }
-}
-
-/// `@round` on an f32: half away from zero, exact (below 2^23 the truncation and the
-/// difference from it are exact; at or above it every f32 is an integer).
-fn round_f32(x: f32) -> f32 {
-    if !(x.abs() < 8388608.0) {
-        return x;
-    }
-    let t = x as i32 as f32;
-    let d = x - t;
-    if d >= 0.5 {
-        t + 1.0
-    } else if d <= -0.5 {
-        t - 1.0
-    } else {
-        t
     }
 }
 
