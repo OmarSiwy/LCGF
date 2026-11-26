@@ -33,13 +33,29 @@ pub fn about(m: [6]f32, rect: [4]f32, origin: [2]f32) [6]f32 {
 }
 
 pub fn inverse(m: [6]f32) ?[6]f32 {
-    for (m) |v| if (!std.math.isFinite(v)) return null;
+    const inv = inverseRaw(m);
+    return if (invertibleRaw(m, inv)) inv else null;
+}
+
+/// The inverse's six entries, computed without a test: meaningful only when `invertible`.
+inline fn inverseRaw(m: [6]f32) [6]f32 {
+    const k = 1 / (m[0] * m[3] - m[1] * m[2]);
+    return .{ m[3] * k, -m[1] * k, -m[2] * k, m[0] * k, (m[2] * m[5] - m[3] * m[4]) * k, (m[1] * m[4] - m[0] * m[5]) * k };
+}
+
+/// `inverse(m) != null` as one mask, with no early exit, so it stays a select in the
+/// per-row and per-quad passes.
+pub inline fn invertible(m: [6]f32) bool {
+    return invertibleRaw(m, inverseRaw(m));
+}
+
+/// `m`, its determinant and `inv` all finite, the determinant not 0.
+inline fn invertibleRaw(m: [6]f32, inv: [6]f32) bool {
+    const V6 = @Vector(6, f32);
+    const big: V6 = @splat(std.math.floatMax(f32));
     const det = m[0] * m[3] - m[1] * m[2];
-    if (det == 0 or !std.math.isFinite(det)) return null;
-    const k = 1 / det;
-    const inv: [6]f32 = .{ m[3] * k, -m[1] * k, -m[2] * k, m[0] * k, (m[2] * m[5] - m[3] * m[4]) * k, (m[1] * m[4] - m[0] * m[5]) * k };
-    for (inv) |v| if (!std.math.isFinite(v)) return null;
-    return inv;
+    return @reduce(.And, @abs(@as(V6, m)) <= big) & @reduce(.And, @abs(@as(V6, inv)) <= big) &
+        (det != 0) & (@abs(det) <= std.math.floatMax(f32));
 }
 
 pub fn hasArea(rect: [4]f32) bool {
@@ -54,14 +70,36 @@ pub fn expand(rect: [4]f32, amount: [4]f32) [4]f32 {
     return .{ rect[0] - amount[0], rect[1] - amount[1], rect[2] + amount[2], rect[3] + amount[3] };
 }
 
+/// Branch-free: the identity, the empty and the transformed rect are all computed, then
+/// selected, so the per-row passes (finalize, paint, hit, damage) keep no jump on the matrix.
 pub fn transformRect(rect: [4]f32, m: [6]f32) [4]f32 {
-    if (std.mem.eql(f32, &m, &identity)) return rect;
-    if (!hasArea(rect) or inverse(m) == null) return empty;
+    const V6 = @Vector(6, f32);
+    const is_identity = @reduce(.And, @as(V6, m) == @as(V6, identity));
+    const shown = hasArea(rect) & invertible(m);
     const xx: V4 = .{ rect[0], rect[2], rect[2], rect[0] };
     const yy: V4 = .{ rect[1], rect[1], rect[3], rect[3] };
     const x = xx * @as(V4, @splat(m[0])) + yy * @as(V4, @splat(m[2])) + @as(V4, @splat(m[4]));
     const y = xx * @as(V4, @splat(m[1])) + yy * @as(V4, @splat(m[3])) + @as(V4, @splat(m[5]));
-    return .{ @reduce(.Min, x), @reduce(.Min, y), @reduce(.Max, x), @reduce(.Max, y) };
+    // Min and max over the four corners as selects. `@reduce(.Min)` keeps the non-NaN
+    // operand through a `jp` fix-up per step; the same rule is the `b != b` term here.
+    const lo = lanesMin(x, y);
+    const hi = -lanesMin(-x, -y);
+    const moved: V4 = .{ lo[0], lo[1], hi[0], hi[1] };
+    const out = @select(f32, @as(@Vector(4, bool), @splat(shown)), moved, @as(V4, empty));
+    return @select(f32, @as(@Vector(4, bool), @splat(is_identity)), @as(V4, rect), out);
+}
+
+/// `.{ min of x, min of y }` over four lanes with `minnum`'s NaN rule, without a jump.
+inline fn lanesMin(x: V4, y: V4) @Vector(2, f32) {
+    const V8 = @Vector(8, f32);
+    const v: V8 = std.simd.join(x, y);
+    const a = minNum(V8, v, @shuffle(f32, v, undefined, @Vector(8, i32){ 2, 3, 0, 1, 6, 7, 4, 5 }));
+    const b = minNum(V8, a, @shuffle(f32, a, undefined, @Vector(8, i32){ 1, 0, 3, 2, 5, 4, 7, 6 }));
+    return .{ b[0], b[4] };
+}
+
+inline fn minNum(comptime V: type, a: V, b: V) V {
+    return @select(f32, (a < b) | (b != b), a, b);
 }
 
 /// The stock shadow shader expands its local source by three standard deviations.
