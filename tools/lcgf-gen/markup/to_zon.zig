@@ -91,6 +91,9 @@ const Lower = struct {
             .select, .select_list => "<select>",
             .dialog => "<dialog>",
             .image => "<img>",
+            .tooltip => "a title= tooltip",
+            .popover_button, .popover => "a popover",
+            .menu_button, .menu_list => "<menu popover>",
             // lcgf-if with lcgf-else: a choice over a bool, which the seam's plan refuses (its
             // selectors are u8 and u32).
             .choice => "<template lcgf-else>",
