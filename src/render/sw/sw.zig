@@ -36,6 +36,7 @@ const types = @import("../../core/types.zig");
 const draw_list = @import("../../draw/draw_list.zig");
 const damage = @import("../../draw/damage.zig");
 pub const bands = @import("bands.zig");
+pub const canvas = @import("canvas.zig");
 const features = @import("../../draw/features.zig");
 const iface = @import("../iface.zig");
 const Color = types.Color;
@@ -189,7 +190,7 @@ pub const Target = struct {
     scissor: [4]u32,
 };
 
-/// The back end with every feature of the stock material compiled in.
+/// The back end with every feature of the stock material compiled in, and the canvas.
 pub const Software = SoftwareOf(all_kinds);
 
 /// Every `features.Kind`, in declaration order.
@@ -202,7 +203,8 @@ pub const missing_kind: Color = .rgb(255, 0, 255);
 /// The back end compiled for the feature kinds in `kinds` only (`solid` must be one). Each kind
 /// is its own shading loop (`shade`), and a loop no kind selects is not compiled: a build that
 /// draws only solid quads leaves out the gradients' `sin`/`cos`, the shadow's `exp`, nine-slice
-/// and the border patterns. A quad of a kind left out is filled with `missing_kind`.
+/// and the border patterns. A quad of a kind left out is filled with `missing_kind`. A subset
+/// also leaves out the canvas loops (`canvas.zig`): its canvas commands draw nothing.
 pub fn SoftwareOf(comptime kinds: []const features.Kind) type {
     return SoftwareCoords(kinds, false);
 }
@@ -211,15 +213,15 @@ pub fn SoftwareOf(comptime kinds: []const features.Kind) type {
 pub fn SoftwareCoords(comptime kinds: []const features.Kind, comptime fixed_point: bool) type {
     var use = features.Usage.all;
     use.kinds = .initMany(kinds);
-    return Renderer(use, fixed_point);
+    return Renderer(use, fixed_point, kinds.len == all_kinds.len and !fixed_point);
 }
 
 /// Software renderer for the features collected from a comptime UI.
 pub fn SoftwareFor(comptime use: features.Usage) type {
-    return Renderer(use, false);
+    return Renderer(use, false, false);
 }
 
-fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
+fn Renderer(comptime use: features.Usage, comptime fixed_point: bool, comptime with_canvas: bool) type {
     comptime std.debug.assert(use.kinds.contains(.solid));
     return struct {
         const Self = @This();
@@ -233,10 +235,13 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
         images: if (use.image or use.text) []const Image else void = if (use.image or use.text) &.{Image.white} else {},
         /// Physical pixels per logical pixel.
         scale: f32 = 1,
+        /// The list `prepare` was given, for `drawCanvas`.
+        list: if (with_canvas) ?*const DrawList else void = if (with_canvas) null else {},
 
         /// Nothing to upload: the back end reads the caller's rows in place.
         pub fn prepare(s: *Self, _: void, draw: *const DrawList, glyphs: iface.Glyphs, _: [2]f32, scale: f32) void {
             s.quads = draw.quads[0..draw.quad_len];
+            if (with_canvas) s.list = draw;
             if (use.text) s.glyphs = glyphs;
             s.scale = scale;
         }
@@ -244,6 +249,18 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
         pub fn drawBatch(s: *const Self, t: Target, batch: draw_list.Batch) void {
             const img = if (use.image) s.images[@backingInt(batch.texture)] else Image.white;
             s.drawQuads(t, s.quads[batch.first..][0..batch.count], img);
+        }
+
+        /// Canvas command `k` of the prepared list (`iface.drawsCanvas`), glyphs from the glyph
+        /// atlas. Nothing in a build without the canvas (`SoftwareOf` a subset).
+        pub fn drawCanvas(s: *const Self, t: Target, k: u32) void {
+            if (with_canvas) s.drawCanvasOf(t, s.list.?, k);
+        }
+
+        fn drawCanvasOf(s: *const Self, t: Target, list: anytype, k: u32) void {
+            if (comptime !(with_canvas and @hasField(@typeInfo(@TypeOf(list)).pointer.child, "canvases"))) return;
+            const atlas = if (use.text) s.images[@backingInt(s.glyphs.texture)] else Image.white;
+            canvas.draw(t, list, k, s.scale, atlas);
         }
 
         pub fn drawText(s: *const Self, t: Target, run: u32) void {
@@ -364,7 +381,8 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
                     const span = iface.glyphSpan(s.glyphs, list, &i, run);
                     s.drawGlyphSpan(t, span);
                 },
-                .custom, .canvas => {},
+                .custom => {},
+                .canvas => |k| s.drawCanvasOf(t, list, k),
             };
         }
 
@@ -458,7 +476,7 @@ fn clampBox(a: [4]u32, b: [4]u32) [4]u32 {
 }
 
 /// Lanes of the vector at `x` whose pixel lies in [x0, x1).
-inline fn spanMask(x: u32, x0: u32, x1: u32) B {
+pub inline fn spanMask(x: u32, x0: u32, x1: u32) B {
     const xs = simd.iota + simd.u(x);
     return (xs >= simd.u(x0)) & (xs < simd.u(x1));
 }
@@ -1015,7 +1033,7 @@ inline fn round255(x: U) U {
 /// Source `color` (straight, 0..1) at coverage `alpha` premultiplied over the pixels `old`: the
 /// colour and its alpha times the coverage rounded to 8 bits, then `overSa`. Each rounds to the
 /// nearest level, so a channel may differ from float arithmetic by a level.
-inline fn overColor(color: [4]F, alpha: F, old: U, red: u5) U {
+pub inline fn overColor(color: [4]F, alpha: F, old: U, red: u5) U {
     var c8: [3]U = undefined;
     inline for (0..3) |i| c8[i] = @intFromFloat(@round(sat(color[i]) * simd.f(255)));
     const sa: U = @intFromFloat(@round(sat(color[3] * alpha) * simd.f(255)));
@@ -1423,6 +1441,7 @@ fn testQuad(rect: [4]f32, fill: Color) Quad {
 
 test {
     _ = bands;
+    _ = canvas;
 }
 
 test "framebuffer: RGBA8 and BGRA8 byte order, rows padded to whole vectors" {
