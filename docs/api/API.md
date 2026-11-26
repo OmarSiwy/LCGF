@@ -2214,11 +2214,19 @@ Optional component recipes with caller-owned data and independent resolution.
 - `beginBox = controls.beginBox`
 - `endBox = controls.endBox`
 - `button = controls.button`
+- `beginLink = controls.beginLink`
+- `link = controls.link`
+- `search = controls.search`
+- `toggle = controls.toggle`
+- `select = controls.select`
+- `details = controls.details`
 - `checkbox = controls.checkbox`
 - `switchControl = controls.switchControl`
 - `slider = controls.slider`
 - `progress = controls.progress`
 - `textfield = controls.textfield`
+- `number = controls.number`
+- `textarea = parts.textarea`
 - `radio = extra_controls.radio`
 - `range = extra_controls.range`
 - `spinner = extra_controls.spinner`
@@ -4315,6 +4323,7 @@ Toggle button: a button that stays pressed until it is pressed again (bold, mute
 
 ### Top level
 
+- `role: u8 = @backingInt(a11y.Role.toggle_button)`: The toggle-button role byte both front ends write.
 - `Bind = bool`: The type of a toggle button's bound field: pressed or not.
 - `fn bindError(comptime State: type, comptime name: []const u8) ?[]const u8`: Why `State`'s field `name` cannot be a toggle button's state, or null when it can.
 - `fn toggleFills(th: *const Theme) [2]base.StateColors`: The face's colours: released, the control fills; pressed, the accent at rest and under the pointer and the held colour while held.
@@ -6168,6 +6177,7 @@ Select (tier 2): a button showing the chosen option of a fixed list, which opens
 - `fn listGrouped(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime gr…`: `list`, with group headers (`Options.groups`) among the options.
 - `fn listFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime group…`: `listGrouped` with every option row laid out by `face` (`optionFaced`) and its text in `text`, as `Options.option` and `Options.option_text` restyle `ct.list` (CSS on `<option>`).
 - `fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: []const u8, comptime opts: Options) type`: The custom widgets (`Spec.widget`) of `ct.select` and `ct.list`: the button's `step` reads every part's response and the keys through `advance`, as `button` does at run time, and keeps the button's rect for the list's `push`.
+- `fn ComptimeWith(comptime th: Theme, comptime id: [:0]const u8, comptime field: []const u8, comptime opts: Options, comptime Face: ?type) type`: `Comptime` whose button `Face.push` builds instead (a recipe's look, `recipes.ct.select`); the list, the keys and the pointer stay this select's.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with a caption and the select, and the select's list, in both front ends, in theme `th`.
 
 ### `SelectState` (struct)
@@ -6197,19 +6207,24 @@ The select as spec nodes of `base.ComptimeUi`: the button in the page's flow, an
 
 - `fn select(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec`: The button of select `id`, bound to the `SelectState` field `field`, showing the chosen one of `opts.texts`.
 - `fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec`: The scrim and the list of select `id`, with the same arguments as its `select`.
+- `fn listOf(comptime W: type, comptime name: [:0]const u8, comptime field: @EnumLiteral(), comptime opts: Options) Spec`: `list` for the comptime select `W` (`ComptimeWith`), whose button draws another way.
 
 ### `Comptime(..)` (generic struct)
 The custom widgets (`Spec.widget`) of `ct.select` and `ct.list`: the button's `step` reads every part's response and the keys through `advance`, as `button` does at run time, and keeps the button's rect for the list's `push`.
 
+
+### `ComptimeWith(..)` (generic struct)
+`Comptime` whose button `Face.push` builds instead (a recipe's look, `recipes.ct.select`); the list, the keys and the pointer stay this select's.
+
 - `def = positional(opts.texts.len)`
 
-### `Comptime(..).Button` (struct)
+### `ComptimeWith(..).Button` (struct)
 
 - `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
 - `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
-### `Comptime(..).List` (struct)
+### `ComptimeWith(..).List` (struct)
 
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
