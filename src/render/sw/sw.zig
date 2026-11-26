@@ -178,7 +178,9 @@ pub const Image = struct {
     }
 };
 
-const ImageEncoding = enum { rgba8, alpha8 };
+/// `any` reads the image as it comes (alpha8 when it has coverage, else RGBA), one branch per
+/// sample: size builds compile the shader loop once instead of once per encoding.
+const ImageEncoding = enum { rgba8, alpha8, any };
 
 /// Where draws land: the framebuffer and a scissor rect in pixels (x0, y0, x1, y1). Pixels outside
 /// the scissor are never written, which is what splits a frame into damage rects and tiles.
@@ -272,6 +274,9 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool) type {
         fn drawQuads(s: *const Self, t: Target, quads: []const Quad, img: Image) void {
             // The fast paths divide by the scale; the shader loop draws nothing at such a scale.
             if (!std.math.isFinite(s.scale) or s.scale <= 0) return;
+            // Builds optimized for size keep one copy of the shader loop (about 9 KB of flash
+            // each on a microcontroller): the encoding is read per sample instead.
+            if (!fast_paths) return s.drawQuadsUsing(use, .any, t, quads, img);
             // The texture is constant across the batch: a white one compiles out the UV
             // conversion, the gathers and the channel unpacking of every covered pixel.
             if (img.alpha8.len != 0) {
@@ -1097,6 +1102,7 @@ inline fn sample(comptime encoding: ImageEncoding, img: Image, u: F, v: F) [4]F 
     const ty: U = @intFromFloat(@min(@max(@floor(v * simd.f(hf)), simd.f(0)), simd.f(hf - 1)));
     const idx = ty * simd.u(img.width) + tx;
     var texel: U = undefined;
+    if (encoding == .any) return if (img.alpha8.len != 0) sample(.alpha8, img, u, v) else sample(.rgba8, img, u, v);
     if (encoding == .alpha8) {
         inline for (0..W) |l| texel[l] = img.alpha8[idx[l]];
         return .{ simd.f(1), simd.f(1), simd.f(1), @as(F, @floatFromInt(texel)) * simd.f(1.0 / 255.0) };
@@ -1936,6 +1942,44 @@ test "Alpha8 general materials transforms borders and rounded clips match expand
         for ([_]Format{ .rgba8, .bgra8 }) |format|
             for ([_]f32{ 0.75, 1.25, 2 }) |scale|
                 try expectAlpha8Matches(kind, q, scale, format, false);
+    }
+}
+
+test "the size build's run-time encoding shades exactly as each specialised encoding" {
+    var coverage: [35]u8 = undefined;
+    for (&coverage, 0..) |*a, i| a.* = @truncate(i * 37);
+    var texels = testTexels();
+    const images = [_]Image{ Image.white, .{ .pixels = &texels, .width = 7, .height = 5 }, .{ .alpha8 = &coverage, .width = 7, .height = 5 } };
+    inline for (all_kinds) |kind| {
+        var q = testQuad(.{ 1.3, 2.7, 27.4, 22.2 }, .rgba(233, 81, 106, 129));
+        q.xform = .{ 1, 0.08, -0.05, 1, 1.5, -0.25 };
+        q.radii = .{ 0, 1, 3, 2 };
+        q.clip_radii = .{ 1, 2, 0, 3 };
+        q.uv = .{ -1.25, 0.875, 2.25, -0.5 };
+        q.border = 1.3;
+        q.border_color = Color.rgba(71, 205, 43, 202).bitsOf();
+        q.opacity = 0.65;
+        q.params = switch (kind) {
+            .solid => @splat(0),
+            .linear => features.linear(.rgba(50, 150, 250, 197), 0.7),
+            .radial => features.radial(.rgba(10, 250, 80, 218), .{ 0.3, 0.8 }, 9.5),
+            .shadow => features.shadow(2.5),
+            .nine_slice => features.nineSlice(.{ 3, 2, 4, 5 }, .{ 0.2, 0.3, 0.8, 0.7 }),
+            .dashed => features.dashed(3.25, 1.5),
+            .dotted => features.dotted(1.75),
+        };
+        for (images) |img| for ([_]f32{ 0.75, 1.25, 2 }) |scale| {
+            var any: Frame(67, 53) = .{};
+            var one: Frame(67, 53) = .{};
+            var fb = any.fb(.rgba8);
+            var reference = one.fb(.rgba8);
+            for (fb.pixels, 0..) |*px, i| px.* = @as(u32, @intCast(i)) *% 0x21098571;
+            @memcpy(reference.pixels, fb.pixels);
+            const scissor = [4]u32{ 3, 2, 61, 49 };
+            shadeFor(.all, kind, .any, .{ .fb = &fb, .scissor = scissor }, &q, img, scale);
+            shade(kind, .{ .fb = &reference, .scissor = scissor }, &q, img, scale);
+            try testing.expectEqualSlices(u32, reference.pixels, fb.pixels);
+        };
     }
 }
 
