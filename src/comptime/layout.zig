@@ -512,14 +512,42 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
             }
         }
 
+        /// The geometry slots with one source row, as runs of consecutive slots and rows
+        /// (`runs`), and the shared ones (`shared`), whose row is the frame's `slot_source`.
+        const slot_plan = blk: {
+            @setEvalBranchQuota(10_000 + 100 * n);
+            const Run = struct { slot: u32, row: u32, len: u32 };
+            var users: [C.slot_count]u32 = @splat(0);
+            for (C.slots.by_node) |slot| users[slot] += 1;
+            var runs: []const Run = &.{};
+            var shared: []const u32 = &.{};
+            for (users, C.slots.defaults, 0..) |u, row, slot| {
+                if (u > 1) {
+                    shared = shared ++ [_]u32{slot};
+                } else if (runs.len > 0 and runs[runs.len - 1].slot + runs[runs.len - 1].len == slot and
+                    runs[runs.len - 1].row + runs[runs.len - 1].len == row)
+                {
+                    var last = runs[runs.len - 1];
+                    last.len += 1;
+                    runs = runs[0 .. runs.len - 1] ++ [_]Run{last};
+                } else runs = runs ++ [_]Run{.{ .slot = slot, .row = row, .len = 1 }};
+            }
+            const r = runs[0..runs.len].*;
+            const sh = shared[0..shared.len].*;
+            break :blk .{ .runs = r, .shared = sh };
+        };
+
+        /// `dst` from the first rows of `src`; with shared slots, a slot's row is its source's:
+        /// a run's rows are copied as one block, a shared slot's row is gathered.
         fn convert(scratch: *const Scratch, dst: anytype, src: anytype) void {
+            if (dst.len == n) return convertRows(dst, src);
+            inline for (slot_plan.runs) |r| convertRows(dst[r.slot..][0..r.len], src[r.row..][0..r.len]);
+            inline for (slot_plan.shared) |slot| convertRows(dst[slot..][0..1], src[scratch.slot_source[slot]..][0..1]);
+        }
+
+        fn convertRows(dst: anytype, src: anytype) void {
             const T = @typeInfo(@TypeOf(dst.*)).array.child;
-            const narrow = T == C.Coordinate and @typeInfo(T) == .int;
-            if (dst.len != n) {
-                for (dst, scratch.slot_source) |*d, i| {
-                    d.* = if (narrow) @intFromFloat(std.math.clamp(src[i], @as(f32, std.math.minInt(T)), @as(f32, std.math.maxInt(T)))) else src[i];
-                }
-            } else if (narrow) {
+            if (T == C.Coordinate and @typeInfo(T) == .int) {
                 const lo: f32 = std.math.minInt(T);
                 const hi: f32 = std.math.maxInt(T);
                 for (dst, src) |*d, s| d.* = @intFromFloat(@min(@max(s, lo), hi));
