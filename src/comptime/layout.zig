@@ -497,8 +497,9 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         }
 
         /// Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped
-        /// into `Coordinate` (they are already whole pixels: finalize snaps them).
-        pub fn keep(scratch: *const Scratch, ram: *C.Dynamic) void {
+        /// into `Coordinate` (they are already whole pixels: finalize snaps them). `ram` must
+        /// not overlap `scratch` (`noalias`: the copies then need no overlap check).
+        pub fn keep(noalias scratch: *const Scratch, noalias ram: *C.Dynamic) void {
             @setEvalBranchQuota(100_000);
             inline for (@typeInfo(C.Dynamic).@"struct".field_names) |name| {
                 // `value` is state's, not layout's; precomputed columns are not in `scratch`.

@@ -1219,7 +1219,7 @@ Layout of `spec` over its own columns, every row through every pass (see the fil
 - `fn passesText(scratch: *Scratch, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void`: Every pass but `finalize`, which leaves sizes and positions in `scratch`.
 - `fn passesLive(scratch: *Scratch, viewport: [2]f32, sel: D.Selection) void`
 - `fn passesLiveText(scratch: *Scratch, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void`
-- `fn keep(scratch: *const Scratch, ram: *C.Dynamic) void`: Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped into `Coordinate` (they are already whole pixels: finalize snaps them).
+- `fn keep(noalias scratch: *const Scratch, noalias ram: *C.Dynamic) void`: Copies every output `Dynamic` holds from `scratch`, coordinates rounded and clamped into `Coordinate` (they are already whole pixels: finalize snaps them).
 
 ### `PlainOf(..).needs` (struct)
 Which optional passes this UI runs, decided while compiling.
