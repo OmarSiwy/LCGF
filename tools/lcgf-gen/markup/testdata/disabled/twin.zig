@@ -62,9 +62,9 @@ pub const App = struct {
         _ = f.open(.none, .{});
         _ = recipes.checkbox(f, .from("agree"), &app.agree, "Agree", .{ .recipe = recipe_agree, .tokens = recipe_tokens, .states = .{ .disabled = true } }) catch unreachable;
         f.close();
-        _ = recipes.beginBox(f, .from("group"), false, .{ .recipe = recipe_group }) catch unreachable;
+        const box1 = recipes.beginBox(f, .from("group"), false, .{ .recipe = recipe_group }) catch unreachable;
         _ = recipes.button(f, .from("inner"), "Inner", .{ .recipe = button_recipe, .tokens = recipe_tokens }) catch unreachable;
-        recipes.endBox(f);
+        recipes.endBox(f, box1);
         f.close();
     }
 };

@@ -984,7 +984,6 @@ pub const Lowerer = struct {
         const x = l.recipeNode(n);
         const nodes = l.page.nodes.slice();
         const kind = if (x != none) nodes.items(.kind)[x] else .container;
-        const is_box = kind == .container;
         const fits = x != none and l.recipeWidget(n, x);
         var entries: std.ArrayList(cascade.Dynamic) = .empty;
         for (l.k.dynamic.items) |d| if (d.node == n) ok(entries.append(l.arena, d));
@@ -1074,9 +1073,7 @@ pub const Lowerer = struct {
                         if (l.px(n, p)) |g| put(&set, l.arena, .gap, .{ .number = g });
                     },
                     .transform => put(&set, l.arena, .transform, .{ .matrix = box.transform }),
-                    .color => if (is_box)
-                        l.ds.err(at, "color under a state pseudo-class or @media on a box would restyle the text inside it; set it on the text's own element", .{})
-                    else if (l.colorOf(n, p)) |c| put(&set, l.arena, .text_color, .{ .color = c }),
+                    .color => if (l.colorOf(n, p)) |c| put(&set, l.arena, .text_color, .{ .color = c }),
                     .@"margin-left", .@"margin-top", .@"margin-right", .@"margin-bottom" => {}, // reported below
                     .@"box-shadow" => l.ds.err(at, "box-shadow is drawn by a node of its own; it is not lowered under a state pseudo-class or @media yet", .{}),
                     else => l.ds.err(at, "{s} under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform", .{@tagName(p)}),
@@ -1156,6 +1153,8 @@ pub const Lowerer = struct {
                 l.ds.err(l.loc(n), "a grid with state CSS or @media is not lowered yet; put the state CSS on a box inside it", .{});
                 return null;
             }
+            // The colour the box's content inherits, which `color` rules on it restyle.
+            l.page.nodes.items(.text_style)[x].color = l.text[n].color;
             l.page.nodes.items(.id)[x] = if (l.attr(n, "id")) |id| (if (l.identifier(id, l.valueLoc(n, "id"))) id else "box") else ok(std.fmt.allocPrint(l.arena, "box_{d}", .{x}));
             return .{};
         }

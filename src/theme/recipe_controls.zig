@@ -601,7 +601,17 @@ pub fn slider(f: *Frame, id: types.Id, value: *f32, lo: f32, hi: f32, options: O
 /// environment and, when `interactive`, over hover and press of `id` (CSS `.card:hover`,
 /// `@media` on a `<div>`). It takes no focus and has no role of its own; children go before
 /// `endBox`. A box that is not interactive takes `.none` or any id.
-pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) style.Error!types.Node {
+/// A box `beginBox` opened, for `endBox`.
+pub const OpenBox = struct {
+    node: types.Node,
+    /// The frame's text rows before the box's content.
+    texts: u32,
+    /// The text colour the box's content inherits statically, and the one it has now.
+    from: types.Color,
+    to: types.Color,
+};
+
+pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) style.Error!OpenBox {
     const recipe = options.recipe orelse model.Recipe{};
     var response = if (interactive) responseFor(f, id, options.states.disabled) else types.Response{};
     if (interactive and !options.states.disabled) {
@@ -625,7 +635,7 @@ pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) st
     }
     const node = f.open(id, root.box);
     if (interactive) _ = f.interact(node, .{ .hover = true, .click = true });
-    return node;
+    return .{ .node = node, .texts = f.texts().len, .from = recipe.baseFor(Parts.root).text.color, .to = root.text.color };
 }
 
 /// Whether interaction id `k` is `id`'s node or in its subtree, as the previous frame laid
@@ -638,8 +648,21 @@ pub fn inSubtree(f: *const Frame, id: types.Id, k: u32) bool {
     return at != types.none and r != types.none and r >= at and r < t.c.end[at];
 }
 
-pub fn endBox(f: *Frame) void {
+/// Closes `box`. CSS `color` on the box restyles the text inside that inherits it: every text
+/// row of its content in the colour the box's recipe base gives takes the colour it has now.
+pub fn endBox(f: *Frame, box: OpenBox) void {
+    recolor(f.texts(), box.texts, box.from, box.to);
     f.close();
+}
+
+/// Text rows from `first` in colour `from` take `to`.
+// ponytail: text a descendant sets to the box's own base colour explicitly is recoloured too;
+// a per-row "inherited" bit would tell them apart.
+pub fn recolor(tx: anytype, first: u32, from: types.Color, to: types.Color) void {
+    if (from.bitsOf() == to.bitsOf()) return;
+    for (tx.c.color[first..tx.len]) |*c| {
+        if (c.* == from.bitsOf()) c.* = to.bitsOf();
+    }
 }
 
 pub fn progress(f: *Frame, value: f32, options: Options) style.Error!types.Node {

@@ -769,6 +769,11 @@ pub const Emit = struct {
         return std.fmt.allocPrint(e.arena, "{s}_fade", .{n.id}) catch unreachable;
     }
 
+    fn inked(n: ir.Node) bool {
+        for (n.recipe) |r| for (r.set) |d| if (d.property == .text_color) return true;
+        return false;
+    }
+
     /// A box whose rules ask for a state takes hover and press: it is a widget.
     fn boxInteractive(n: ir.Node) bool {
         for (n.recipe) |r| if (r.require.hovered or r.require.held) return true;
@@ -811,6 +816,12 @@ pub const Emit = struct {
                 e.print("/// The recipe of box `{s}` ({s}): its static style, then its CSS in cascade order.\n", .{ n.id, e.where(n.loc) });
                 e.print("const {s}: recipes.Recipe = .{{ .parts = &.{{.{{ .id = style.Parts.root, .base = .{{ .box = ", .{e.recipeName(n)});
                 e.fields(n.style, types.Style{}, &.{}, n.params_expr);
+                // The colour its content inherits, which `color` rules restyle (endBox).
+                if (inked(n)) {
+                    e.write(", .text = .{ .color = ");
+                    e.color(n.text_style.color);
+                    e.write(" }");
+                }
                 e.write(" } }}, .rules = &[_]style.Rule{\n");
                 for (n.recipe) |r| e.rule(r, "root", .all);
                 e.write("} };\n\n");
@@ -1139,8 +1150,8 @@ pub const Emit = struct {
         switch (n.kind) {
             .container, .landmark => {
                 if (n.recipe.len > 0) {
-                    e.print("_ = recipes.beginBox(f, {s}, {s}, {s}) catch unreachable;", .{ if (boxNamed(n)) e.rtId(n.id, list_depth) else ".none", if (boxInteractive(n)) "true" else "false", e.config(n, true) });
-                    return "recipes.endBox(f);";
+                    e.print("const rbox_{s} = recipes.beginBox(f, {s}, {s}, {s}) catch unreachable;", .{ n.id, if (boxNamed(n)) e.rtId(n.id, list_depth) else ".none", if (boxInteractive(n)) "true" else "false", e.config(n, true) });
+                    return std.fmt.allocPrint(e.arena, "recipes.endBox(f, rbox_{s});", .{n.id}) catch unreachable;
                 }
                 var st = n.style;
                 if (n.kind == .landmark) st.role = std.meta.stringToEnum(types.Role, n.landmark).?;

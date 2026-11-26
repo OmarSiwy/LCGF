@@ -71,12 +71,12 @@ pub const App = struct {
         _ = f.open(.none, body);
         _ = recipes.button(f, .from("go"), "Go", .{ .recipe = recipe_go, .tokens = recipe_tokens, .transition = button_transition, .fade = &app.state.go_fade }) catch unreachable;
         _ = recipes.button(f, .from("plain"), "Plain", .{ .recipe = recipe_plain, .tokens = recipe_tokens, .transition = button_transition, .fade = &app.state.plain_fade }) catch unreachable;
-        _ = recipes.beginBox(f, .from("card"), true, .{ .recipe = recipe_card, .transition = card_transition, .fade = &app.state.card_fade }) catch unreachable;
+        const box1 = recipes.beginBox(f, .from("card"), true, .{ .recipe = recipe_card, .transition = card_transition, .fade = &app.state.card_fade }) catch unreachable;
         _ = label.label(f, &theme, "Card");
-        recipes.endBox(f);
-        _ = recipes.beginBox(f, .none, false, .{ .recipe = recipe_pulse, .animation = pulse, .clock = &app.state.box_5_clock }) catch unreachable;
+        recipes.endBox(f, box1);
+        const box2 = recipes.beginBox(f, .none, false, .{ .recipe = recipe_pulse, .animation = pulse, .clock = &app.state.box_5_clock }) catch unreachable;
         _ = label.label(f, &theme, "Pulse");
-        recipes.endBox(f);
+        recipes.endBox(f, box2);
         _ = recipes.button(f, .from("glow"), "Glow", .{ .recipe = recipe_glow, .tokens = recipe_tokens, .transition = button_transition, .fade = &app.state.glow_fade, .animation = glow, .clock = &app.state.glow_clock }) catch unreachable;
         f.close();
     }

@@ -25,6 +25,7 @@ pub const directionalIcon = controls.directionalIcon;
 pub const end = controls.end;
 pub const beginBox = controls.beginBox;
 pub const endBox = controls.endBox;
+pub const OpenBox = controls.OpenBox;
 pub const button = controls.button;
 pub const beginLink = controls.beginLink;
 pub const link = controls.link;

@@ -407,7 +407,7 @@ field and Clear button (`model.search`, the text field's rules), and a text area
 list stays the theme select's. A `<summary>`'s CSS styles its `<details>` section's header
 (`model.disclosure`: the button's rules and a mark in the accent while the section is open);
 the section and its panel stay the accordion's. None of these four eases or animates. Margins and `box-shadow` there are
-errors. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
+errors; `color` on a box restyles the text inside it that inherits its colour. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
 looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), or inside
 `:not()` or `:is()` is an error.
 
@@ -431,7 +431,7 @@ an error, since LCGF has no regular-expression engine.
 A `<div>`-like box with state CSS or `@media` is a recipe box (`recipes.ct.box`,
 `recipes.beginBox`): its static style is the recipe's base and each such rule one recipe
 rule. With a state rule it takes hover and press (no focus); with `@media` alone it is no
-widget. `:focus-within` on it holds while the focused widget is inside. `color` there is an error, since it would restyle the text inside. As in CSS, the box is
+widget. `:focus-within` on it holds while the focused widget is inside. `color` there restyles the text inside that inherits it, as in CSS. As in CSS, the box is
 `:hover` and `:active` while the pointer is over or holds a widget inside it.
 
 `@media` around a rule that styles such a widget makes it one too: the rule's recipe rule

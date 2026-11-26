@@ -2,7 +2,8 @@
 //! style and whose rules are its CSS's: `.card:hover` requires `hovered`, `:active` `held`,
 //! so the card is a widget (hover and press, no focus). The bar has only `@media`, so it is
 //! no widget and follows the viewport. Rules set layout too: padding and a transform while
-//! the card is pressed, width and gap on a narrow viewport.
+//! the card is pressed, width and gap on a narrow viewport; `color` under :hover restyles
+//! the card's text, which inherits it.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -19,9 +20,10 @@ pub const theme: w.Theme = .{};
 const rest: Color = .rgb(48, 52, 64);
 const hot: Color = .rgb(64, 80, 112);
 const narrow: Color = .rgb(96, 32, 32);
+const gold: Color = .rgb(255, 208, 64);
 
-const recipe_card: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(10), .fill = rest, .border_color = .rgb(80, 88, 104), .border = 1 } } }}, .rules = &[_]style.Rule{
-    .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{ style.set(.fill, hot), style.set(.border_color, .rgb(128, 160, 255)) } },
+const recipe_card: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(10), .fill = rest, .border_color = .rgb(80, 88, 104), .border = 1 }, .text = .{ .color = theme.text } } }}, .rules = &[_]style.Rule{
+    .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{ style.set(.fill, hot), style.set(.border_color, .rgb(128, 160, 255)), style.set(.text_color, gold) } },
     .{ .part = style.Parts.root, .require = .{ .held = true }, .declarations = &.{ style.set(.opacity, 0.8), style.set(.transform, .{ 1, 0, 0, 1, 0, 2 }), style.set(.padding_left, 14), style.set(.padding_top, 14), style.set(.padding_right, 14), style.set(.padding_bottom, 14) } },
 } };
 const recipe_bar: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .dir = .x, .gap = 4 } } }}, .rules = &[_]style.Rule{
@@ -41,13 +43,13 @@ pub const limits: lcgf.context.Limits = .{ .nodes = 16, .texts = 8, .customs = 2
 pub const App = struct {
     pub fn build(_: *App, f: *Frame) void {
         _ = f.open(.none, body);
-        _ = recipes.beginBox(f, .from("card"), true, .{ .recipe = recipe_card }) catch unreachable;
+        const box1 = recipes.beginBox(f, .from("card"), true, .{ .recipe = recipe_card }) catch unreachable;
         _ = label.label(f, &theme, "Card");
-        recipes.endBox(f);
-        _ = recipes.beginBox(f, .none, false, .{ .recipe = recipe_bar }) catch unreachable;
+        recipes.endBox(f, box1);
+        const box2 = recipes.beginBox(f, .none, false, .{ .recipe = recipe_bar }) catch unreachable;
         _ = label.label(f, &theme, "One");
         _ = label.label(f, &theme, "Two");
-        recipes.endBox(f);
+        recipes.endBox(f, box2);
         f.close();
     }
 };
@@ -79,8 +81,11 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     try std.testing.expect(t.c.look[bar].fill != narrow.bitsOf());
     const r = t.rect(card);
     in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
-    t = p.frame(h, &in).tree;
+    const out = p.frame(h, &in);
+    t = out.tree;
     try std.testing.expectEqual(hot.bitsOf(), t.c.look[card].fill);
+    // `color` on the card restyles the text inside it.
+    try std.testing.expectEqual(gold.bitsOf(), out.draw.runs[0].color);
     const rest_w = t.rect(card).w();
     in.buttons.left = true;
     t = p.frame(h, &in).tree;

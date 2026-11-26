@@ -156,7 +156,9 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
             stepFade(config, ui, &root, in);
             const tb = &ui.tables;
             const i = tb.t.push(parent, if (name) |x| .hash(x) else .none, &root.box);
+            const texts = tb.tx.len;
             inline for (n.children) |c| ui.push(c, i, next, in);
+            controls.recolor(&tb.tx, texts, recipe.baseFor(Parts.root).text.color, root.text.color);
             tb.t.seal(i);
         }
     };

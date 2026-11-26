@@ -283,12 +283,12 @@ test "a recipe box follows hover and the viewport in both front ends, its childr
         const App = struct {
             pub fn build(_: *@This(), f: *Frame) void {
                 _ = f.open(.none, panel);
-                _ = controls.beginBox(f, .from("card"), true, .{ .recipe = card }) catch unreachable;
+                const c = controls.beginBox(f, .from("card"), true, .{ .recipe = card }) catch unreachable;
                 _ = f.textStyled("Card", .{ .px = 14, .color = .white }, .{});
-                controls.endBox(f);
-                _ = controls.beginBox(f, .none, false, .{ .recipe = bar }) catch unreachable;
+                controls.endBox(f, c);
+                const b = controls.beginBox(f, .none, false, .{ .recipe = bar }) catch unreachable;
                 _ = f.textStyled("Bar", .{ .px = 14, .color = .white }, .{});
-                controls.endBox(f);
+                controls.endBox(f, b);
                 f.close();
             }
         };
@@ -327,9 +327,9 @@ test "a recipe box is focus-within while a widget inside it has focus, in both f
         const App = struct {
             pub fn build(_: *@This(), f: *Frame) void {
                 _ = f.open(.none, panel);
-                _ = controls.beginBox(f, .from("group"), false, .{ .recipe = group }) catch unreachable;
+                const g = controls.beginBox(f, .from("group"), false, .{ .recipe = group }) catch unreachable;
                 _ = controls.button(f, .from("inner"), "In", .{}) catch unreachable;
-                controls.endBox(f);
+                controls.endBox(f, g);
                 _ = controls.button(f, .from("outer"), "Out", .{}) catch unreachable;
                 f.close();
             }
@@ -482,9 +482,9 @@ test "a recipe box stays hovered and active while the pointer is over and holds 
         const App = struct {
             pub fn build(_: *@This(), f: *Frame) void {
                 _ = f.open(.none, panel);
-                _ = controls.beginBox(f, .from("card"), true, .{ .recipe = card }) catch unreachable;
+                const c = controls.beginBox(f, .from("card"), true, .{ .recipe = card }) catch unreachable;
                 _ = controls.button(f, .from("inner"), "In", .{}) catch unreachable;
-                controls.endBox(f);
+                controls.endBox(f, c);
                 f.close();
             }
         };
@@ -559,4 +559,39 @@ test "a recipe link and toggle button hover, press and flip the same in both fro
 
 fn aimRect(r: types.Rect) [2]f32 {
     return .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+}
+
+test "color on a recipe box restyles the text inside that inherits it, in both front ends" {
+    @setEvalBranchQuota(200_000);
+    const Ink = struct {
+        const base_ink: types.Color = .rgb(200, 200, 200);
+        const hot_ink: types.Color = .rgb(255, 200, 0);
+        const own: types.Color = .rgb(0, 255, 255);
+        const rules = [_]style.Rule{.{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.text_color, hot_ink)} }};
+        const card: model.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(10) }, .text = .{ .color = base_ink } } }}, .rules = &rules };
+        const App = struct {
+            pub fn build(_: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                const c = controls.beginBox(f, .from("card"), true, .{ .recipe = card }) catch unreachable;
+                _ = f.textStyled("Inherits", .{ .px = 14, .color = base_ink }, .{});
+                _ = f.textStyled("Own", .{ .px = 14, .color = own }, .{});
+                controls.endBox(f, c);
+                f.close();
+            }
+        };
+        const a: spec.Spec = spec.textStyled(spec.label("Inherits"), .{ .px = 14, .color = base_ink });
+        const b: spec.Spec = spec.textStyled(spec.label("Own"), .{ .px = 14, .color = own });
+        const IUi = base.ComptimeUi(struct {}, spec.col(panel, .{ct.box(.card, .{ .recipe = card }, .{ a, b })}), .default);
+        const IRun = base.Harness(App, IUi, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 });
+        var run: IRun = .{};
+    };
+    const run = &Ink.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 } };
+    var output = try run.frame(&input);
+    const r = output.runtime.tree.rect(output.runtime.tree.find(.from("card")));
+    input.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Ink.hot_ink.bitsOf(), output.runtime.texts.c.color[0]);
+    try std.testing.expectEqual(Ink.own.bitsOf(), output.runtime.texts.c.color[1]);
 }
