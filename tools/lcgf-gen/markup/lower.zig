@@ -898,6 +898,7 @@ pub const Lowerer = struct {
             .pct => l.ds.err(l.declared(n, pa[0]).?.loc, "a margin in % is not supported; give px", .{}),
         };
         if (has_margin) margin.* = m;
+        if (l.declared(n, .@"aspect-ratio")) |v| l.aspectRatio(v);
         // overflow
         inline for (.{ Prop.@"overflow-x", Prop.@"overflow-y" }) |p| if (l.keyword(n, p)) |kw| {
             if (css.eq(kw, "hidden") or css.eq(kw, "clip")) s.clip = true else if (!css.eq(kw, "visible")) l.ds.err(l.declared(n, p).?.loc, "overflow: {s} needs a scroll container, which the compiler does not lower yet", .{kw});
@@ -955,6 +956,33 @@ pub const Lowerer = struct {
         l.position(n, &s);
         l.transform(n, &s);
         return s;
+    }
+
+    /// `aspect-ratio: W / H`, `W`, `auto` or `auto W / H` as Flex.Style.aspect (W over H). An
+    /// LCGF box is never a replaced element, so `auto` with a ratio is the ratio.
+    fn aspectRatio(l: *Lowerer, v: Value) void {
+        var rd: values.Reader = .init(l.c, v.first, v.end);
+        var ratio: [2]f32 = .{ 0, 1 };
+        var count: usize = 0;
+        var slash = false;
+        const ty = l.c.toks.items(.type);
+        while (rd.next()) |t| {
+            if (count == 0 and values.isIdent(l.c, t, "auto")) continue;
+            if (ty[t] == .delim and l.c.toks.items(.delim)[t] == '/' and count == 1 and !slash) {
+                slash = true;
+                continue;
+            }
+            if (ty[t] == .number and (count == 0 or (count == 1 and slash))) {
+                ratio[count] = @floatCast(l.c.toks.items(.num)[t]);
+                count += 1;
+                continue;
+            }
+            return l.badValue(t, .@"aspect-ratio", v.end);
+        }
+        if (count == 0) return; // auto
+        if (slash and count != 2) return l.badValue(v.first, .@"aspect-ratio", v.end);
+        if (!(ratio[0] > 0 and ratio[1] > 0)) return l.ds.err(v.loc, "aspect-ratio takes a positive ratio", .{});
+        l.flex.aspect = ratio[0] / ratio[1];
     }
 
     fn gradient(l: *Lowerer, n: u32, r: [2]u32, s: *Style, params: *[]const u8) void {

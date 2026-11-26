@@ -29,4 +29,6 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         label.ct.label(theme, "two"),
         label.ct.label(theme, "three"),
     }), .{ .wrap = true, .lines = .center }),
+    // aspect-ratio: Flex.Style.aspect, width over height.
+    s.flexed(s.col(.{ .size = .{ .px(40), .fit }, .fill = .rgb(192, 64, 64) }, .{}), .{ .aspect = 2 }),
 });
