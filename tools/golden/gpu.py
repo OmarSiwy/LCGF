@@ -9,6 +9,10 @@ cmds.txt, and the textures the frame samples: a `texture ID W H FILE` line in cm
 RGBA8 file in DIR, bound as texture ID. Texture 0 is white; an id with no file, and every text
 run, gets the stand-in glyph atlas below. Ported from prototype/render.py; the drawing and the
 checks are unchanged.
+
+A `canvas` line (tools/golden/draw.zig `canvasScene`) draws canvas.bin and verts.bin with
+canvas.wgsl as src/render/gpu/canvas.zig does: rows from two instance buffers and a third of row
+indices, the uniforms of src/render/shaders/canvas.zig `Uniforms`, one draw per `range`.
 """
 import struct, sys
 from pathlib import Path
@@ -101,6 +105,65 @@ for l in lines:
         x0, y0, x1, y1 = [int(float(v)) for v in l[1:5]]
         rp.set_pipeline(scene_pipe); rp.set_scissor_rect(x0, y0, x1 - x0, y1 - y0); rp.draw(3, 1, 0, 0)
         rp.set_scissor_rect(0, 0, W, H)
+def f32(x): return struct.unpack("<f", struct.pack("<f", x))[0]
+canvas_line = [l for l in lines if l[0] == "canvas"]
+if canvas_line:
+    node = [float(v) for v in canvas_line[0][1:10]]
+    cam = [l for l in lines if l[0] == "camera"][0][1:]
+    zoom_scale = int([l for l in lines if l[0] == "palette"][0][1])
+    layers = [l[1:] for l in lines if l[0] == "layer"]
+    ranges = [(int(l[1]), int(l[2])) for l in lines if l[0] == "range"]
+    marks = [(int(l[1]), int(l[2]), int(l[3])) for l in lines if l[0] == "override"]
+    rows = (d / "canvas.bin").read_bytes()
+    verts = (d / "verts.bin").read_bytes()
+    n = len(rows) // 32
+    pos = b"".join(rows[i * 32:i * 32 + 16] for i in range(n))
+    look = b"".join(rows[i * 32 + 16:i * 32 + 32] for i in range(n))
+    cmod = device.create_shader_module(code=(d / "canvas.wgsl").read_text())
+    F = wgpu.ShaderStage.FRAGMENT
+    cbgl0 = device.create_bind_group_layout(entries=[
+        {"binding": 0, "visibility": VF, "buffer": {"type": "uniform"}},
+        {"binding": 1, "visibility": F, "buffer": {"type": "read-only-storage"}}])
+    cbgl1 = device.create_bind_group_layout(entries=[{"binding": 0, "visibility": F, "texture": {"sample_type": "float", "view_dimension": "2d"}}])
+    cpipe = device.create_render_pipeline(
+        layout=device.create_pipeline_layout(bind_group_layouts=[cbgl0, cbgl1]),
+        vertex={"module": cmod, "entry_point": "vs", "buffers": [
+            {"array_stride": 16, "step_mode": "instance", "attributes": [{"shader_location": 0, "offset": 0, "format": "sint32x4"}]},
+            {"array_stride": 16, "step_mode": "instance", "attributes": [{"shader_location": 1, "offset": 0, "format": "uint32x4"}]},
+            {"array_stride": 4, "step_mode": "instance", "attributes": [{"shader_location": 2, "offset": 0, "format": "uint32"}]}]},
+        primitive={"topology": "triangle-strip"},
+        fragment={"module": cmod, "entry_point": "fs", "targets": [{"format": "rgba8unorm", "blend": {"color": blend, "alpha": blend}}]})
+    def buf(data, usage):
+        b = device.create_buffer(size=max(len(data), 16), usage=usage | wgpu.BufferUsage.COPY_DST)
+        device.queue.write_buffer(b, 0, data)
+        return b
+    V = wgpu.BufferUsage.VERTEX
+    pos_buf, look_buf = buf(pos, V), buf(look, V)
+    row_buf = buf(struct.pack(f"<{n}I", *range(n)), V)
+    vert_buf = buf(verts, wgpu.BufferUsage.STORAGE)
+    # canvas.zig `View.of` at scale 1, then `Uniforms`.
+    origin = [int(cam[0]) & 0xffffffff, int(cam[1]) & 0xffffffff]
+    scale, ox, oy, zoom = f32(float(cam[2])), float(cam[3]), float(cam[4]), float(cam[5])
+    line = f32(min(max(zoom, 0.5), 4)) if zoom_scale else 1.0
+    u = struct.pack("<2I2f3fI", origin[0], origin[1], f32(node[0] + ox), f32(node[1] + oy), scale, line, 1.0, zoom_scale)
+    u += struct.pack("<4f4f2ff5I", *node[0:4], *node[4:8], W, H, node[8], 0, 0, len(verts) // 8, len(marks), len(layers))
+    pal = b"".join(struct.pack("<IIfI", int(l[0]), int(l[1]), float(l[2]), int(l[3])) for l in layers)
+    u += pal + bytes(16 * (256 - len(layers)))
+    u += b"".join(struct.pack("<4I", a, b, c, 0) for a, b, c in marks) + bytes(16 * (64 - len(marks)))
+    uni = buf(u, wgpu.BufferUsage.UNIFORM)
+    cg0 = device.create_bind_group(layout=cbgl0, entries=[{"binding": 0, "resource": {"buffer": uni, "offset": 0, "size": len(u)}},
+                                                          {"binding": 1, "resource": {"buffer": vert_buf, "offset": 0, "size": vert_buf.size}}])
+    at_tex = device.create_texture(size=(64, 64, 1), format="rgba8unorm", usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST)
+    device.queue.write_texture({"texture": at_tex}, bytes(atlas), {"bytes_per_row": 256, "rows_per_image": 64}, (64, 64, 1))
+    cg1 = device.create_bind_group(layout=cbgl1, entries=[{"binding": 0, "resource": at_tex.create_view()}])
+    # gpu.scissor: the node's rect cut by its clip, whole pixels.
+    x0, y0 = int(max(node[0], node[4])), int(max(node[1], node[5]))
+    x1, y1 = -int(-min(node[2], node[6])), -int(-min(node[3], node[7]))
+    rp.set_scissor_rect(x0, y0, x1 - x0, y1 - y0)
+    rp.set_pipeline(cpipe); rp.set_bind_group(0, cg0); rp.set_bind_group(1, cg1)
+    for slot, b in enumerate((pos_buf, look_buf, row_buf)): rp.set_vertex_buffer(slot, b)
+    for first, count in ranges:
+        rp.draw(4, count, 0, first); draws += 1
 rp.end()
 device.queue.submit([enc.finish()])
 px = bytes(device.queue.read_texture({"texture": target}, {"bytes_per_row": W * 4, "rows_per_image": H}, (W, H, 1)))

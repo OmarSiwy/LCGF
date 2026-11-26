@@ -214,6 +214,7 @@ var buf: [Scene.bytes]u8 align(lcgf.mem.column_align) = undefined;
 var canvas_buf: [lcgf.canvas.Instances.requiredBytes(lcgf.render_conformance.canvas_scene.rows, lcgf.render_conformance.canvas_scene.verts, 4)]u8 align(lcgf.mem.column_align) = undefined;
 
 /// Writes the canvas scene: canvas.bin (pos then look, 32 bytes a row, interleaved), verts.bin,
+/// canvas.wgsl (the GPU back ends' canvas shader), quad.wgsl and its layout (gpu.py needs them),
 /// and in cmds.txt the node (`canvas` rect clip opacity), the camera (origin as two i64s,
 /// scale, offset, zoom), the palette (`palette` zoom_scale, then a `layer` stroke fill width
 /// flags line per layer, colours as rgba8 u32), the ranges and the overrides.
@@ -230,11 +231,15 @@ fn canvasScene(io: std.Io, out_path: []const u8) !void {
     for (0..s.len) |i| rows[i] = @as([4]u32, @bitCast(s.c.pos[i])) ++ s.c.look[i];
     try dir.writeFile(io, .{ .sub_path = "canvas.bin", .data = std.mem.sliceAsBytes(rows[0..s.len]) });
     try dir.writeFile(io, .{ .sub_path = "verts.bin", .data = std.mem.sliceAsBytes(s.verts[0..@max(s.vert_len, 1)]) });
+    try dir.writeFile(io, .{ .sub_path = "canvas.wgsl", .data = lcgf.canvas_shader.wgsl });
+    try dir.writeFile(io, .{ .sub_path = "quad.wgsl", .data = gfx.wgsl });
     // No quads or text; one zero row each, because gpu.py cannot upload an empty buffer.
     try dir.writeFile(io, .{ .sub_path = "quads.bin", .data = &@as([@sizeOf(Quad)]u8, @splat(0)) });
     try dir.writeFile(io, .{ .sub_path = "glyphs.bin", .data = &@as([@sizeOf(Quad)]u8, @splat(0)) });
     var text: [16 * 1024]u8 = undefined;
     var t = std.Io.Writer.fixed(&text);
+    try t.print("stride {d}\n", .{gfx.stride});
+    for (gfx.attrs) |a| try t.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     try t.print("canvas {d} {d} {d} {d} {d} {d} {d} {d} 1\n", .{ sc.node[0], sc.node[1], sc.node[2], sc.node[3], sc.clip[0], sc.clip[1], sc.clip[2], sc.clip[3] });
     const c = sc.camera;
     try t.print("camera {d} {d} {d} {d} {d} {d}\n", .{ c.origin[0], c.origin[1], c.scale, c.offset[0], c.offset[1], c.zoom });
