@@ -1,8 +1,10 @@
 //! Writes every shader variant for validate.py (ci/jobs/shaders.sh):
 //!
-//!     shaders-dump OUT     ->  OUT/<variant>.wgsl, OUT/layout.txt (stride, attr lines as cmds.txt)
+//!     shaders-dump OUT     ->  OUT/<variant>.wgsl, OUT/layout.txt (stride, attr lines as cmds.txt),
+//!                              OUT/canvas/canvas.wgsl and canvas_es.wgsl (canvas.zig)
 const std = @import("std");
 const gfx = @import("lcgf").quad_shader;
+const canvas = @import("lcgf").canvas_shader;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -33,4 +35,7 @@ pub fn main(init: std.process.Init) !void {
     try w.print("stride {d}\n", .{gfx.stride});
     for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     try dir.writeFile(io, .{ .sub_path = "layout.txt", .data = w.buffered() });
+    try dir.createDirPath(io, "canvas");
+    try dir.writeFile(io, .{ .sub_path = "canvas/canvas.wgsl", .data = canvas.wgsl });
+    try dir.writeFile(io, .{ .sub_path = "canvas/canvas_es.wgsl", .data = canvas.wgsl_es });
 }

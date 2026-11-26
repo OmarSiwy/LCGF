@@ -17,6 +17,12 @@ for f in "$tmp"/*.wgsl; do
     naga --profile es300 --shader-stage vert --entry-point vs "$f" "$gen/$v.vert"
     naga --profile es300 --shader-stage frag --entry-point fs "$f" "$gen/$v.frag"
 done
+# The canvas shader (canvas.zig): storage-buffer vertices for SPIR-V, MSL and HLSL, texture
+# vertices for GLSL ES 3.0.
+naga "$tmp/canvas/canvas.wgsl" "$gen/canvas.spv" "$gen/canvas.metal" "$gen/canvas.hlsl"
+naga --profile es300 --shader-stage vert --entry-point vs "$tmp/canvas/canvas_es.wgsl" "$gen/canvas.vert"
+naga --profile es300 --shader-stage frag --entry-point fs "$tmp/canvas/canvas_es.wgsl" "$gen/canvas.frag"
+for x in spv metal hlsl vert frag; do test -s "$gen/canvas.$x" || { echo "missing $gen/canvas.$x" >&2; exit 1; }; done
 # The WGSL of src/render/gpu/ (shaders written against lcgf_render.gpu): every back end's
 # translation, named gpu_<name>. GLSL needs one file per entry point: <name>.<entry>.<stage>.
 for f in src/render/gpu/*.wgsl; do

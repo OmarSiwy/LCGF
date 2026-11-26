@@ -802,6 +802,7 @@ pub fn build(b: *std.Build) void {
             m.addImport("gpu_shaders", vk_shaders);
             // The committed SPIR-V of the shipped shaders (src/render/shaders/gen/, from naga).
             m.addAnonymousImport("stock_spv", .{ .root_source_file = b.path("src/render/shaders/gen/stock.spv") });
+            m.addAnonymousImport("canvas_spv", .{ .root_source_file = b.path("src/render/shaders/gen/canvas.spv") });
             m.addAnonymousImport("example_spv", .{ .root_source_file = b.path("src/render/shaders/gen/example.spv") });
             // The render conformance goldens, for the in-test comparison (src/render/vk/scenes.zig).
             for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
@@ -845,7 +846,7 @@ pub fn build(b: *std.Build) void {
                 .link_libc = true,
                 .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "gpu_shaders", .module = metal_dump_shaders } },
             });
-            for ([_][]const u8{ "stock", "example" }) |v|
+            for ([_][]const u8{ "stock", "example", "canvas" }) |v|
                 metal_module.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
             const metal_dump = b.addExecutable(.{ .name = "lcgf-metal-dump", .root_module = b.createModule(.{
                 .root_source_file = b.path("bindings/check/metal_dump.zig"),
@@ -910,7 +911,7 @@ pub fn build(b: *std.Build) void {
             }) });
             node_probe.root_module.addImport("custom_draw_scene", custom_draw_scene);
             node_probe.root_module.addOptions("custom_draw", features);
-            for ([_][]const u8{ "stock", "example" }) |shader| node_probe.root_module.addAnonymousImport(b.fmt("{s}_spv", .{shader}), .{
+            for ([_][]const u8{ "stock", "example", "canvas" }) |shader| node_probe.root_module.addAnonymousImport(b.fmt("{s}_spv", .{shader}), .{
                 .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.spv", .{shader})),
             });
             experiment.dependOn(&b.addInstallArtifact(node_probe, .{}).step);
@@ -978,7 +979,7 @@ pub fn build(b: *std.Build) void {
     const gles_shaders = addGpuShaders(b, .gles, .{ .prebuilt = b.path("src/render/shaders/gen") }, repo_gpu_shaders(b));
     for ([_]*std.Build.Module{ gles_tests.root_module, gles_play.root_module }) |m| {
         m.addImport("gpu_shaders", gles_shaders);
-        for ([_][]const u8{ "stock", "example" }) |v| for ([_][]const u8{ "vert", "frag" }) |stage| {
+        for ([_][]const u8{ "stock", "example", "canvas" }) |v| for ([_][]const u8{ "vert", "frag" }) |stage| {
             m.addAnonymousImport(b.fmt("{s}_{s}", .{ v, stage }), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.{s}", .{ v, stage })) });
         };
     }
@@ -1144,7 +1145,7 @@ pub fn build(b: *std.Build) void {
     const metal_shaders = addGpuShaders(b, .metal, .{ .prebuilt = b.path("src/render/shaders/gen") }, repo_gpu_shaders(b));
     for ([_]*std.Build.Module{ metal_tests.root_module, metal_play.root_module, metal_custom.root_module }) |m| {
         m.addImport("gpu_shaders", metal_shaders);
-        for ([_][]const u8{ "stock", "example" }) |v|
+        for ([_][]const u8{ "stock", "example", "canvas" }) |v|
             m.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
     }
     b.step("metal", "Test the Metal back end (device tests skip off macOS)").dependOn(&b.addRunArtifact(metal_tests).step);
@@ -1181,7 +1182,7 @@ pub fn build(b: *std.Build) void {
         m.addImport("gpu_shaders", d3d12_shaders);
         for ([_][]const u8{ "d3d12", "dxgi", "d3dcompiler_47", "user32", "kernel32" }) |l| m.linkSystemLibrary(l, .{ .use_pkg_config = .no });
         // The committed HLSL of the shipped shaders (src/render/shaders/gen/, from naga).
-        for ([_][]const u8{ "stock", "example" }) |v|
+        for ([_][]const u8{ "stock", "example", "canvas" }) |v|
             m.addAnonymousImport(b.fmt("{s}_hlsl", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.hlsl", .{v})) });
         for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
             m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
@@ -1560,7 +1561,7 @@ fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, 
     });
     const shader = struct {
         fn add(mb: *std.Build, mod: *std.Build.Module, comptime name: []const u8, comptime file: []const u8) void {
-            for ([_][]const u8{ "stock", "example" }) |v|
+            for ([_][]const u8{ "stock", "example", "canvas" }) |v|
                 mod.addAnonymousImport(mb.fmt("{s}_" ++ name, .{v}), .{ .root_source_file = mb.path(mb.fmt("src/render/shaders/gen/{s}." ++ file, .{v})) });
         }
     };
@@ -1579,7 +1580,7 @@ fn renderBackend(b: *std.Build, kind: Render, target: std.Build.ResolvedTarget, 
             }
         },
         .metal => shader.add(b, m, "metal", "metal"),
-        .gles => for ([_][]const u8{ "vert", "frag" }) |stage| for ([_][]const u8{ "stock", "example" }) |v|
+        .gles => for ([_][]const u8{ "vert", "frag" }) |stage| for ([_][]const u8{ "stock", "example", "canvas" }) |v|
             m.addAnonymousImport(b.fmt("{s}_{s}", .{ v, stage }), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.{s}", .{ v, stage })) }),
         .d3d12 => {
             shader.add(b, m, "hlsl", "hlsl");
