@@ -14,6 +14,7 @@ const slider_zig = @import("../widgets/slider.zig");
 const switch_zig = @import("../widgets/switch.zig");
 const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
+const tweens = @import("../anim/tweens.zig");
 const Parts = style.Parts;
 
 /// HTML constraint validation of a text control (`required`, `minlength`, `maxlength`): it
@@ -38,6 +39,87 @@ pub const Validation = struct {
     }
 };
 
+/// CSS `transition` on a recipe control: which root properties ease to a new value, and how.
+/// The default moves nothing.
+pub const Transition = struct {
+    seconds: f32 = 0,
+    ease: tweens.Ease = .in_out,
+    fill: bool = false,
+    border_color: bool = false,
+    text_color: bool = false,
+    opacity: bool = false,
+
+    /// `t` under the platform's reduced motion: no time, so every change lands at once.
+    pub fn under(t: Transition, reduced_motion: bool) Transition {
+        var out = t;
+        if (reduced_motion) out.seconds = 0;
+        return out;
+    }
+};
+
+/// What a transitioning control painted: the eased properties' last leg, which the caller
+/// keeps (a field of the State, a variable of the app). Both front ends step it once a frame
+/// by the input's `dt`, so they paint the same values.
+pub const Fade = struct {
+    /// Fill, border and text colours as 0 to 255 channels, then opacity.
+    from: [channels]f32 = @splat(0),
+    to: [channels]f32 = @splat(0),
+    elapsed: f32 = 0,
+    live: bool = false,
+
+    pub const channels = 13;
+
+    /// The next state toward `target`, whose transitioned properties it eases in place: a new
+    /// target starts a leg from the value painted now.
+    pub fn next(fade: Fade, target: *style.Computed, t: Transition, dt: f32) Fade {
+        const want = read(target.*);
+        if (!fade.live) return .{ .from = want, .to = want, .elapsed = t.seconds, .live = true };
+        var out = fade;
+        if (!std.mem.eql(f32, &want, &fade.to)) {
+            out.from = fade.value(t);
+            out.to = want;
+            out.elapsed = 0;
+        }
+        out.elapsed = @min(out.elapsed + dt, t.seconds);
+        write(target, out.value(t), t);
+        return out;
+    }
+
+    /// Seconds until the leg lands; 0 at rest.
+    pub fn remaining(fade: Fade, t: Transition) f32 {
+        return if (fade.live) t.seconds - fade.elapsed else 0;
+    }
+
+    fn value(fade: Fade, t: Transition) [channels]f32 {
+        const u = if (t.seconds > 0) fade.elapsed / t.seconds else 1;
+        const k = tweens.ease_table[@backingInt(t.ease)];
+        const e = ((k[0] * u + k[1]) * u + k[2]) * u;
+        var out: [channels]f32 = undefined;
+        for (&out, fade.from, fade.to) |*o, a, b| o.* = a + (b - a) * e;
+        return out;
+    }
+
+    fn read(c: style.Computed) [channels]f32 {
+        var out: [channels]f32 = undefined;
+        inline for (.{ c.box.fill, c.box.border_color, c.text.color }, 0..) |col, k| {
+            out[k * 4 ..][0..4].* = .{ @floatFromInt(col.r), @floatFromInt(col.g), @floatFromInt(col.b), @floatFromInt(col.a) };
+        }
+        out[12] = c.box.opacity;
+        return out;
+    }
+
+    fn write(c: *style.Computed, v: [channels]f32, t: Transition) void {
+        if (t.fill) c.box.fill = color(v[0..4].*);
+        if (t.border_color) c.box.border_color = color(v[4..8].*);
+        if (t.text_color) c.text.color = color(v[8..12].*);
+        if (t.opacity) c.box.opacity = v[12];
+    }
+
+    fn color(v: [4]f32) types.Color {
+        return .rgba(@intFromFloat(@round(v[0])), @intFromFloat(@round(v[1])), @intFromFloat(@round(v[2])), @intFromFloat(@round(v[3])));
+    }
+};
+
 pub const Options = struct {
     recipe: ?model.Recipe = null,
     tokens: style.tokens.Table = .{},
@@ -55,6 +137,9 @@ pub const Options = struct {
     color_policy: model.ColorPolicy = .automatic,
     /// Text controls only.
     validation: Validation = .{},
+    /// CSS `transition` of the root, and the state it keeps between frames; both or neither.
+    transition: Transition = .{},
+    fade: ?*Fade = null,
 };
 
 pub const OpenControl = struct {
@@ -67,6 +152,10 @@ pub const OpenControl = struct {
     recipe: model.Recipe,
     use: model.Use,
     focus_offset: f32 = 0,
+    /// The transition's next state, which `end` keeps.
+    fade: ?*Fade = null,
+    fade_next: Fade = .{},
+    transition: Transition = .{},
 
     /// Resolve any standard or application-defined part with this control's state and theme.
     pub fn part(control: *const OpenControl, id: types.Id, trace: ?[]style.Origin) style.Error!style.Computed {
@@ -151,11 +240,18 @@ pub fn expose(semantics: ?*a11y.Semantics, node: types.Node, states: style.State
 
 fn resolvedControl(f: *const Frame, recipe: model.Recipe, options: Options, states: style.States) style.Error!OpenControl {
     const use = useFor(f, options, states);
-    const root = try recipe.resolve(Parts.root, use, null);
+    var root = try recipe.resolve(Parts.root, use, null);
+    // The eased root is what the parts inherit; `end` keeps the step, so resolving twice in
+    // a frame (a text field's edit) steps once.
+    const transition = options.transition.under(f.ctx.settings.reduced_motion);
+    const fade_next = if (options.fade) |fade| fade.next(&root, transition, f.in.dt) else Fade{};
     var child = use;
     child.parent = &root;
     child.local = &.{};
     return .{
+        .fade = options.fade,
+        .fade_next = fade_next,
+        .transition = transition,
         .node = .none,
         .response = .{},
         .states = states,
@@ -206,6 +302,10 @@ pub fn directionalIcon(f: *Frame, control: *const OpenControl, texture: types.Te
 }
 
 pub fn end(f: *Frame, control: *const OpenControl) void {
+    if (control.fade) |fade| {
+        fade.* = control.fade_next;
+        f.ctx.motion = @max(f.ctx.motion, control.fade_next.remaining(control.transition));
+    }
     _ = f.outline(control.node, outlineOptions(control.focus, control.focus_offset));
     f.close();
 }
@@ -324,7 +424,12 @@ pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) st
     const response = if (interactive) responseFor(f, id, options.states.disabled) else types.Response{};
     var states = statesFor(options.states, response, false);
     states.focus_within = focusWithin(f, id);
-    const root = try recipe.resolve(Parts.root, useFor(f, options, states), null);
+    var root = try recipe.resolve(Parts.root, useFor(f, options, states), null);
+    if (options.fade) |fade| {
+        const transition = options.transition.under(f.ctx.settings.reduced_motion);
+        fade.* = fade.next(&root, transition, f.in.dt);
+        f.ctx.motion = @max(f.ctx.motion, fade.remaining(transition));
+    }
     const node = f.open(id, root.box);
     if (interactive) _ = f.interact(node, .{ .hover = true, .click = true });
     return node;

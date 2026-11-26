@@ -36,6 +36,10 @@ pub const Config = struct {
     color_policy: model.ColorPolicy = .automatic,
     /// Text controls only: `controls.Validation`.
     validation: controls.Validation = .{},
+    /// CSS `transition` of the root; `fade_field` names the State's `controls.Fade` that
+    /// keeps it between frames. Both or neither.
+    transition: controls.Transition = .{},
+    fade_field: ?[]const u8 = null,
     /// Optional fields of the application's State. Their types are checked by the builder.
     states_field: ?[]const u8 = null,
     environment_field: ?[]const u8 = null,
@@ -51,8 +55,59 @@ pub fn box(comptime id: anytype, comptime config: Config, comptime children: any
     const name: ?[:0]const u8 = if (@TypeOf(id) == @TypeOf(null)) null else @tagName(id);
     var s = spec_zig.col(.{}, children);
     s.id = name;
-    s.widget = Box(name, config);
+    s.widget = FadingBox(config, Box(name, config));
     return s;
+}
+
+/// Eases `root` along `config.transition` and keeps the step in its fade field, if any.
+fn stepFade(comptime config: Config, ui: anytype, root: *style.Computed, in: *const Input) void {
+    const field = config.fade_field orelse return;
+    const fade = &@field(ui.signals.state, field);
+    fade.* = fade.next(root, config.transition.under(ui.frame_settings.reduced_motion), in.dt);
+}
+
+/// Seconds until `config`'s fade lands: 0 asks for the next frame while it moves.
+fn fadeWake(comptime config: Config, ui: anytype) f32 {
+    const left = @field(ui.signals.state, config.fade_field.?).remaining(config.transition.under(ui.frame_settings.reduced_motion));
+    return if (left > 0) 0 else types.inf;
+}
+
+/// Control `W` with a `wakeAfter` while `config`'s fade moves; `W` itself without a fade, so
+/// a control without a transition adds no hook.
+fn FadingControl(comptime config: Config, comptime W: type) type {
+    if (config.fade_field == null) return W;
+    return struct {
+        pub const focusable = W.focusable;
+        pub const Payload = W.Payload;
+        pub const push = W.push;
+        pub const step = W.step;
+        pub const bindError = W.bindError;
+        pub const inputAvailability = W.inputAvailability;
+
+        pub fn wakeAfter(ui: anytype, in: *const Input) f32 {
+            _ = in;
+            return fadeWake(config, ui);
+        }
+    };
+}
+
+/// As `FadingControl`, for a box.
+fn FadingBox(comptime config: Config, comptime W: type) type {
+    if (config.fade_field == null) return W;
+    return struct {
+        pub const holds_content = true;
+        pub const push = W.push;
+
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            _ = field;
+            return base.fieldError(State, "recipe fade", config.fade_field.?, controls.Fade);
+        }
+
+        pub fn wakeAfter(ui: anytype, in: *const Input) f32 {
+            _ = in;
+            return fadeWake(config, ui);
+        }
+    };
 }
 
 fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
@@ -70,10 +125,11 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
             states.focus_within = if (ui.focus) |w| @backingInt(w) >= row and @backingInt(w) < row + rows else false;
             const use: model.Use = .{ .tokens = config.tokens, .scope = config.scope, .states = states, .environment = environment, .variants = config.variants, .local = config.local, .color_policy = config.color_policy };
             const recipe = config.recipe orelse model.Recipe{};
-            const root = recipe.resolve(Parts.root, use, null) catch |err| blk: {
+            var root = recipe.resolve(Parts.root, use, null) catch |err| blk: {
                 ui.fail(err);
                 break :blk recipe.baseFor(Parts.root);
             };
+            stepFade(config, ui, &root, in);
             const tb = &ui.tables;
             const i = tb.t.push(parent, if (name) |x| .hash(x) else .none, &root.box);
             inline for (n.children) |c| ui.push(c, i, next, in);
@@ -142,7 +198,7 @@ fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []cons
         .id = name,
         .bind = if (bind.len > 0) bind else null,
         .children = children,
-        .widget = Widget(kind, name, bind, text, limits, config, literal),
+        .widget = FadingControl(config, Widget(kind, name, bind, text, limits, config, literal)),
     };
 }
 
@@ -161,6 +217,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             if (config.environment_field) |f| if (base.fieldError(State, "recipe environment", f, model.Environment)) |err| return err;
             if (config.tokens_field) |f| if (base.fieldError(State, "recipe tokens", f, style.tokens.Table)) |err| return err;
             if (config.recipe_field) |f| if (base.fieldError(State, "recipe", f, model.Recipe)) |err| return err;
+            if (config.fade_field) |f| if (base.fieldError(State, "recipe fade", f, controls.Fade)) |err| return err;
             if (kind == .input) return if (literal) textfield_zig.textError(State, "textfield", bind) else textfield_zig.bindError(State, bind, text);
             if (kind == .slider) return base.fieldError(State, "recipe slider", bind, f32);
             if (kind == .checkbox) {
@@ -232,6 +289,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             response.focused = ui.focus == @field(Ui.Events.Widget, name);
             const use = useFor(ui, in, response);
             var root = resolvePart(ui, Parts.root, use);
+            stepFade(config, ui, &root, in);
             var child = use;
             child.parent = &root;
             child.local = &.{};

@@ -398,3 +398,45 @@ test "a required text field is invalid while empty, in both front ends as it is 
     output = try run.frame(&input);
     try std.testing.expectEqual(Valid.bad.bitsOf(), output.runtime.tree.c.look[field].border_color);
 }
+
+test "a transition eases the face to its hover fill over its seconds, the same in both front ends" {
+    @setEvalBranchQuota(200_000);
+    const Eased = struct {
+        const hot: types.Color = .rgb(200, 100, 0);
+        const rest: types.Color = .rgb(0, 0, 0);
+        const rules = model.button_rules ++ [_]style.Rule{
+            .{ .part = style.Parts.root, .declarations = &.{style.set(.fill, rest)} },
+            .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, hot)} },
+        };
+        const recipe: model.Recipe = .{ .parts = model.button.parts, .rules = &rules };
+        const transition: controls.Transition = .{ .seconds = 0.1, .ease = .linear, .fill = true };
+        const App = struct {
+            fade: controls.Fade = .{},
+            pub fn build(app: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.button(f, .from("go"), "Go", .{ .recipe = recipe, .transition = transition, .fade = &app.fade }) catch unreachable;
+                f.close();
+            }
+        };
+        const State_ = struct { fade: controls.Fade = .{} };
+        const EUi = base.ComptimeUi(State_, spec.col(panel, .{ct.button(.go, "Go", .{ .recipe = recipe, .transition = transition, .fade_field = "fade" })}), .default);
+        const ERun = base.Harness(App, EUi, .{ .nodes = 16, .texts = 4, .customs = 2, .strings = 64, .depth = 8 });
+        var run: ERun = .{};
+    };
+    const run = &Eased.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 }, .dt = 0.025 };
+    var output = try run.frame(&input);
+    const go = output.runtime.tree.find(.from("go"));
+    try std.testing.expectEqual(Eased.rest.bitsOf(), output.runtime.tree.c.look[go].fill);
+    const r = output.runtime.tree.rect(go);
+    input.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    output = try run.frame(&input);
+    // A quarter of the way after one 25 ms frame of a 100 ms linear leg.
+    try std.testing.expectEqual(types.Color.rgb(50, 25, 0).bitsOf(), output.runtime.tree.c.look[go].fill);
+    try std.testing.expect(output.comptime_.wake == 0);
+    for (0..3) |_| output = try run.frame(&input);
+    try std.testing.expectEqual(Eased.hot.bitsOf(), output.runtime.tree.c.look[go].fill);
+    output = try run.frame(&input);
+    try std.testing.expect(output.comptime_.wake > 0);
+}
