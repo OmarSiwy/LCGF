@@ -2213,6 +2213,7 @@ Optional component recipes with caller-owned data and independent resolution.
 - `end = controls.end`
 - `beginBox = controls.beginBox`
 - `endBox = controls.endBox`
+- `OpenBox = controls.OpenBox`
 - `button = controls.button`
 - `beginLink = controls.beginLink`
 - `link = controls.link`
@@ -3979,6 +3980,7 @@ Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rec
 - `fn lastRect(ui: *const Self, row: u32) types.Rect`: During a widget step, geometry of a descriptor in the last completed frame.
 - `fn fail(ui: *Self, err: anyerror) void`: Custom widgets keep the existing non-error-returning frame API and report failure as output data.
 - `fn setCursor(ui: *Self, cursor: types.Cursor, when: bool) void`: Explicit override as on Frame.
+- `fn rowsOf(comptime row: u32) u32`: Rows of the spec node at row `row`, itself included.
 - `fn response(ui: *const Self, row: u32, in: *const Input) Response`
 - `fn field(comptime name: []const u8) S.Field`
 
