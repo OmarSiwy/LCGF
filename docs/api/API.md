@@ -5790,6 +5790,9 @@ Dialog (tier 2): a modal window over the page, with a title, a message and butto
 - `fn trapFocus(t: *const Tree, sc: *focus.Scopes, comptime name: []const u8) void`: Marks dialog `name`'s panel as a modal layer in `sc` (`focus.Scopes.trap`), for an application that runs `focus.Focus` over the tree: Tab then stays inside it, and focus goes back to what had it when the dialog closes.
 - `fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, text: []const u8) Response`: The button that opens dialog `name`, showing `text`.
 - `fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *DialogState, title: []const u8, message: []const u8, texts: []const […`: Builds dialog `name` (buttons `def`, labelled `texts`) showing `title` and `message`, if it is open.
+- `fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool`: Opens the backdrop and the panel of dialog `name` if `open.*`, and returns whether it did; the caller then adds the content and calls `end`.
+- `fn end(f: *Frame) void`: Closes the panel and the backdrop `begin` opened.
+- `fn Modal(comptime th: Theme, comptime name: [:0]const u8, comptime open: []const u8, comptime rows: u32) type`: The custom widget (`Spec.widget`) of `ct.dialog`'s backdrop: it pushes the backdrop and the panel as `begin` does, then the content; its `step` closes on Escape and keeps focus inside (focus outside the dialog, by a Tab past an end or a dialog just opened, goes to its first widget in Tab order, or its last after Shift+Tab).
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with the button that opens the dialog and a label, and the dialog, in both front ends, in theme `th`.
 
 ### `Def` (struct)
@@ -5820,9 +5823,23 @@ Fields: `open`, `pressed`, `clicked`
 
 - `fn add(h: *Hits, k: u8, r: Response) void`: Notes button `k`'s response.
 
+### `ct` (struct)
+
+- `fn dialog(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec`: Dialog `id`, shown while the bool field `open` is true, holding `children` (any spec nodes, as `spec.col` takes them).
+
+### `Modal(..)` (generic struct)
+The custom widget (`Spec.widget`) of `ct.dialog`'s backdrop: it pushes the backdrop and the panel as `begin` does, then the content; its `step` closes on Escape and keeps focus inside (focus outside the dialog, by a Tab past an end or a dialog just opened, goes to its first widget in Tab order, or its last after Shift+Tab).
+
+- `holds_content = true`
+- `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
 ### `Example(..)` (generic struct)
 The example page: a toolbar with the button that opens the dialog and a label, and the dialog, in both front ends, in theme `th`.
 
+- `toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel }`
+- `page_style: Style = .{ .size = .{ .fill, .fill } }`
 - `D = Dialog(th, .delete, .dialog, confirm)`
 - `Ui = popover.ComptimePage(State, spec, th, D)`
 - `limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 }`
@@ -5911,26 +5928,39 @@ Select (tier 2): a button showing the chosen option of a fixed list, which opens
 
 ### Top level
 
+- `Group = struct { at: u8, label: []const u8 }`
 - `shapes: menu.Def = .{ .items = &.{ "circle", "square", "triangle" } }`: The example's options.
 - `shape_texts = [_][]const u8{ "Circle", "Square", "Triangle" }`
 - `replay = @embedFile("testdata/select.replay")`: Input for `Example(.default)` at 800 x 600, one commented line per frame.
+- `fn positional(comptime n: usize) menu.Def`: The `menu.Def` of `n` options named by position: "0", "1", ..., so option k's id is `name_k`.
 - `fn checkSelect(comptime State: type, comptime def: menu.Def, comptime field: []const u8, comptime text: []const u8) ?[]const u8`: `null` if `State` can hold select `def` bound to `field`, its button showing `text`, else the compile error: `field` must be a `SelectState`, `text` and every option's field strings, and the options a flat list (no submenu).
 - `fn Select(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime text: @EnumLiteral(), comptime def: menu.Def) type`: Select `name` with options `def`, bound to the `SelectState` field `field`, its button showing the string field `text`, in theme `th`: its spec builders and the hooks `popover.ComptimePage` calls.
 - `fn buttonStyle(th: *const Theme, r: Response) Style`: The button: a theme button filled by its response, at least 120 wide, its text at the start.
 - `fn listStyle(th: *const Theme, at: Rect) Style`: The list: menu.zig's list below the button's rect `at` (last frame's), at least as wide as the button.
 - `fn optionStyle(th: *const Theme, active: bool, selected: bool) Style`: An option row: menu.zig's item, filled from `optionFills` by highlight and choice.
+- `fn headerStyle(th: *const Theme) Style`: A group's header row: an option's padding, no fill.
+- `fn headerText(th: *const Theme) types.TextStyle`: A group's header text: the label's, in the hot control colour (dimmer than the options).
 - `fn optionFills(th: *const Theme) base.StateColors`: An option's fill, indexed by `active << 1 | selected`: none, the control colour for the chosen one, the hot control colour for the highlighted one, chosen or not.
 - `fn advance(comptime def: menu.Def, st: SelectState, hits: menu.Hits, evs: []const Input.Event) SelectState`: One frame of a select (APG select-only combobox): the list works as `menu.advance` works a menu (the button's click toggles it, a press outside closes it, the pointer and Up, Down, Home and End move the highlight, Enter, Space or a click choose and close, Escape closes), but it opens with the chosen option highlighted, and a choice becomes the value.
 - `fn valued(s: Style, st: SelectState) Style`: The button's style with the value column set: the chosen option's position.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: menu.Def, st: SelectState, label: u32) void`: The semantics of select `name` the tree's columns cannot hold, written into `s` after `Semantics.clear` and before `a11y.names` and `a11y.states`.
 - `fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *SelectState, texts: []const []const u8) Response`: The button of select `name` (options `def`, labelled `texts`), in the page's flow, showing the chosen option.
 - `fn list(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8) void`: The list of select `name`, if it is open.
+- `fn listGrouped(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *const SelectState, texts: []const []const u8, comptime gr…`: `list`, with group headers (`Options.groups`) among the options.
+- `fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: []const u8, comptime opts: Options) type`: The custom widgets (`Spec.widget`) of `ct.select` and `ct.list`: the button's `step` reads every part's response and the keys through `advance`, as `button` does at run time, and keeps the button's rect for the list's `push`.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with a caption and the select, and the select's list, in both front ends, in theme `th`.
 
 ### `SelectState` (struct)
 A select's state, owned by the application.
 
 Fields: `selected`, `menu`
+
+- `fn shown(s: SelectState) bool`: Whether the list is shown: what `spec.when` over this field selects by (`ct.list`).
+
+### `Options` (struct)
+The options of a select known by their captions only (`ct.select`, HTML `<option>`), and the headers of their groups (`<optgroup label>`).
+
+Fields: `texts`, `groups`
 
 
 ### `Select(..)` (generic struct)
@@ -5942,9 +5972,32 @@ Select `name` with options `def`, bound to the `SelectState` field `field`, its 
 - `fn step(sig: anytype, v: anytype) void`: The button's, the scrim's and the options' responses and the keys, through `advance`; then the button's text follows the value.
 - `fn part(comptime n: Spec, st: anytype, v: anytype) ?Part`
 
+### `ct` (struct)
+The select as spec nodes of `base.ComptimeUi`: the button in the page's flow, and its list, last in the page's root (so it is drawn above the rest), live while the list is open (`spec.when` over the field, `SelectState.shown`).
+
+- `fn select(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec`: The button of select `id`, bound to the `SelectState` field `field`, showing the chosen one of `opts.texts`.
+- `fn list(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec`: The scrim and the list of select `id`, with the same arguments as its `select`.
+
+### `Comptime(..)` (generic struct)
+The custom widgets (`Spec.widget`) of `ct.select` and `ct.list`: the button's `step` reads every part's response and the keys through `advance`, as `button` does at run time, and keeps the button's rect for the list's `push`.
+
+- `def = positional(opts.texts.len)`
+
+### `Comptime(..).Button` (struct)
+
+- `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
+### `Comptime(..).List` (struct)
+
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
 ### `Example(..)` (generic struct)
 The example page: a toolbar with a caption and the select, and the select's list, in both front ends, in theme `th`.
 
+- `toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel }`
+- `page_style: Style = .{ .size = .{ .fill, .fill } }`
 - `S = Select(th, .shape, .shape, .shape_text, shapes)`
 - `Ui = popover.ComptimePage(State, spec, th, S)`
 - `limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 1, .strings = 1024, .depth = 8 }`
