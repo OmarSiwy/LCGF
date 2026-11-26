@@ -1433,7 +1433,7 @@ pub const Lowerer = struct {
         const parent = if (l.ir_of[p] != none) l.ir_of[p] else l.irParent(p);
         if (parent == none) return;
         const kind = l.page.nodes.items(.kind)[parent];
-        if (kind != .container and kind != .landmark and kind != .component and kind != .dialog) return;
+        if (kind != .container and kind != .landmark and kind != .component and kind != .dialog and kind != .section) return;
         const style = lcgf.widgets_label.labelStyle(&l.page.theme);
         var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme), .paragraph = l.paragraphOf(p) };
         l.caption(&node, collapse(l.arena, bytes), node.loc);
@@ -1921,6 +1921,10 @@ pub const Lowerer = struct {
             l.skip[n] = true;
             return true;
         }
+        if (std.mem.eql(u8, t, "details")) {
+            l.details(n, parent);
+            return true;
+        }
         if (std.mem.eql(u8, t, "a") and l.attr(n, "href") != null) {
             l.link(n, parent);
             return true;
@@ -2044,6 +2048,48 @@ pub const Lowerer = struct {
         l.widgetStyle(n, parent, lcgf.widgets_link.linkStyle(&th), &node);
         l.handlers(n, node.id, "", null);
         l.skip[n] = true; // its text is the link's
+        l.ir_of[n] = l.addNode(node);
+    }
+
+    /// `<details bind:open="f">` with a `<summary>` first: an accordion section over the bool
+    /// `f` (`open` makes it start true). The summary is the header's one literal or field; the
+    /// rest of the content is the panel. CSS sets only its margins.
+    fn details(l: *Lowerer, n: u32, parent: u32) void {
+        const th = l.page.theme;
+        const bind = l.binding(n, "open", .bool, "<details>");
+        if (bind.len == 0) {
+            l.ds.err(l.loc(n), "<details> needs bind:open=\"field\", the bool it shows its content by", .{});
+            l.skip[n] = true;
+            return;
+        }
+        if (l.attr(n, "open") != null) l.setDefault(bind, "true");
+        var summary: u32 = none;
+        var panel = false;
+        for (n + 1..l.k.end[n]) |i| if (l.doc.nodes.items(.parent)[i] == n) {
+            const k = l.doc.nodes.items(.kind)[i];
+            if (k == .text and isBlank(l.doc.nodes.items(.name)[i])) continue;
+            if (summary == none and !panel and k == .element and std.mem.eql(u8, l.tag(@intCast(i)), "summary")) summary = @intCast(i) else panel = true;
+        };
+        if (summary == none or !panel) {
+            l.ds.err(l.loc(n), "<details> takes a <summary> first and then its content", .{});
+            l.skip[n] = true;
+            return;
+        }
+        var node: ir.Node = .{ .kind = .section, .parent = parent, .loc = l.loc(n), .bind = bind };
+        if (l.content(summary).elements > 0) l.ds.err(l.loc(summary), "a <summary> shows one literal or one field; its content cannot hold elements", .{});
+        l.caption(&node, collapse(l.arena, l.ownText(summary)), l.loc(summary));
+        if (node.text_kind == .format) l.ds.err(l.loc(summary), "a <summary> shows one literal or one field; give the formatted text its own field", .{});
+        node.kind = .section;
+        l.skip[summary] = true;
+        node.id = l.widgetId(n, bind, "<details>") orelse {
+            l.skip[n] = true;
+            return;
+        };
+        const base_style = lcgf.widgets_accordion.sectionStyle(&th);
+        l.widgetStyle(n, parent, base_style, &node);
+        if (!std.meta.eql(node.style, base_style) or node.params_expr.len > 0)
+            l.ds.err(l.loc(n), "CSS sets only the margins of a <details>; style its content", .{});
+        l.handlers(n, node.id, bind, .bool);
         l.ir_of[n] = l.addNode(node);
     }
 

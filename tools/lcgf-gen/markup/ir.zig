@@ -27,6 +27,9 @@ pub const Kind = enum(u8) {
     button,
     /// `<a href>`: `widgets_link.ct.link(theme, id, text)`, activated by click and Enter.
     link,
+    /// `<details>`: `widgets_accordion.ct.section(theme, id, bind, text, children)`, its
+    /// `<summary>` the header's text and its other content the panel, shown while `bind` is.
+    section,
     checkbox,
     @"switch",
     toggle,

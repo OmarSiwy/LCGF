@@ -247,7 +247,7 @@ pub const Emit = struct {
         }
         const restyle = !std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0;
         const has_children = switch (n.kind) {
-            .container, .landmark, .when, .choice, .list, .dialog => true,
+            .container, .landmark, .when, .choice, .list, .dialog, .section => true,
             .component => e.hasChild(i),
             else => false,
         };
@@ -319,6 +319,12 @@ pub const Emit = struct {
             .progress => e.print("{s}.ct.progress(theme, .{f})", .{ e.use("progress"), std.zig.fmtId(n.bind) }),
             .separator => e.print("{s}.ct.separator(theme, .{s})", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" }),
             .spacer => e.print("{s}.ct.spacer(.{s})", .{ e.use("spacer"), if (n.dir == .x) "x" else "y" }),
+            .section => {
+                e.print("{s}.ct.section(theme, .{f}, .{f}, ", .{ e.use("accordion"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.caption(n.text_kind, n.text);
+                e.write(", .{");
+                inner_close.appendSlice(e.arena, "})") catch unreachable;
+            },
             .when => {
                 e.print("s.when(.{f},", .{std.zig.fmtId(n.bind)});
                 inner_close.appendSlice(e.arena, ")") catch unreachable;
@@ -674,6 +680,12 @@ pub const Emit = struct {
                 e.fields(st, types.Style{}, &.{}, n.params_expr);
                 e.write(");");
                 return "f.close();";
+            },
+            .section => {
+                e.print("_ = {s}.open(f, &theme, {s}, {s}, ", .{ e.use("accordion"), e.rtId(n.id, list_depth), e.ref(n.bind) });
+                e.rtCaption(n.text_kind, n.text);
+                e.write(");");
+                return "accordion.close(f);";
             },
             .label, .heading, .text => {
                 const plain = n.kind == .label and n.paragraph == null and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
@@ -1174,7 +1186,7 @@ pub const Emit = struct {
             e.print(" // {s}\n", .{e.where(nodes.items(.loc)[i])});
             // A leaf inside a choice closes its prong at once.
             const leaf = switch (nodes.items(.kind)[i]) {
-                .container, .landmark, .when, .list, .choice, .dialog => false,
+                .container, .landmark, .when, .list, .choice, .dialog, .section => false,
                 else => true,
             };
             if (leaf and in_choice) {

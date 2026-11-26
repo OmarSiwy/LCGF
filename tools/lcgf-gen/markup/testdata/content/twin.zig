@@ -1,4 +1,5 @@
-//! content, written by hand: the document elements over widgets and roles: a link, lists.
+//! content, written by hand: the document elements over widgets and roles: a link, lists, a
+//! details section.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -6,8 +7,11 @@ const s = lcgf.spec;
 const w = lcgf.widgets_base;
 const link = lcgf.widgets_link;
 const label = lcgf.widgets_label;
+const accordion = lcgf.widgets_accordion;
 
 pub const theme: w.Theme = .{};
+
+pub const State = struct { more_open: bool = true };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     link.ct.link(theme, .docs, "Read the docs"),
@@ -17,6 +21,10 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.col(.{ .role = .list_item }, .{ label.ct.label(theme, "Inside"), label.ct.label(theme, "a box") }),
     }),
     s.col(.{ .role = .list }, .{s.styled(label.ct.label(theme, "First"), .{ .role = .list_item })}),
+    // <details open bind:open>: an accordion section, its <summary> the header.
+    accordion.ct.section(theme, .more, .more_open, "More", .{
+        s.textStyled(label.ct.label(theme, "Hidden text"), .{ .color = theme.text, .wrap = true }),
+    }),
 });
 
 pub fn Handlers(comptime Ui: type) type {
@@ -28,16 +36,18 @@ pub fn Handlers(comptime Ui: type) type {
     };
 }
 
-/// Clicks the link once through the generated `Page`.
+/// Clicks the link and the section's header once each through the generated `Page`.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = page;
     var in: lcgf.input.Input = .{};
     const t = p.frame(h, &in).tree;
-    const r = t.rect(t.find(.from("docs")));
-    in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
-    in.buttons.left = true;
-    _ = p.frame(h, &in);
-    in.buttons.left = false;
-    _ = p.frame(h, &in);
+    for ([_]lcgf.types.Rect{ t.rect(t.find(.from("docs"))), t.rect(t.find(.from("more"))) }) |r| {
+        in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+        in.buttons.left = true;
+        _ = p.frame(h, &in);
+        in.buttons.left = false;
+        _ = p.frame(h, &in);
+    }
     try std.testing.expectEqual(1, h.opened);
+    try std.testing.expect(!p.ui.signals.state.more_open);
 }
