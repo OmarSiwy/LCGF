@@ -8,8 +8,9 @@ const std = @import("std");
 const mem = @import("../core/mem.zig");
 const simd = @import("../core/simd.zig");
 
-/// A row of `Signals.version`.
-pub const Signal = enum(u32) { _ };
+/// A row of `Signals.version`. `unset` is a signal not created yet (`Cell.of`): it reads as
+/// version 0 and is created by the first change.
+pub const Signal = enum(u32) { unset = std.math.maxInt(u32), _ };
 
 pub const Signals = struct {
     /// One counter per signal. Wraps; only equality is ever asked of it.
@@ -82,7 +83,8 @@ pub const Signals = struct {
         var h: u64 = 0xcbf2_9ce4_8422_2325;
         for (deps) |dep| {
             const i = @backingInt(dep);
-            h = (h ^ ((@as(u64, i) << 32) | s.version[i])) *% 0x0000_0100_0000_01b3;
+            const v = if (dep == .unset) 0 else s.version[i];
+            h = (h ^ ((@as(u64, i) << 32) | v)) *% 0x0000_0100_0000_01b3;
         }
         return h;
     }
@@ -90,15 +92,22 @@ pub const Signals = struct {
 
 /// A value paired with its signal. Nothing here the caller could not write with `Signals.bump`;
 /// it exists so the common case is one call.
+///
+/// `of` makes one without a `Signals`, so it can be a field's default (`count: Cell(i32) =
+/// .of(0)`); its signal is created by the first `set` that changes the value.
 pub fn Cell(comptime T: type) type {
     return struct {
         value: T,
-        signal: Signal,
+        signal: Signal = .unset,
 
         const Self = @This();
 
         pub fn init(signals: *Signals, value: T) Self {
             return .{ .value = value, .signal = signals.create() };
+        }
+        /// A cell whose signal is created on its first change.
+        pub fn of(value: T) Self {
+            return .{ .value = value };
         }
         pub fn get(self: *const Self) T {
             return self.value;
@@ -107,16 +116,26 @@ pub fn Cell(comptime T: type) type {
         pub fn set(self: *Self, signals: *Signals, value: T) void {
             const changed = !std.meta.eql(self.value, value);
             self.value = value;
+            if (self.signal == .unset) {
+                if (!changed) return;
+                self.signal = signals.create();
+            }
             signals.bump(self.signal, changed);
         }
     };
 }
 
 /// A value computed from other signals (a memo), with its own signal and the stamp of the
-/// inputs it was last computed from. There is no compute callback: the caller asks `stale` and,
-/// if so, computes and `set`s, so the work runs at most once per change of its inputs:
+/// inputs it was last computed from. `update` names the inputs once and calls the function
+/// only when one of them changed since the last computation:
 ///
-///     if (total.stale(&signals, &deps)) total.set(&signals, &deps, a.get() + b.get());
+///     total: Derived(i32) = .of(0),
+///     ...
+///     const t = app.total.update(sig, &.{ a.signal, b.signal }, add, .{ a.get(), b.get() });
+///
+/// The arguments are evaluated on every call (pass what is cheap to read); the function runs at
+/// most once per change of its inputs. `stale` and `set` are the same steps, for a computation
+/// that is not one function call.
 ///
 /// Its own signal is bumped only when the new value differs, so a recompute that lands on the
 /// same value leaves everything downstream valid.
@@ -124,12 +143,18 @@ pub fn Derived(comptime T: type) type {
     return struct {
         cell: Cell(T),
         /// `Signals.stamp` of the inputs at the last `set`.
-        stamp: u64,
+        stamp: u64 = 0,
+        /// `set` has run (or `init`): `stamp` is meaningful.
+        computed: bool = false,
 
         const Self = @This();
 
         pub fn init(signals: *Signals, deps: []const Signal, value: T) Self {
-            return .{ .cell = .init(signals, value), .stamp = signals.stamp(deps) };
+            return .{ .cell = .init(signals, value), .stamp = signals.stamp(deps), .computed = true };
+        }
+        /// A memo holding `value` until its first `update`, which always computes.
+        pub fn of(value: T) Self {
+            return .{ .cell = .of(value) };
         }
         pub fn get(self: *const Self) T {
             return self.cell.value;
@@ -139,12 +164,19 @@ pub fn Derived(comptime T: type) type {
         }
         /// An input changed since the last `set`.
         pub fn stale(self: *const Self, signals: *const Signals, deps: []const Signal) bool {
-            return signals.stamp(deps) != self.stamp;
+            return !self.computed or signals.stamp(deps) != self.stamp;
         }
         /// Stores a value computed from `deps` at their current versions.
         pub fn set(self: *Self, signals: *Signals, deps: []const Signal, value: T) void {
             self.stamp = signals.stamp(deps);
+            self.computed = true;
             self.cell.set(signals, value);
+        }
+        /// The value, recomputed as `@call(.auto, func, args)` first when an input in `deps`
+        /// changed since the last computation (or there was none).
+        pub fn update(self: *Self, signals: *Signals, deps: []const Signal, comptime func: anytype, args: anytype) T {
+            if (self.stale(signals, deps)) self.set(signals, deps, @call(.auto, func, args));
+            return self.cell.value;
         }
     };
 }
@@ -457,4 +489,39 @@ test "signals past Limits.signals share a row: extra wake-ups, never a missed on
     c.set(&ctx.signals, 1);
     try testing.expect(ctx.needsFrame(&in));
     try testing.expect(view.stale(&ctx.signals, &.{b.signal}));
+}
+
+test "Cell.of, Derived.of: no Signals until the first change; update computes once per change" {
+    var s = fixture(4);
+    const App = struct {
+        count: Cell(i32) = .of(2),
+        doubled: Derived(i32) = .of(0),
+        calls: u32 = 0,
+
+        fn double(app: *@This(), n: i32) i32 {
+            app.calls += 1;
+            return n * 2;
+        }
+    };
+    var app: App = .{};
+    try testing.expectEqual(Signal.unset, app.count.signal);
+    // The first update computes, then holds while the count is the same.
+    try testing.expectEqual(@as(i32, 4), app.doubled.update(&s, &.{app.count.signal}, App.double, .{ &app, app.count.get() }));
+    try testing.expectEqual(@as(i32, 4), app.doubled.update(&s, &.{app.count.signal}, App.double, .{ &app, app.count.get() }));
+    try testing.expectEqual(@as(u32, 1), app.calls);
+    // The memo's own change (0 to 4) marked dirty; a frame would clear it. Setting the same
+    // value creates nothing and changes nothing.
+    s.dirty = false;
+    app.count.set(&s, 2);
+    try testing.expectEqual(Signal.unset, app.count.signal);
+    try testing.expect(!s.dirty);
+    // The first change creates the signal, marks dirty and makes the memo stale once.
+    app.count.set(&s, 5);
+    try testing.expect(app.count.signal != .unset);
+    try testing.expect(s.dirty);
+    try testing.expectEqual(@as(i32, 10), app.doubled.update(&s, &.{app.count.signal}, App.double, .{ &app, app.count.get() }));
+    try testing.expectEqual(@as(i32, 10), app.doubled.update(&s, &.{app.count.signal}, App.double, .{ &app, app.count.get() }));
+    try testing.expectEqual(@as(u32, 2), app.calls);
+    // A memo's own signal follows the same rule: created when its value first changes.
+    try testing.expect(app.doubled.signal() != .unset);
 }

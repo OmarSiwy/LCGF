@@ -120,6 +120,12 @@ pub const Fns = struct {
     glBlendEquation: *const fn (Enum) callconv(.c) void,
     glColorMask: *const fn (Boolean, Boolean, Boolean, Boolean) callconv(.c) void,
     glScissor: *const fn (Int, Int, Sizei, Sizei) callconv(.c) void,
+    // lcgf_render.gpu (gpu.zig): fixed-function state a pipeline sets, partial texture writes.
+    glTexSubImage2D: *const fn (Enum, Int, Int, Int, Sizei, Sizei, Enum, Enum, ?*const anyopaque) callconv(.c) void,
+    glBlendColor: *const fn (Float, Float, Float, Float) callconv(.c) void,
+    glBlendEquationSeparate: *const fn (Enum, Enum) callconv(.c) void,
+    glCullFace: *const fn (Enum) callconv(.c) void,
+    glFrontFace: *const fn (Enum) callconv(.c) void,
 };
 
 /// GL ES 3.0 functions on top of `Fns`; a GL ES 2 driver need not have them.
@@ -134,6 +140,31 @@ pub const Fns3 = struct {
     glVertexAttribIPointer: *const fn (Uint, Int, Enum, Sizei, ?*const anyopaque) callconv(.c) void,
     glVertexAttribDivisor: *const fn (Uint, Uint) callconv(.c) void,
     glDrawArraysInstanced: *const fn (Enum, Int, Sizei, Sizei) callconv(.c) void,
+    // lcgf_render.gpu (gpu.zig): samplers, storage, multisampling, resolves, readback.
+    glDrawElementsInstanced: *const fn (Enum, Sizei, Enum, ?*const anyopaque, Sizei) callconv(.c) void,
+    glBindBufferRange: *const fn (Enum, Uint, Uint, Intptr, Sizeiptr) callconv(.c) void,
+    glGenSamplers: *const fn (Sizei, [*]Uint) callconv(.c) void,
+    glDeleteSamplers: *const fn (Sizei, [*]const Uint) callconv(.c) void,
+    glSamplerParameteri: *const fn (Uint, Enum, Int) callconv(.c) void,
+    glSamplerParameterf: *const fn (Uint, Enum, Float) callconv(.c) void,
+    glTexStorage2D: *const fn (Enum, Sizei, Enum, Sizei, Sizei) callconv(.c) void,
+    glGenRenderbuffers: *const fn (Sizei, [*]Uint) callconv(.c) void,
+    glDeleteRenderbuffers: *const fn (Sizei, [*]const Uint) callconv(.c) void,
+    glBindRenderbuffer: *const fn (Enum, Uint) callconv(.c) void,
+    glRenderbufferStorageMultisample: *const fn (Enum, Sizei, Enum, Sizei, Sizei) callconv(.c) void,
+    glFramebufferRenderbuffer: *const fn (Enum, Enum, Enum, Uint) callconv(.c) void,
+    glBlitFramebuffer: *const fn (Int, Int, Int, Int, Int, Int, Int, Int, Bitfield, Enum) callconv(.c) void,
+    glDrawBuffers: *const fn (Sizei, [*]const Enum) callconv(.c) void,
+    glMapBufferRange: *const fn (Enum, Intptr, Sizeiptr, Bitfield) callconv(.c) ?*anyopaque,
+    glUnmapBuffer: *const fn (Enum) callconv(.c) Boolean,
+};
+
+/// GL ES 3.1: compute and storage images, for lcgf_render.gpu's compute passes. Optional: a
+/// 3.0 driver has none, and the projection's compute calls are then unavailable.
+pub const Fns31 = struct {
+    glDispatchCompute: *const fn (Uint, Uint, Uint) callconv(.c) void,
+    glMemoryBarrier: *const fn (Bitfield) callconv(.c) void,
+    glBindImageTexture: *const fn (Uint, Uint, Int, Boolean, Int, Enum, Enum) callconv(.c) void,
 };
 
 /// How a quad_shader.attrs format reaches GL: component kind and count.

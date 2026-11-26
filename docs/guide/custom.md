@@ -1,8 +1,9 @@
 # Custom rendering
 
-For custom content written once with WebGPU handles and WGSL, see the experimental
-[WebGPU custom drawing guide](webgpu-custom.md). The routes below operate on the
-application’s current rendering pass and textures.
+To write a custom draw once for every GPU back end, use `lcgf_render.gpu`. It takes buffers,
+textures, pipelines, bind groups and WGSL in WebGPU's shapes. It works through the native API of
+the build, with nothing in between ([Custom drawing with lcgf_render.gpu](gpu.md)). The routes
+below give that draw, or any native code of yours, its place in the frame.
 
 The UI never owns the GPU. You create the device, the queue, the render pass and the target;
 the back end only creates its own buffers and pipelines from your device, and the frame reaches

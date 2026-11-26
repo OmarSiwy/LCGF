@@ -1,0 +1,20 @@
+// Colours patched into quads, as a static UI (lcgf-gen --static): src/abi/ct.zig's `palette`,
+// a swatch filled with `accent` and a bar filled with `accent` and bordered with `edge`.
+.{
+    .name = "palette",
+    .state = .{
+        .{ .name = "title", .str = "Palette" },
+        .{ .name = "accent", .color = .{ .rgb = .{ 200, 40, 40 } } },
+        .{ .name = "edge", .color = .{ .rgb = .{ 40, 40, 200 } } },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .pad = .{ 4, 4, 4, 4 }, .gap = 4, .fill = .{ .rgb = .{ 20, 20, 20 } } },
+        .children = .{
+            .{ .row = .{ .style = .{ .gap = 6 }, .children = .{
+                .{ .label = "title" },
+                .{ .col = .{ .style = .{ .size = .{ .{ .px = 20 }, .{ .px = 20 } }, .fill = .{ .rgb = .{ 1, 2, 3 } }, .fill_bind = "accent" } } },
+            } } },
+            .{ .col = .{ .style = .{ .size = .{ .fill, .{ .px = 8 } }, .fill = .{ .rgb = .{ 9, 9, 9 } }, .border = 1, .border_color = .{ .rgb = .{ 4, 5, 6 } }, .fill_bind = "accent", .border_bind = "edge" } } },
+        },
+    } },
+}

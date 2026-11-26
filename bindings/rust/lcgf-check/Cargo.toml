@@ -1,0 +1,67 @@
+[package]
+name = "lcgf-check"
+description = "The Rust side of the bindings' gate (bindings/check/run.sh)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+lcgf = { path = "../lcgf" }
+ash = { version = "0.38", features = ["loaded"] }
+
+[[bin]]
+name = "lcgf-check"
+path = "src/main.rs"
+
+[[bin]]
+name = "lcgf-gpu-check"
+path = "src/gpu_check.rs"
+
+[[bin]]
+name = "lcgf-vk-check"
+path = "src/vk_check.rs"
+
+[[bin]]
+name = "lcgf-rt-check"
+path = "src/rt_check.rs"
+
+[[bin]]
+name = "lcgf-ct-check"
+path = "src/ct_check.rs"
+
+# The GPU back end the gpu checks build `lcgf` for (`lcgf`'s own features); the Vulkan bins need
+# neither, and each of these bins needs its own.
+[features]
+gles = ["lcgf/gles"]
+wgpu = ["lcgf/wgpu"]
+metal = ["lcgf/metal"]
+d3d12 = ["lcgf/d3d12"]
+# liblcgf_auto.a, for the run-time lane dispatch gate.
+lanes-auto = ["lcgf/lanes-auto"]
+
+[[bin]]
+name = "lcgf-gles-check"
+path = "src/gles_check.rs"
+required-features = ["gles"]
+
+[[bin]]
+name = "lcgf-wgpu-check"
+path = "src/wgpu_check.rs"
+required-features = ["wgpu"]
+
+[[bin]]
+name = "lcgf-metal-check"
+path = "src/metal_check.rs"
+required-features = ["metal"]
+
+[[bin]]
+name = "lcgf-metal-device-check"
+path = "src/metal_device_check.rs"
+required-features = ["metal"]
+
+[[bin]]
+name = "lcgf-d3d12-check"
+path = "src/d3d12_check.rs"
+required-features = ["d3d12"]

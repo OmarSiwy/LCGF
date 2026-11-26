@@ -24,8 +24,34 @@ LCGF, Clay, Nuklear and microui use static builds for cold startup and idle RSS.
 | microui 2.02 | Immediate-mode controls, layout and traversal of its native command list | host-supplied monospace advances | uses fixed-height virtual rows |
 | GTK 4 | Native retained controls, a virtualized `GtkListView`, GTK allocation and a GSK snapshot. Event dispatch can also paint | Pango and system fonts | changed pointer positions require an X11 round trip. Idle uses the GLib event loop |
 | Qt Widgets | Native widgets, a virtualized `QListView`, layout and software paint into a pixmap | system fonts at 14 and 20 px | idle uses the native event loop |
+| Capy 0.4.1 | Capy's API on its GTK 4 back end (`bench/vs/capy/main.zig`, Zig 0.14.1): the scene's change through Capy (rect sizes, label text), a viewport handed to the root container as its surface handler hands it (Capy lays out in Zig, then places GTK children in a `GtkFixed`), then GTK 4's allocation and GSK snapshot as in the GTK 4 row | Pango and system fonts; Capy's labels do not wrap | the list keeps one screen of rows and rewrites their labels (Capy's `List` makes a widget per item); text and resize are not scrolled, since a `scrollable` around that row snapshots to nothing in 0.4.1 |
 
 The output counter records work in each adapter's own units. A draw command, a glyph mesh and a complete image represent different amounts of rendering. Use the pixel-verified window test below to compare presentation of the same image across all twelve frameworks.
+
+## Capy beside GTK 4 and LCGF on one machine
+
+Capy (https://github.com/capy-ui/capy, fd77077, 0.4.1) was measured apart from the tables
+below, on a 2-core VM under Xvfb with GTK's cairo renderer, with LCGF and GTK 4 built and run
+on the same machine in the same session (`measure.py --runs 3`; load 0.7 to 1.1). Median / p99 in
+microseconds:
+
+| Scene | LCGF | Capy 0.4.1 | GTK 4.14.5 |
+|---|---|---|---|
+| form | 0.1 / 30.8 (908 of 3,000 polls built a frame) | 46.6 / 217.4 | 53.4 / 203.6 |
+| list | 15.8 / 40.9 | 764.2 / 3,899.9 (34 recycled rows, whole-row scroll) | 6,965.6 / 24,046.2 |
+| text | 0.1 / 0.1 (2 frames built) | 46.3 / 131.0 (no wrapping) | 51.9 / 126.5 |
+| springs | 58.2 / 108.6 | 4,559.6 / 12,434.1 | 1,502.6 / 6,354.8 |
+| resize | 18.6 / 41.6 | 908.2 / 5,466.3 (no wrapping) | 7,060.2 / 15,663.0 |
+| idle wake-ups per second | 0.0 | 182.0 | 2.0 |
+| resident after one frame | 380 KiB | 100,800 KiB | 101,360 KiB |
+| binary loaded (text, rodata, data) | 63,666 B (ReleaseSmall) | 377,098 B (ReleaseFast, GTK shared) | 22,671 B (GTK shared) |
+
+Capy's rows are GTK 4's cost plus its own: it is slower than GTK 4 on springs, where each bar is
+a `capy.rect` drawn through a cairo canvas and the root lays out again in Zig, and faster on
+list and resize only because it does less (34 rows, no wrapping). Its window registers a frame
+tick callback whether or not anything animates, so it wakes about 180 times a second at idle.
+Build it with `CAPY_SRC=<checkout> ZIG14=<zig 0.14.1> bench/vs/capy/build.sh` (needs GTK 4's
+development files).
 
 ## Historical eight-framework frame time (median / p99, microseconds)
 

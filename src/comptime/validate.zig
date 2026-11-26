@@ -97,6 +97,8 @@ fn walk(comptime State: type, comptime s: Spec, comptime options: Options, compt
     if (s.bind) |field| {
         if (!hasField(State, field)) @compileError(at ++ "state " ++ @typeName(State) ++ " has no field '" ++ field ++ "'");
     }
+    // A formatted label: every argument a field the format can write, in a format that fits.
+    if (s.format) |f| _ = @import("../core/fmt.zig").compile(State, f.text, f.args);
     if (s.bind) |field| if (bindType(s.kind)) |T| {
         const FT = @FieldType(State, field);
         if (FT != T) @compileError(at ++ @tagName(s.kind) ++ " '" ++ field ++ "' needs " ++ (if (T == f32) "an " else "a ") ++ @typeName(T) ++ " field, not " ++ @typeName(FT));

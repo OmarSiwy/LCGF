@@ -38,6 +38,10 @@ pub const Queue = Renderer.Queue;
 /// and metal have one (moved from the shells that use them); naming it for another back end is
 /// a compile error.
 pub const Setup = backend.Setup;
+/// WebGPU's object model projected onto the selected back end at compile time
+/// (src/render/<back end>/gpu.zig, docs/guide/gpu.md). Software has none: naming it there is a
+/// compile error.
+pub const gpu = if (kind == .sw) @compileError("lcgf_render.gpu needs a GPU back end; -Drender=sw has none") else backend.gpu;
 
 comptime {
     lcgf.render_iface.check(Renderer);

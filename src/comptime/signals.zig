@@ -154,7 +154,8 @@ pub fn Signals(comptime State: type, comptime spec: Spec) type {
                 addRegion(masks, region.bind, i);
                 if (region.window) |window| addRegion(masks, window.scroll, i);
             };
-            if (node.bind) |name| {
+            const shown: []const []const u8 = if (node.bind) |name| &.{name} else if (node.format) |f| f.args else &.{};
+            for (shown) |name| {
                 const m = &masks[@backingInt(fieldNamed(name))];
                 switch (reach) {
                     .nodes => m.* = withBit(m.*, i),

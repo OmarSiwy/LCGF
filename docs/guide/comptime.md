@@ -51,6 +51,33 @@ without an accessible name (turn that off with `.require_names = false`), and, w
 `.viewport`, fixed sizes that do not fit the screen. Each message starts with the node's path,
 such as `col > row[1] > slider[0]: ...`.
 
+### Options and formatted text
+
+A checkbox's or slider's second argument can be options instead of the field: `.bind` (the id
+when left out) and `.name`, the accessible name. A misspelt option is a compile error that
+names it. `styled` sets a node's style with the types checked (`size`, `fill`, ...), and `text`
+writes fields into a format, so a number needs no string field of its own:
+
+```zig
+const Meter = struct { name: []const u8 = "Gain", level: f32 = 0.5, clips: u32 = 0 };
+
+const meter_spec = s.col(.{ .pad = @splat(6), .gap = 4 }, .{
+    s.text("{}: {.1} dB, {} clips", .{ .name, .level, .clips }),
+    s.styled(s.slider(.level, .{ .name = "Level" }), .{ .size = .{ .px(120), .px(10) } }),
+});
+
+comptime {
+    lcgf.validate.check(Meter, meter_spec, .{});
+}
+```
+
+The format has one meaning in every engine (src/core/fmt.zig), Zig's and the C++ and Rust
+ones a `.zon` UI compiles to, so their draw lists stay byte for byte the same: `{}` writes a
+string, a bool, a u32, a u8 or an enum(u8) as its number; `{.N}` writes an f32 with N decimals,
+0 to 6, rounded half away from zero; `{{` and `}}` are braces. A wrong count, an f32 without a
+precision or a field of another type fails the build. A change of any argument lays the label
+out again (`relayout`), as a change of a bound label's field does.
+
 ## What the compiler resolves
 
 `Flat` numbers the nodes depth-first, exactly as `Tree.push` does, so a tier-0 pass cannot tell

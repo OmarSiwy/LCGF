@@ -1,0 +1,57 @@
+// Everything besides the reference widgets that crosses the seam: a `when`, a `list`, a
+// `choice`, a custom draw node, a sprung slider, a formatted label. src/abi/zon.zig's `panel_spec`, as a C++ or
+// Rust program writes it.
+.{
+    .name = "panel",
+    .state = .{
+        .{ .name = "title", .str = "Panel" },
+        .{ .name = "show", .bool = true },
+        .{ .name = "show_text", .str = "Details" },
+        .{ .name = "len", .u32 = 2 },
+        .{ .name = "mode", .u8 = 0 },
+        .{ .name = "level", .f32 = 0.25, .spring = .{} },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .pad = .{ 8, 8, 8, 8 }, .gap = 4, .fill = .{ .theme = .panel } },
+        .children = .{
+            .{ .row = .{
+                .style = .{ .gap = 8, .cross = .center },
+                .children = .{
+                    .{ .checkbox = .{ .id = "show_box", .bind = "show", .text = "show_text" } },
+                    .{ .slider = .{ .id = "level", .bind = "level" } },
+                },
+            } },
+            .{ .col = .{
+                .when = "show",
+                .style = .{ .gap = 2 },
+                .children = .{
+                    .{ .label = "title" },
+                    .{ .text = .{ .format = "{} at {.2}, {} rows", .args = .{ "title", "level", "len" } } },
+                    .{ .custom = .{ .id = "view", .data = 7, .style = .{ .size = .{ .{ .px = 60 }, .{ .px = 20 } } } } },
+                },
+            } },
+            .{ .list = .{
+                .count = "len",
+                .max = 4,
+                .style = .{ .gap = 2 },
+                .template = .{.{ .row = .{
+                    .style = .{ .gap = 4 },
+                    .children = .{
+                        .{ .label = "title" },
+                        .{ .col = .{ .style = .{ .size = .{ .{ .px = 12 }, .{ .px = 8 } }, .fill = .{ .theme = .accent } } } },
+                    },
+                } }},
+            } },
+            .{ .choice = .{
+                .select = "mode",
+                .children = .{
+                    .{ .col = .{ .style = .{ .size = .{ .{ .px = 16 }, .{ .px = 16 } }, .fill = .{ .theme = .control } } } },
+                    .{ .row = .{
+                        .style = .{ .gap = 4 },
+                        .children = .{ .{ .label = "title" }, .{ .button = .{ .id = "more", .text = "title" } } },
+                    } },
+                },
+            } },
+        },
+    } },
+}

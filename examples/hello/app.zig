@@ -22,10 +22,11 @@ pub const App = struct {
         const th = &app.theme;
         _ = f.open(.from("center"), .{ .size = .{ .fill, .fill }, .main = .center, .cross = .center });
         _ = f.open(id_panel, .{ .pad = @splat(16), .gap = 8, .cross = .center, .fill = th.panel, .radius = th.radius });
-        _ = w.label(f, th, "Hello, window");
-        if (w.button(f, th, id_wave, "Wave").clicked) app.waves += 1;
-        var buf: [32]u8 = undefined;
-        _ = w.label(f, th, std.fmt.bufPrint(&buf, "Waved {d} times", .{app.waves}) catch "?");
+        // The widget kit: the theme given once, options by name, text formatted in place.
+        const ui = lcgf.widgets.on(f, th);
+        _ = ui.label("Hello, window");
+        if (ui.button(.wave, .{ .label = "Wave" }).clicked) app.waves += 1;
+        _ = ui.text("Waved {d} times", .{app.waves});
         f.close();
         f.close();
     }

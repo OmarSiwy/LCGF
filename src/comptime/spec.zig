@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const types = @import("../core/types.zig");
+const fmt = @import("../core/fmt.zig");
 const Style = types.Style;
 
 /// What a spec node is. One byte, as the flattened `kind` table stores it.
@@ -43,7 +44,19 @@ pub const Spec = struct {
     /// Set on a node whose rows are reserved but live only when run-time state says so
     /// (`list`); null for a node that always exists. dynamic.zig reads it.
     region: ?Region = null,
+    /// A formatted label's format and the fields it shows (`text`); `bind` is null then.
+    format: ?Format = null,
+
+    /// The state fields this node shows: its `bind`, or a formatted label's arguments.
+    pub fn shows(s: Spec, field: []const u8) bool {
+        if (s.bind) |b| if (std.mem.eql(u8, b, field)) return true;
+        if (s.format) |f| for (f.args) |a| if (std.mem.eql(u8, a, field)) return true;
+        return false;
+    }
 };
+
+/// A formatted label's text (src/core/fmt.zig's language) and its arguments, state fields.
+pub const Format = struct { text: []const u8, args: []const []const u8 };
 
 /// What makes a node's rows dynamic, and the state field that decides which are live.
 pub const Region = struct {
@@ -126,14 +139,15 @@ pub fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32 {
 
 fn countStrings(comptime n: Spec, bytes: *u32, dynamic: *bool) void {
     if (n.text) |str| bytes.* += @intCast(str.len);
-    if (n.widget != null or (n.kind == .label and n.bind != null)) dynamic.* = true;
+    if (n.widget != null or (n.kind == .label and (n.bind != null or n.format != null))) dynamic.* = true;
     for (n.children) |c| countStrings(c, bytes, dynamic);
 }
 
 /// Check the two sources before emitting a label. Custom widget internals may supply their own text.
 pub fn labelError(comptime s: Spec) ?[]const u8 {
-    if (s.bind == null and s.text == null) return "a label needs a literal or a bound field";
-    if (s.bind != null and s.text != null) return "a label cannot have both literal text and a bound field";
+    const sources = @as(u32, @intFromBool(s.bind != null)) + @intFromBool(s.text != null) + @intFromBool(s.format != null);
+    if (sources == 0) return "a label needs a literal, a bound field or a format";
+    if (sources > 1) return "a label takes one of literal text, a bound field or a format";
     return null;
 }
 
@@ -143,14 +157,76 @@ pub inline fn labelBytes(comptime s: Spec, state: anytype) []const u8 {
     return if (comptime s.text) |bytes| bytes else @field(state, s.bind.?);
 }
 
-/// A checkbox named `id`, showing and toggling the bool field `bind`: `checkbox(.mute, .muted)`.
-pub fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
-    return .{ .kind = .checkbox, .id = @tagName(id), .bind = @tagName(bind) };
+/// Text of the state fields `args` written into `format`: `text("Volume {.1} dB", .{.volume})`.
+/// `{}` writes a string, bool, u32, u8 or enum field, `{.N}` an f32 with N decimals (0 to 6);
+/// `{{` and `}}` are braces (src/core/fmt.zig). Checked while compiling against the state
+/// struct. A change of any argument lays the label out again, as a bound label's does.
+pub fn text(comptime format: []const u8, comptime args: anytype) Spec {
+    var names: [args.len][]const u8 = undefined;
+    inline for (args, &names) |a, *n| n.* = @tagName(a);
+    const final = names;
+    var segs: [fmt.maxSegs(format)]fmt.Seg = undefined;
+    _ = fmt.parse(format, &@as([args.len]fmt.Kind, @splat(.str)), &segs) catch |e| switch (e) {
+        error.BadFormat => @compileError("text: bad format \"" ++ format ++ "\": use {}, {.N} (N 0 to 6), {{ and }}"),
+        // Types are checked against the state struct later; only the count here.
+        error.BadArg => {},
+    };
+    return .{ .kind = .label, .style = .{ .role = .label }, .format = .{ .text = format, .args = &final } };
 }
 
-/// A slider named `id`, showing and setting the f32 field `bind`: `slider(.volume, .volume)`.
-pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
-    return .{ .kind = .slider, .id = @tagName(id), .bind = @tagName(bind) };
+/// A checkbox named `id`, showing and toggling a bool field. The second argument is the field
+/// (`checkbox(.mute, .muted)`) or options: `checkbox(.mute, .{ .bind = .muted, .name = "Mute"
+/// })`, where `.bind` defaults to the id (`checkbox(.muted, .{ .name = "Muted" })`) and `.name`
+/// is the accessible name (as `named`). A misspelt option is a compile error naming it. Size it
+/// with `styled`.
+pub fn checkbox(comptime id: @EnumLiteral(), comptime bind_or_options: anytype) Spec {
+    return widget(.checkbox, id, bind_or_options);
+}
+
+/// A slider named `id`, showing and setting an f32 field, 0 to 1: `slider(.volume, .volume)`,
+/// or with options as `checkbox`'s, `slider(.volume, .{ .name = "Volume" })`.
+pub fn slider(comptime id: @EnumLiteral(), comptime bind_or_options: anytype) Spec {
+    return widget(.slider, id, bind_or_options);
+}
+
+/// Options a builder reads, with their defaults; any other field is a compile error naming it.
+/// A style is not one: in an `anytype` struct a nested `.size = .{ .px(80), ... }` has no type
+/// to take its names from, so a style goes through `styled`, whose parameter is a `Style`.
+const Options = struct { bind: ?[]const u8 = null, name: ?[]const u8 = null };
+
+fn options(comptime builder: []const u8, comptime o: anytype, comptime allowed: []const []const u8) Options {
+    const O = @TypeOf(o);
+    if (@typeInfo(O) != .@"struct") @compileError(builder ++ ": expected a field (`.volume`) or options (`.{ .name = ... }`), found " ++ @typeName(O));
+    var out: Options = .{};
+    for (@typeInfo(O).@"struct".field_names) |f| {
+        for (allowed) |a| {
+            if (std.mem.eql(u8, a, f)) break;
+        } else @compileError(builder ++ ": no option `." ++ f ++ "`; it takes " ++ optionList(allowed));
+    }
+    if (@hasField(O, "bind")) out.bind = @tagName(o.bind);
+    if (@hasField(O, "name")) out.name = o.name;
+    return out;
+}
+
+fn optionList(comptime names: []const []const u8) []const u8 {
+    var out: []const u8 = "";
+    for (names, 0..) |n, i| out = out ++ (if (i == 0) "" else ", ") ++ "`." ++ n ++ "`";
+    return out;
+}
+
+fn widget(comptime kind: Kind, comptime id: @EnumLiteral(), comptime o: anytype) Spec {
+    if (@TypeOf(o) == @EnumLiteral()) return .{ .kind = kind, .id = @tagName(id), .bind = @tagName(o) };
+    const opt = options(@tagName(kind), o, &.{ "bind", "name" });
+    return .{ .kind = kind, .id = @tagName(id), .bind = opt.bind orelse @tagName(id), .name = opt.name };
+}
+
+/// `s` laid out by `style`: `styled(slider(.volume, .{ .name = "Volume" }), .{ .size = .{
+/// .px(80), .px(10) } })`. A container keeps its axis (`col`, `row`).
+pub fn styled(comptime s: Spec, comptime style: Style) Spec {
+    var out = s;
+    out.style = style;
+    if (s.kind == .col or s.kind == .row) out.style.dir = s.style.dir;
+    return out;
 }
 
 /// `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
@@ -341,6 +417,24 @@ test "named: sets the accessible name and nothing else" {
     try std.testing.expectEqualStrings(plain.id.?, s.id.?);
     try std.testing.expectEqualStrings(plain.bind.?, s.bind.?);
     try std.testing.expectEqual(plain.style, s.style);
+}
+
+test "options, styled: the same nodes as the positional builders with `named`; bind defaults to the id" {
+    comptime {
+        const old = named(checkbox(.mute, .muted), "Mute");
+        const new = checkbox(.mute, .{ .bind = .muted, .name = "Mute" });
+        std.debug.assert(std.meta.eql(old.kind, new.kind));
+        std.debug.assert(std.mem.eql(u8, new.id.?, "mute") and std.mem.eql(u8, new.bind.?, "muted") and std.mem.eql(u8, new.name.?, "Mute"));
+        const v = styled(slider(.volume, .{ .name = "Volume" }), .{ .size = .{ .px(80), .px(10) } });
+        std.debug.assert(std.mem.eql(u8, v.bind.?, "volume") and std.mem.eql(u8, v.name.?, "Volume"));
+        std.debug.assert(v.style.size[0].v == 80);
+        const r = styled(row(.{}, .{}), .{ .gap = 3 });
+        std.debug.assert(r.style.dir == .x and r.style.gap == 3);
+        // The tables do not tell the two forms apart.
+        const a = flatTables(col(.{}, .{ label(.title), old }));
+        const b = flatTables(col(.{}, .{ label(.title), new }));
+        std.debug.assert(std.meta.eql(a, b));
+    }
 }
 
 test "label, checkbox, slider: leaves carry kind, id and binding, no children" {

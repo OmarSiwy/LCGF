@@ -25,7 +25,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const lcgf = @import("lcgf");
-const wire = @import("wire.zig");
+pub const wire = @import("wire.zig");
 const Seat = @import("input.zig").Seat;
 const Data = @import("data.zig").Data;
 const Ime = @import("ime.zig").Ime;
@@ -268,6 +268,9 @@ pub const Wayland = struct {
     options: Options,
     gfx: sw.Setup = .{},
     font: Mono = .{},
+    /// The image of `gfx.gfx.images` the glyph quads sample (`Mono.quads`' 16 x 16 grid); the
+    /// default white texture draws each glyph as a box. `render_sw.font.image` is a font for it.
+    text_texture: lcgf.types.Texture = .white,
     glyphs: Buffers,
     /// What `present` clears to before drawing.
     background: Color = .rgb(0, 0, 0),
@@ -440,7 +443,7 @@ pub const Wayland = struct {
         var fb = win.shm.framebuffer(slot);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-        w.gfx.draw(&fb, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count }, w.background, win.scale);
+        w.gfx.draw(&fb, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count, .texture = w.text_texture }, w.background, win.scale);
         win.shm.busy[slot] = true;
         win.shown = @intCast(slot);
         w.request(win.surface, op.surface_attach, .{ win.shm.buffers[slot], @as(i32, 0), @as(i32, 0) });

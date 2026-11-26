@@ -75,6 +75,18 @@ pub inline fn selU(c: bool, a: u32, b: u32) u32 {
 pub inline fn selF(c: bool, a: f32, b: f32) f32 {
     return @bitCast(selU(c, @bitCast(a), @bitCast(b)));
 }
+/// `a > b ? a : b`, for f32 or a vector of f32: a tie or a NaN `a` gives `b`, the same on every
+/// target. `@max` leaves both to the target (x86's `maxss` and ARM's `fmaxnm` pick different
+/// zeros), and a rounded `-0` reaches rects and clips, so the passes C++ and Rust port use this
+/// (bindings/cpp/include/lcgf/ct.hpp, bindings/rust/lcgf/src/ct.rs). One `maxss`, no NaN
+/// fix-up (docs/perf/chains.md).
+pub inline fn maxF(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    return if (@typeInfo(@TypeOf(a)) == .vector) @select(f32, a > b, a, b) else selF(a > b, a, b);
+}
+/// `a < b ? a : b`: as `maxF`, a tie or a NaN `a` gives `b`.
+pub inline fn minF(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    return if (@typeInfo(@TypeOf(a)) == .vector) @select(f32, a < b, a, b) else selF(a < b, a, b);
+}
 /// 1.0 or 0.0, built from the bit pattern so that it stays a mask
 /// operation instead of becoming a compare-and-jump.
 pub inline fn b2f(c: bool) f32 {

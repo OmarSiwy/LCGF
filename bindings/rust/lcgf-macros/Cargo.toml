@@ -1,0 +1,9 @@
+[package]
+name = "lcgf-macros"
+description = "The ui! and include_ui! macros: a UI spec run through lcgf-gen at compile time"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true

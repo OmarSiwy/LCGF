@@ -5,7 +5,9 @@
 //! The host loop is the one of src/render/wgpu/play.zig, split where JS has to step in: JS owns
 //! the device, the target and the pass (and waits for the read-back, which is asynchronous), so
 //! it calls `lcgf_scene_prepare` before the pass and `lcgf_scene_draw` inside it. Custom commands
-//! go back to the host's own pipeline through the page's `host_custom` import.
+//! are drawn here, through lcgf_render.gpu (src/render/gpu/gradient.zig, the code every back end
+//! runs). The projection's own checks (src/render/gpu/check.zig) are recorded here too, and
+//! test_gpu.html reads their results back.
 const std = @import("std");
 const lcgf = @import("lcgf");
 const js = @import("js.zig");
@@ -15,13 +17,18 @@ const iface = lcgf.render_iface;
 
 pub const panic = js.panic;
 
-extern "lcgf" fn host_custom(pass: u32, x0: u32, y0: u32, x1: u32, y1: u32) void;
+const gpu = @import("gpu.zig");
+const shaders = @import("gpu_shaders");
+const Gradient = lcgf.gpu_gradient.Gradient(gpu, shaders.gradient);
 
 var st: conformance.Storage = .{};
 var gfx: webgpu.Renderer = undefined;
 var queue: u32 = 0;
 var atlas: lcgf.types.Texture = .white;
 var viewport: [2]f32 = .{ 0, 0 };
+var dev: gpu.Device = undefined;
+var arena: gpu.Arena = undefined;
+var gradient: Gradient = undefined;
 
 export fn lcgf_scene_count() u32 {
     return conformance.scenes.len;
@@ -40,6 +47,9 @@ export fn lcgf_webgpu_init(device: u32, q: u32, format: u32, white: u32, sampler
     queue = q;
     gfx = .init(device, .{ .format = @fromBackingInt(@intCast(format)), .max_quads = 64, .max_glyphs = 64 }, white, sampler);
     atlas = gfx.addTexture(device, atlas_view, sampler);
+    dev = .wrap(device, q);
+    arena = gpu.Arena.init(dev, .{ .bytes = 0 }) catch unreachable;
+    gradient = Gradient.init(dev, &arena, .{ .format = if (format == 1) .bgra8_unorm else .rgba8_unorm }) catch @panic("the custom draw's pipeline failed");
 }
 
 /// Loads scene `i` and uploads it. Call before the pass begins.
@@ -50,15 +60,67 @@ export fn lcgf_scene_prepare(i: u32) void {
     var glyphs = st.glyphs();
     glyphs.texture = atlas;
     gfx.prepare(queue, &st.draw, glyphs, s.viewport, 1);
+    // The upload phase: the custom draw's target size, through the queue.
+    var up: gpu.Upload = .begin(dev, 0);
+    gradient.upload(&up, @intFromFloat(s.viewport[0]), @intFromFloat(s.viewport[1]));
+    _ = up.finish();
 }
 
-/// Records the loaded scene into `pass`, the host's custom draw at each custom command.
+/// Records the loaded scene into `pass`, the custom draw at each custom command.
 export fn lcgf_scene_draw(pass: u32) void {
+    const w: u32 = @intFromFloat(viewport[0]);
+    const h: u32 = @intFromFloat(viewport[1]);
+    var gp: gpu.RenderPass = .wrap(dev, pass, w, h);
     var i = iface.drawUntilCustom(&gfx, pass, &st.draw, 0);
     while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(&gfx, pass, &st.draw, i + 1)) {
-        const b = clamped(st.draw.customs[st.draw.command(i).custom].rect);
-        host_custom(pass, b[0], b[1], b[2], b[3]);
+        const k = st.draw.customs[st.draw.command(i).custom];
+        gradient.draw(&gp, gpu.scissor(k.rect, k.clip, 1, w, h), w, h);
+        // The UI's pipeline uses no scissor of its own: give it the whole target back.
+        gp.setScissorRect(0, 0, w, h);
     }
+}
+
+// The projection's checks (src/render/gpu/check.zig), split where the browser's asynchronous
+// readback has to happen: record into the page's encoder, let the page submit and read back
+// into `check_pixels` and `check_values`, then verify.
+
+const RenderToTexture = lcgf.gpu_check.RenderToTexture(gpu, shaders);
+const Compute = lcgf.gpu_check.Compute(gpu, shaders);
+var check_texture: RenderToTexture = undefined;
+var check_compute: Compute = undefined;
+var check_pixels: [RenderToTexture.width * RenderToTexture.height * 4]u8 = undefined;
+var check_values: [Compute.count]u32 = undefined;
+
+/// Records both checks into `encoder`. Returns the texture to read back (8 x 8); the storage
+/// buffer is `lcgf_check_buffer`.
+export fn lcgf_check_record(encoder: u32) u32 {
+    check_texture.init(dev) catch @panic("check: render-to-texture setup failed");
+    check_compute.init(dev) catch @panic("check: compute setup failed");
+    var up: gpu.Upload = .begin(dev, encoder);
+    check_texture.record(&up) catch @panic("check: render-to-texture recording failed");
+    var up2: gpu.Upload = .begin(dev, encoder);
+    check_compute.record(&up2);
+    return check_texture.final.texture;
+}
+
+export fn lcgf_check_buffer() u32 {
+    return check_compute.out.buffer;
+}
+
+export fn lcgf_check_pixels() [*]u8 {
+    return &check_pixels;
+}
+
+export fn lcgf_check_values() [*]u32 {
+    return &check_values;
+}
+
+/// Bit 0: the render-to-texture check passed; bit 1: the compute check passed.
+export fn lcgf_check_verify() u32 {
+    const ok = @as(u32, @intFromBool(RenderToTexture.verify(&check_pixels))) | (@as(u32, @intFromBool(Compute.verify(&check_values))) << 1);
+    check_compute.deinit(dev);
+    check_texture.deinit(dev);
+    return ok;
 }
 
 /// The custom rect in whole pixels inside the scene, as play.zig scissors it.

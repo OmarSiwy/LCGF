@@ -89,15 +89,18 @@
           packages = [ pkgs.perf ];
         };
         # Shader translation and validation (lane shaders): the golden shell plus naga-cli,
-        # spirv-val and glslangValidator.
+        # spirv-val and glslangValidator, and the Khronos validation layer for the custom-draw
+        # probe (ci/jobs/custom-draw.sh).
         devShells.shaders = pkgs.mkShell {
           inputsFrom = [ devShells.golden ];
           packages = [
             naga-cli
             pkgs.spirv-tools
             pkgs.glslang
+            pkgs.vulkan-validation-layers
           ];
           inherit (devShells.golden) LD_LIBRARY_PATH VK_ICD_FILENAMES;
+          VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
         };
         # Competitor harnesses in Rust and QML (bench/vs/, docs/perf/vs.md): cargo and rustc for
         # egui, Iced and Slint (crates pinned by each Cargo.lock), Qt 6 for Qt Quick. Comparison
@@ -107,6 +110,8 @@
           packages = [
             pkgs.cargo
             pkgs.rustc
+            # The C++ bindings' check (ci/jobs/bindings.sh) builds with CMake.
+            pkgs.cmake
             pkgs.pkg-config
             pkgs.libx11
             pkgs.cairo

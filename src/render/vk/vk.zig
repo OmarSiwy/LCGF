@@ -17,7 +17,8 @@ pub const frame = @import("frame.zig");
 pub const host = @import("host.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
-pub const custom = @import("custom.zig");
+/// lcgf_render.gpu on Vulkan: WebGPU's object model projected onto this back end (gpu.zig).
+pub const gpu = @import("gpu.zig");
 pub const setup = @import("setup.zig");
 pub const Setup = setup.Setup;
 pub const scenes = @import("scenes.zig");
@@ -31,6 +32,6 @@ test {
     std.testing.refAllDecls(frame);
     std.testing.refAllDecls(host);
     std.testing.refAllDecls(renderer);
-    std.testing.refAllDecls(custom);
+    std.testing.refAllDecls(gpu);
     std.testing.refAllDecls(scenes);
 }

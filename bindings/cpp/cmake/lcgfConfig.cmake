@@ -1,0 +1,189 @@
+# The LCGF package for CMake, installed by `zig build abi` into <prefix>/lib/cmake/lcgf. It needs
+# no Zig compiler: lcgf-gen and liblcgf are prebuilt.
+#
+#   find_package(lcgf REQUIRED)
+#   add_executable(app main.cpp)
+#   lcgf_add_ui(app mixer.zon)   # runs lcgf-gen: #include "mixer.lcgf.hpp"; links liblcgf
+#
+# LCGF_LANES picks the archive (4, 8 or 16 lanes) and the frame symbol the headers name. It
+# defaults to what the compiler flags give: 8 when they enable AVX, else 4. LCGF_LANES=auto
+# links liblcgf_auto.a (x86-64 Linux), which picks the width at run time from the CPU, for a
+# program shipped to machines it does not know.
+cmake_minimum_required(VERSION 3.20)
+get_filename_component(_lcgf_prefix "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+set(LCGF_GEN "${_lcgf_prefix}/bin/lcgf-gen" CACHE FILEPATH "lcgf-gen, the spec generator")
+
+if(NOT DEFINED LCGF_LANES)
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_CXX_FLAGS}")
+  check_cxx_source_compiles("#if !defined(__AVX__)\n#error no\n#endif\nint main(){}" LCGF_HAVE_AVX)
+  if(LCGF_HAVE_AVX)
+    set(LCGF_LANES 8)
+  else()
+    set(LCGF_LANES 4)
+  endif()
+endif()
+
+if(LCGF_LANES STREQUAL "auto")
+  set(_lcgf_archive "${_lcgf_prefix}/lib/liblcgf_auto.a")
+  set(_lcgf_lanes_def 0)
+  if(NOT EXISTS "${_lcgf_archive}")
+    message(FATAL_ERROR "LCGF_LANES=auto: ${_lcgf_archive} is built for x86-64 ELF targets only")
+  endif()
+else()
+  set(_lcgf_archive "${_lcgf_prefix}/lib/liblcgf_l${LCGF_LANES}.a")
+  set(_lcgf_lanes_def ${LCGF_LANES})
+endif()
+
+if(NOT TARGET lcgf::lcgf)
+  add_library(lcgf::lcgf STATIC IMPORTED)
+  set_target_properties(lcgf::lcgf PROPERTIES
+    IMPORTED_LOCATION "${_lcgf_archive}"
+    INTERFACE_INCLUDE_DIRECTORIES "${_lcgf_prefix}/include"
+    INTERFACE_COMPILE_DEFINITIONS "LCGF_LANES=${_lcgf_lanes_def}"
+    # lcgf/ct.hpp's passes must keep Zig's arithmetic: no a*b+c fused into an FMA.
+    INTERFACE_COMPILE_OPTIONS "$<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-ffp-contract=off>"
+    INTERFACE_COMPILE_FEATURES cxx_std_20)
+endif()
+
+# Generates <name>.lcgf.hpp from `spec` (a .zon UI spec) into the build tree and makes it
+# includable by `target`, which also links liblcgf.
+# lcgf_add_ui(target spec.zon [STATIC]): STATIC makes a static UI, the comptime pipeline's
+# tables (lcgf::StaticUi: folded layout, paint templates) for a spec whose structure never
+# changes; without it the widgets' tables (lcgf::Ui: events, focus, springs).
+function(lcgf_add_ui target spec)
+  cmake_parse_arguments(_ui "STATIC" "" "" ${ARGN})
+  get_filename_component(_spec "${spec}" ABSOLUTE)
+  get_filename_component(_name "${spec}" NAME_WE)
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/lcgf_gen")
+  set(_out "${_dir}/${_name}.lcgf.hpp")
+  set(_static "")
+  if(_ui_STATIC)
+    # Its own directory, so one project can hold a static and a widgets' UI of the same name.
+    set(_static "--static")
+    set(_dir "${CMAKE_CURRENT_BINARY_DIR}/lcgf_gen_static")
+    set(_out "${_dir}/${_name}.lcgf.hpp")
+  endif()
+  file(MAKE_DIRECTORY "${_dir}")
+  add_custom_command(OUTPUT "${_out}"
+    COMMAND "${LCGF_GEN}" "${_spec}" ${_static} --lang cpp -o "${_out}"
+    DEPENDS "${_spec}" "${LCGF_GEN}"
+    COMMENT "lcgf-gen ${_name}.zon ${_static}"
+    VERBATIM)
+  target_sources(${target} PRIVATE "${_out}")
+  target_include_directories(${target} PRIVATE "${_dir}")
+  target_link_libraries(${target} PRIVATE lcgf::lcgf)
+endfunction()
+
+# Generates <name>.lcgf.hpp from a WGSL shader into the build tree: naga translates it to
+# SPIR-V, and lcgf-gen reflects its bind groups as lcgf_render.gpu does (one struct per group,
+# the shader's layouts and code). naga (naga-cli) must be on PATH or in LCGF_NAGA.
+find_program(LCGF_NAGA naga)
+# Generates <name>.lcgf.hpp from a WGSL shader for the GPU back end LCGF_GPU names (VULKAN, the
+# default, GLES, WGPU or METAL): its bind groups reflected by lcgf-gen, and the back end's code
+# (naga's SPIR-V for Vulkan, naga's GLSL ES per entry point for GL ES, the WGSL itself for wgpu,
+# naga's MSL with its slots for Metal, naga's HLSL with its samplers registered for D3D12). Link
+# lcgf::gpu_gles, lcgf::gpu_wgpu, lcgf::gpu_metal or lcgf::gpu_d3d12 to compile lcgf/gpu.hpp for
+# the same back end. `MSL <file>` / `HLSL <file>` take a translation made already instead of
+# running naga.
+set(LCGF_GPU "VULKAN" CACHE STRING "lcgf/gpu.hpp's back end: VULKAN, GLES, WGPU, METAL or D3D12")
+function(lcgf_add_shader target wgsl)
+  cmake_parse_arguments(_arg "" "MSL;HLSL" "" ${ARGN})
+  get_filename_component(_wgsl "${wgsl}" ABSOLUTE)
+  get_filename_component(_name "${wgsl}" NAME_WE)
+  # One directory per back end: the same shader can be built for two in one project.
+  string(TOLOWER "${LCGF_GPU}" _gpu)
+  set(_dir "${CMAKE_CURRENT_BINARY_DIR}/lcgf_gen/${_gpu}")
+  set(_out "${_dir}/${_name}.lcgf.hpp")
+  file(MAKE_DIRECTORY "${_dir}")
+  set(_naga_cmds)
+  set(_code_args)
+  if(LCGF_GPU STREQUAL "VULKAN" OR LCGF_GPU STREQUAL "GLES" OR (LCGF_GPU STREQUAL "METAL" AND NOT _arg_MSL)
+     OR (LCGF_GPU STREQUAL "D3D12" AND NOT _arg_HLSL))
+    if(NOT LCGF_NAGA)
+      message(FATAL_ERROR "lcgf_add_shader: naga (naga-cli) not found; set LCGF_NAGA")
+    endif()
+  endif()
+  if(LCGF_GPU STREQUAL "VULKAN")
+    set(_spv "${_dir}/${_name}.spv")
+    list(APPEND _naga_cmds COMMAND "${LCGF_NAGA}" "${_wgsl}" "${_spv}")
+    list(APPEND _code_args --spirv "${_spv}")
+  elseif(LCGF_GPU STREQUAL "GLES")
+    # The entry points decide the files naga writes, so they are read when configuring.
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_wgsl}")
+    execute_process(COMMAND "${LCGF_GEN}" --wgsl "${_wgsl}" --entry-points
+      OUTPUT_VARIABLE _entries RESULT_VARIABLE _rc)
+    if(NOT _rc EQUAL 0)
+      message(FATAL_ERROR "lcgf_add_shader: lcgf-gen could not read ${wgsl}")
+    endif()
+    string(REPLACE "\n" ";" _entries "${_entries}")
+    foreach(_line IN LISTS _entries)
+      if(_line STREQUAL "")
+        continue()
+      endif()
+      string(REPLACE " " ";" _f "${_line}")
+      list(GET _f 0 _entry)
+      list(GET _f 1 _stage)
+      list(GET _f 2 _profile)
+      list(GET _f 3 _ext)
+      set(_glsl "${_dir}/${_name}.${_entry}.${_ext}")
+      list(APPEND _naga_cmds COMMAND "${LCGF_NAGA}" --profile ${_profile} --shader-stage ${_stage} --entry-point ${_entry} "${_wgsl}" "${_glsl}")
+      list(APPEND _code_args --glsl "${_entry}=${_glsl}")
+    endforeach()
+  elseif(LCGF_GPU STREQUAL "METAL")
+    if(_arg_MSL)
+      get_filename_component(_msl "${_arg_MSL}" ABSOLUTE)
+    else()
+      set(_msl "${_dir}/${_name}.metal")
+      list(APPEND _naga_cmds COMMAND "${LCGF_NAGA}" "${_wgsl}" "${_msl}")
+    endif()
+    list(APPEND _code_args --msl "${_msl}")
+  elseif(LCGF_GPU STREQUAL "D3D12")
+    if(_arg_HLSL)
+      get_filename_component(_hlsl "${_arg_HLSL}" ABSOLUTE)
+    else()
+      set(_hlsl "${_dir}/${_name}.hlsl")
+      list(APPEND _naga_cmds COMMAND "${LCGF_NAGA}" "${_wgsl}" "${_hlsl}")
+    endif()
+    list(APPEND _code_args --hlsl "${_hlsl}")
+  elseif(NOT LCGF_GPU STREQUAL "WGPU")
+    message(FATAL_ERROR "lcgf_add_shader: LCGF_GPU is ${LCGF_GPU}; use VULKAN, GLES, WGPU, METAL or D3D12")
+  endif()
+  add_custom_command(OUTPUT "${_out}"
+    ${_naga_cmds}
+    COMMAND "${LCGF_GEN}" --wgsl "${_wgsl}" ${_code_args} --name "${_name}" --lang cpp -o "${_out}"
+    DEPENDS "${_wgsl}" "${LCGF_GEN}"
+    COMMENT "lcgf-gen ${_name}.wgsl (${LCGF_GPU})"
+    VERBATIM)
+  target_sources(${target} PRIVATE "${_out}")
+  target_include_directories(${target} PRIVATE "${_dir}")
+endfunction()
+
+# lcgf/gpu.hpp on GL ES, wgpu-native or Metal: the define that picks the back end. The host
+# links its own GL ES or wgpu-native library.
+if(NOT TARGET lcgf::gpu_gles)
+  add_library(lcgf::gpu_gles INTERFACE IMPORTED)
+  set_target_properties(lcgf::gpu_gles PROPERTIES INTERFACE_COMPILE_DEFINITIONS LCGF_GPU_GLES
+    INTERFACE_INCLUDE_DIRECTORIES "${_lcgf_prefix}/include" INTERFACE_COMPILE_FEATURES cxx_std_20)
+  add_library(lcgf::gpu_wgpu INTERFACE IMPORTED)
+  set_target_properties(lcgf::gpu_wgpu PROPERTIES INTERFACE_COMPILE_DEFINITIONS LCGF_GPU_WGPU
+    INTERFACE_INCLUDE_DIRECTORIES "${_lcgf_prefix}/include" INTERFACE_COMPILE_FEATURES cxx_std_20)
+  # Metal is opened at run time (dlopen), so nothing is linked but the loader.
+  add_library(lcgf::gpu_metal INTERFACE IMPORTED)
+  set_target_properties(lcgf::gpu_metal PROPERTIES INTERFACE_COMPILE_DEFINITIONS LCGF_GPU_METAL
+    INTERFACE_INCLUDE_DIRECTORIES "${_lcgf_prefix}/include" INTERFACE_COMPILE_FEATURES cxx_std_20
+    INTERFACE_LINK_LIBRARIES "${CMAKE_DL_LIBS}")
+  # Direct3D 12: d3d12.h from the Windows SDK or MinGW on Windows; elsewhere DirectX-Headers, as
+  # `zig build abi` installs them (for bindings/check's recorder).
+  add_library(lcgf::gpu_d3d12 INTERFACE IMPORTED)
+  if(WIN32)
+    set_target_properties(lcgf::gpu_d3d12 PROPERTIES INTERFACE_COMPILE_DEFINITIONS LCGF_GPU_D3D12
+      INTERFACE_INCLUDE_DIRECTORIES "${_lcgf_prefix}/include" INTERFACE_COMPILE_FEATURES cxx_std_20
+      INTERFACE_LINK_LIBRARIES "d3d12;dxgi;d3dcompiler")
+  else()
+    set(_dxh "${_lcgf_prefix}/include/directx-headers")
+    set_target_properties(lcgf::gpu_d3d12 PROPERTIES INTERFACE_COMPILE_DEFINITIONS LCGF_GPU_D3D12
+      INTERFACE_INCLUDE_DIRECTORIES "${_lcgf_prefix}/include;${_dxh};${_dxh}/wsl/stubs;${_dxh}/directx"
+      INTERFACE_COMPILE_FEATURES cxx_std_20)
+  endif()
+endif()

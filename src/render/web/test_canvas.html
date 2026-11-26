@@ -6,12 +6,12 @@
      browser.py --out writes the images; ci/jobs/web.sh compares them with the goldens. -->
 <canvas id="c"></canvas>
 <script type="module">
-import { load, webgpu, canvas2d } from "./lcgf.js";
+import { load, webgpu, gpuProjection, canvas2d } from "./lcgf.js";
 import { base64 } from "./test_util.js";
 
 window.lcgfTest = (async () => {
     const canvas = document.getElementById("c");
-    const ui = await load("scenes.wasm", webgpu, canvas2d(canvas), () => ({ host_custom() {} }));
+    const ui = await load("scenes.wasm", webgpu, gpuProjection, canvas2d(canvas));
     const ctx = canvas.getContext("2d");
     const images = {};
     for (let i = 0; i < ui.exports.lcgf_scene_count(); i++) {

@@ -1,0 +1,24 @@
+// src/comptime/examples.zig's mixer as a static UI (lcgf-gen --static).
+.{
+    .name = "mixer",
+    .state = .{
+        .{ .name = "title", .str = "Mixer" },
+        .{ .name = "volume", .f32 = 0.5 },
+        .{ .name = "muted", .bool = false },
+        .{ .name = "pan", .f32 = 0 },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .pad = .{ 8, 8, 8, 8 }, .gap = 4 },
+        .children = .{
+            .{ .label = "title" },
+            .{ .row = .{ .style = .{ .gap = 8 }, .children = .{
+                .{ .checkbox = .{ .id = "mute", .bind = "muted" } },
+                .{ .slider = .{ .id = "volume", .bind = "volume" } },
+            } } },
+            .{ .row = .{ .style = .{ .gap = 8 }, .children = .{
+                .{ .label = "title" },
+                .{ .slider = .{ .id = "pan", .bind = "pan" } },
+            } } },
+        },
+    } },
+}

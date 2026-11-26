@@ -1,0 +1,22 @@
+// Sized controls as a static UI (lcgf-gen --static): src/abi/ct.zig's `controls`, which the
+// events gate hits (the examples' checkboxes and sliders have no size of their own).
+.{
+    .name = "controls",
+    .state = .{
+        .{ .name = "title", .str = "Volume" },
+        .{ .name = "muted", .bool = false },
+        .{ .name = "volume", .f32 = 0.5 },
+        .{ .name = "pan", .f32 = 0 },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .pad = .{ 4, 4, 4, 4 }, .gap = 4 },
+        .children = .{
+            .{ .row = .{ .style = .{ .gap = 8 }, .children = .{
+                .{ .checkbox = .{ .id = "mute", .bind = "muted", .style = .{ .size = .{ .{ .px = 16 }, .{ .px = 16 } }, .fill = .{ .rgb = .{ 200, 200, 200 } } } } },
+                .{ .label = "title" },
+            } } },
+            .{ .slider = .{ .id = "volume", .bind = "volume", .style = .{ .size = .{ .fill, .{ .px = 12 } }, .fill = .{ .rgb = .{ 90, 90, 90 } } } } },
+            .{ .slider = .{ .id = "pan", .bind = "pan", .style = .{ .size = .{ .{ .px = 100 }, .{ .px = 10 } }, .fill = .{ .rgb = .{ 90, 90, 90 } } } } },
+        },
+    } },
+}

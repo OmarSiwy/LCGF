@@ -70,6 +70,14 @@
             .hash = "N-V-__8AAAbdBgPG_GCWLhyX5luKipfZab5bSXgeOCm3czTm",
             .lazy = true,
         },
+        // Microsoft's DirectX-Headers (src/render/d3d12/c_linux.h): d3d12.h for Linux targets, so
+        // the D3D12 projections build against bindings/check's recorder. Fetched only by
+        // `zig build abi` on x86-64 Linux.
+        .directx_headers = .{
+            .url = "https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.620.2.tar.gz",
+            .hash = "N-V-__8AAIZwSwA-WqlE0RAVarbjd_oh1wTRG3XZ6BwfCjM8",
+            .lazy = true,
+        },
         // Khronos Vulkan-Headers: vulkan_core.h, translated by build.zig for the Vulkan back end
         // (src/render/vk/). Headers only; the loader is the platform's libvulkan, opened at run
         // time. Fetched only for the vk steps.

@@ -661,6 +661,9 @@ pub const Window = struct {
     fb: sw.Framebuffer,
     gfx: sw.Setup = .{},
     font: Mono = .{},
+    /// The image of `gfx.gfx.images` the glyph quads sample (`Mono.quads`' 16 x 16 grid); the
+    /// default white texture draws each glyph as a box. `render_sw.font.image` is a font for it.
+    text_texture: lcgf.types.Texture = .white,
     glyphs: Glyphs,
     background: Color = .rgb(0, 0, 0),
     applied: Platform = .{},
@@ -1081,7 +1084,7 @@ pub const Window = struct {
         w.fb = .init(w.pixels, width, rows, .bgra8);
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
-        w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, w.background, w.scale);
+        w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count, .texture = w.text_texture }, w.background, w.scale);
         w.presentPixels() catch {};
     }
 

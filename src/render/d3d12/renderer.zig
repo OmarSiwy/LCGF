@@ -201,7 +201,7 @@ pub const Renderer = struct {
     /// command (`iface.drawUntilCustom` stops there) the host records its own calls into it,
     /// with its own root signature, pipeline, heaps and root arguments, then hands it back.
     /// Nothing needs restoring: the next UI draw rebinds every piece of state it uses
-    /// (custom.zig is such a host draw). `customScissor` gives the custom rect in pixels.
+    /// (src/render/gpu/gradient.zig is such a host draw). `customScissor` gives the custom rect in pixels.
     /// `com.zig` declares the methods this back end calls; a host with its own D3D12 binding
     /// casts the pointer to its own ID3D12GraphicsCommandList type.
     pub const Pass = *com.GraphicsCommandList;

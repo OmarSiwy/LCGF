@@ -5,7 +5,8 @@
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas. Custom
-//! commands are drawn by the host's own pipeline between the UI's draws (custom.zig). The
+//! commands are drawn between the UI's draws through lcgf_render.gpu
+//! (src/render/gpu/gradient.zig, the same code every back end runs). The
 //! target is managed storage, synchronised by a blit before it is read, so the same code runs
 //! on Apple silicon and on Intel Macs with a discrete GPU.
 const std = @import("std");
@@ -18,6 +19,8 @@ const conformance = lcgf.render_conformance;
 const iface = lcgf.render_iface;
 const Id = objc.Id;
 const U = objc.NSUInteger;
+const gpu = metal.gpu;
+const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 
 var st: conformance.Storage = .{};
 
@@ -44,8 +47,14 @@ pub fn main(init: std.process.Init) !void {
     const atlas = try metal.texture.rgba8(dev.device, 64, 64, &atlas_px);
     defer objc.release(atlas);
     const atlas_handle = gfx.addTexture(atlas, null);
-    var gradient = try metal.custom.Gradient.init(dev.device, .{ .format = .rgba8_unorm });
-    defer gradient.deinit();
+    var gdev: gpu.Device = .wrap(dev.device);
+    var arena: gpu.Arena = try .init(gdev, .{ .bytes = 0 });
+    var host_arena: gpu.Arena = try .init(gdev, .{ .bytes = 0, .memory = .host });
+    var staging: gpu.Staging = try .init(gdev, &host_arena, 64 * 1024);
+    defer staging.deinit(gdev);
+    gdev.staging = &staging;
+    var gradient: Gradient = try .init(gdev, &arena, .{ .format = .rgba8_unorm });
+    defer gradient.deinit(gdev);
 
     for (&conformance.scenes) |*s| {
         const frame = objc.Pool.push();
@@ -59,11 +68,18 @@ pub fn main(init: std.process.Init) !void {
         glyphs.texture = atlas_handle;
         gfx.prepare({}, &st.draw, glyphs, s.viewport, 1);
         const cmd = objc.msg(Id, dev.queue, "commandBuffer", .{});
+        // The frame's upload phase: the gradient's target size. Each frame waits for the last.
+        staging.rewind();
+        var up: gpu.Upload = .begin(gdev, cmd);
+        gradient.upload(&up, gfx.extent[0], gfx.extent[1]);
+        _ = up.finish();
         const pass = present.beginPass(cmd, target, .{ 0, 0, 0, 1 });
-        // The host's loop: UI draws up to each custom command, its own pipeline there.
+        // The host's loop: UI draws up to each custom command, the custom draw there.
+        var gp: gpu.RenderPass = .wrap(gdev, pass.id, gfx.extent[0], gfx.extent[1]);
         var i = iface.drawUntilCustom(&gfx, pass, &st.draw, 0);
         while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(&gfx, pass, &st.draw, i + 1)) {
-            gradient.draw(pass, gfx.customScissor(st.draw.customs[st.draw.command(i).custom]), gfx.extent);
+            const k = st.draw.customs[st.draw.command(i).custom];
+            gradient.draw(&gp, gpu.scissor(k.rect, k.clip, gfx.scale, gfx.extent[0], gfx.extent[1]), gfx.extent[0], gfx.extent[1]);
         }
         present.endPass(pass);
         const blit = objc.msg(Id, cmd, "blitCommandEncoder", .{});

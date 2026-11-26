@@ -3,3 +3,5 @@
 pub const js = @import("js.zig");
 pub const webgpu = @import("webgpu.zig");
 pub const canvas = @import("canvas.zig");
+/// lcgf_render.gpu in the browser: the identity projection onto WebGPU (gpu.zig).
+pub const gpu = @import("gpu.zig");

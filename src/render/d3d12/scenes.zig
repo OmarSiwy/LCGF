@@ -4,7 +4,8 @@
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: a target
 //! cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas, and the custom
-//! command drawn inline by the host's own pipeline (custom.zig) in the renderer's command list.
+//! command drawn inline through lcgf_render.gpu (src/render/gpu/gradient.zig) in the renderer's
+//! command list.
 //!
 //!   offscreen  an RGBA8 texture, read back after the frame.
 //!   present    a hidden window's waitable flip-model swapchain through the frame loop
@@ -17,7 +18,8 @@ const com = @import("com.zig");
 const device_mod = @import("device.zig");
 const host = @import("host.zig");
 const frame = @import("frame.zig");
-const custom = @import("custom.zig");
+const gpu = @import("gpu.zig");
+const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 const Renderer = @import("renderer.zig").Renderer;
 const c = com.c;
 const Device = device_mod.Device;
@@ -39,7 +41,11 @@ pub const Player = struct {
     atlas: *com.Resource,
     gfx: Renderer,
     atlas_handle: lcgf.types.Texture,
-    gradient: custom.Gradient,
+    // The custom command's draw, written once against lcgf_render.gpu, and what it lives in.
+    arena: gpu.Arena,
+    host_arena: gpu.Arena,
+    staging: gpu.Staging,
+    gradient: Gradient,
     target: host.Target,
     readback: host.Readback,
     window: device_mod.Window,
@@ -64,7 +70,11 @@ pub const Player = struct {
         p.atlas = try host.sampled(&p.d, &p.once, 64, 64, &standInAtlas());
         p.gfx = try Renderer.init(&p.d, .{ .frames = 2 }, p.white);
         p.atlas_handle = p.gfx.addTexture(&p.d, p.atlas);
-        p.gradient = try custom.Gradient.init(p.d.handle, c.DXGI_FORMAT_R8G8B8A8_UNORM);
+        const dev: gpu.Device = .wrap(&p.d);
+        p.arena = try .init(dev, .{ .bytes = 0, .bind_groups = 4 });
+        p.host_arena = try .init(dev, .{ .bytes = 0, .memory = .host, .bind_groups = 1 });
+        p.staging = try .init(dev, &p.host_arena, 64 * 1024);
+        p.gradient = try .init(dev, &p.arena, .{ .format = .rgba8_unorm });
         p.target = try host.Target.init(&p.d, width, height);
         p.readback = try host.Readback.init(&p.d, width, height);
         if (p.mode == .present) {
@@ -93,7 +103,10 @@ pub const Player = struct {
         }
         p.readback.deinit();
         p.target.deinit();
-        p.gradient.deinit();
+        p.gradient.deinit(.wrap(&p.d));
+        p.staging.deinit(.wrap(&p.d));
+        p.host_arena.deinit();
+        p.arena.deinit();
         p.gfx.deinit();
         com.release(p.atlas);
         com.release(p.white);
@@ -128,6 +141,12 @@ pub const Player = struct {
     /// Clear, the scene, and a copy of the target into the read-back buffer, leaving the
     /// target in RENDER_TARGET as it found it.
     fn drawFrame(p: *Player, l: *com.GraphicsCommandList, target: *com.Resource, rtv: c.D3D12_CPU_DESCRIPTOR_HANDLE) void {
+        // The frame's upload phase: the gradient's target size. Each frame waits for the last,
+        // so the staging ring starts over.
+        p.staging.rewind();
+        var up: gpu.Upload = .beginStaged(.wrap(&p.d), l, &p.staging);
+        p.gradient.upload(&up, p.gfx.extent[0], p.gfx.extent[1]);
+        _ = up.finish();
         l.omSetRenderTarget(rtv);
         l.clearRenderTargetView(rtv, .{ 0, 0, 0, 1 });
         p.drawCommands(l);
@@ -140,9 +159,13 @@ pub const Player = struct {
     /// the same command list.
     fn drawCommands(p: *const Player, l: *com.GraphicsCommandList) void {
         const dl = &p.st.draw;
+        const w = p.gfx.extent[0];
+        const h = p.gfx.extent[1];
+        var gp: gpu.RenderPass = .wrap(.wrap(&p.d), l, w, h);
         var i = iface.drawUntilCustom(&p.gfx, l, dl, 0);
         while (i < dl.cmd_len) : (i = iface.drawUntilCustom(&p.gfx, l, dl, i + 1)) {
-            p.gradient.draw(l, p.gfx.customScissor(dl.customs[dl.command(i).custom]), p.gfx.extent);
+            const k = dl.customs[dl.command(i).custom];
+            p.gradient.draw(&gp, gpu.scissor(k.rect, k.clip, p.gfx.scale, w, h), w, h);
         }
     }
 };

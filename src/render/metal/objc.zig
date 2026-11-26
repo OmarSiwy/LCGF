@@ -42,13 +42,28 @@ const libobjc = "/usr/lib/libobjc.A.dylib";
 const metal = "/System/Library/Frameworks/Metal.framework/Metal";
 const quartz_core = "/System/Library/Frameworks/QuartzCore.framework/QuartzCore";
 
+/// Where `loadFrom` opens the runtime. The defaults are the system's; bindings/check's recorder
+/// (objc_record.c) passes its own library for all three, so the projection's messages can be
+/// logged on Linux.
+pub const Paths = struct {
+    objc: [*:0]const u8 = libobjc,
+    metal: [*:0]const u8 = metal,
+    /// Null skips it: the projection itself needs no CAMetalLayer.
+    quartz_core: ?[*:0]const u8 = quartz_core,
+};
+
 /// Opens libobjc, Metal and QuartzCore (CAMetalLayer). Call once before anything else here;
 /// later calls return at once. Fails off macOS.
 pub fn load() Error!void {
+    return loadFrom(.{});
+}
+
+/// `load` from other paths.
+pub fn loadFrom(p: Paths) Error!void {
     if (loaded) return;
-    const objc = std.c.dlopen(libobjc, .{ .NOW = true }) orelse return error.NoLibrary;
-    const mtl = std.c.dlopen(metal, .{ .NOW = true }) orelse return error.NoLibrary;
-    _ = std.c.dlopen(quartz_core, .{ .NOW = true }) orelse return error.NoLibrary;
+    const objc = std.c.dlopen(p.objc, .{ .NOW = true }) orelse return error.NoLibrary;
+    const mtl = std.c.dlopen(p.metal, .{ .NOW = true }) orelse return error.NoLibrary;
+    if (p.quartz_core) |q| _ = std.c.dlopen(q, .{ .NOW = true }) orelse return error.NoLibrary;
     inline for (@typeInfo(Fns).@"struct".field_names) |name| {
         @field(fns, name) = @ptrCast(@alignCast(std.c.dlsym(objc, name.ptr) orelse return error.MissingFunction));
     }
@@ -84,7 +99,11 @@ pub fn Send(comptime R: type, comptime Args: type) type {
         3 => fn (Id, Sel, a[0], a[1], a[2]) callconv(.c) R,
         4 => fn (Id, Sel, a[0], a[1], a[2], a[3]) callconv(.c) R,
         5 => fn (Id, Sel, a[0], a[1], a[2], a[3], a[4]) callconv(.c) R,
-        else => @compileError("objc.msg: more than 5 arguments"),
+        6 => fn (Id, Sel, a[0], a[1], a[2], a[3], a[4], a[5]) callconv(.c) R,
+        7 => fn (Id, Sel, a[0], a[1], a[2], a[3], a[4], a[5], a[6]) callconv(.c) R,
+        8 => fn (Id, Sel, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]) callconv(.c) R,
+        9 => fn (Id, Sel, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]) callconv(.c) R,
+        else => @compileError("objc.msg: more than 9 arguments"),
     };
 }
 

@@ -113,7 +113,7 @@ pub const Anims = struct {
 };
 
 /// One full SIMD group or the exact final group of a compile-time table.
-inline fn stepVector(comptime width: usize, c: anytype, i: usize, dt: f32) @Vector(width, f32) {
+pub inline fn stepVector(comptime width: usize, c: anytype, i: usize, dt: f32) @Vector(width, f32) {
     const V = @Vector(width, f32);
     const h: V = @splat(dt);
     const zero: V = @splat(0);

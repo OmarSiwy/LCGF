@@ -11,6 +11,8 @@ pub const types = @import("core/types.zig");
 pub const mem = @import("core/mem.zig");
 pub const tree = @import("core/tree.zig");
 pub const strings = @import("core/strings.zig");
+/// The format language of formatted labels (`spec.text`, a `.zon` `.text`), shared by every engine.
+pub const text_format = @import("core/fmt.zig");
 pub const texts = @import("core/texts.zig");
 pub const customs = @import("core/customs.zig");
 pub const layout = @import("layout/layout.zig");
@@ -70,6 +72,11 @@ pub const render_iface = @import("render/iface.zig");
 pub const render_conformance = @import("render/conformance.zig");
 pub const quad_shader = @import("render/shaders/quad.zig");
 pub const render_null = @import("render/null.zig");
+pub const gpu_desc = @import("render/gpu/desc.zig");
+pub const gpu_reflect = @import("render/gpu/reflect.zig");
+pub const gpu_gradient = @import("render/gpu/gradient.zig");
+pub const gpu_check = @import("render/gpu/check.zig");
+pub const gpu_naga = @import("render/gpu/naga.zig");
 pub const context = @import("runtime/context.zig");
 pub const frame = @import("runtime/frame.zig");
 pub const text_lines = @import("text/layout/lines.zig");
@@ -80,6 +87,9 @@ pub const text_layout_tests = @import("text/layout/tests.zig");
 pub const scheduler = @import("runtime/scheduler.zig");
 pub const reuse = @import("runtime/reuse.zig");
 pub const widgets_base = @import("widgets/base.zig");
+/// The common runtime widgets with the frame and theme given once and options by name:
+/// `const ui = widgets.on(f, th); ui.slider(.gain, &gain, .{ .max = 4 })`.
+pub const widgets = @import("widgets/kit.zig");
 pub const widgets_label = @import("widgets/label.zig");
 pub const widgets_button = @import("widgets/button.zig");
 pub const widgets_checkbox = @import("widgets/checkbox.zig");
@@ -130,6 +140,8 @@ pub const a11y_tree = @import("a11y/tree.zig");
 pub const a11y_settings = @import("a11y/settings.zig");
 pub const settings_data = @import("a11y/settings_data.zig");
 pub const render_sw = @import("render/sw/sw.zig");
+/// The bundled bitmap font (DejaVu Sans Mono, 14 px) in `Mono`'s grid, for a software shell's text.
+pub const render_sw_font = @import("render/sw/font.zig");
 pub const png = @import("assets/png.zig");
 pub const embed = @import("assets/embed.zig");
 pub const image_jobs = @import("assets/image_jobs.zig");
@@ -151,6 +163,9 @@ pub const anims = @import("anim/anims.zig");
 pub const tweens = @import("anim/tweens.zig");
 pub const keyframes = @import("anim/keyframes.zig");
 pub const flip = @import("anim/flip.zig");
+/// What `Frame.animate` and `Frame.tween` can move: numbers, colours, and arrays, vectors and
+/// structs of them.
+pub const anim_values = @import("anim/values.zig");
 pub const shell_headless = @import("shell/headless.zig");
 pub const shell_baremetal_flush = @import("shell/baremetal/flush.zig");
 pub const shell_baremetal_input = @import("shell/baremetal/input.zig");
@@ -176,6 +191,14 @@ pub const i18n_date = @import("i18n/date.zig");
 pub const i18n_bundle = @import("i18n/bundle.zig");
 pub const i18n_pseudo = @import("i18n/pseudo.zig");
 pub const ct_interop = @import("comptime/interop.zig");
+/// The comptime front end's tables as data, and the prebuilt frame that reads them behind the
+/// C seam (C++ and Rust bindings: bindings/, tools/lcgf-gen/).
+pub const abi_plan = @import("abi/plan.zig");
+pub const abi_seam = @import("abi/seam.zig");
+pub const abi_zon = @import("abi/zon.zig");
+pub const abi_runtime = @import("abi/runtime.zig");
+pub const abi_ct = @import("abi/ct.zig");
+pub const ct_tables = @import("comptime/tables.zig");
 
 pub const embedded_fixed = @import("embedded/fixed.zig");
 pub const embedded_framebuffer = @import("embedded/framebuffer.zig");

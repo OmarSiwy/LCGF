@@ -55,9 +55,11 @@ const pass: render.Pass = switch (render.kind) {
 };
 ```
 
-Custom draws (the inline route in `custom.md`) use your own pipeline in that pass, so they are
-written for one back end, or for each behind the same switch. The experimental hosts
-can also composite a texture drawn through a shared WebGPU callback. [WebGPU custom drawing](webgpu-custom.md)
+A custom draw (the inline route in `custom.md`) runs in that pass. Write it once against
+`render.gpu`, which presents WebGPU's object model over whichever API the build selects. Its
+types are that API's own handles, and the native calls stay one field away. You can also write
+it straight against the native API, behind the same switch. The software back end has no
+`gpu`. [Custom drawing with lcgf_render.gpu](gpu.md)
 
 ## When you bring no device
 

@@ -144,6 +144,54 @@ subtree, whose root must carry the same id. In the example the sidebar is built 
 copied until `layers` changes. `Derived(T)` and `Effect` in `lcgf.runtime_signals` cover values
 computed from signals and work that is due once per frame in which an input changed.
 
+Neither needs setting up: `count: Cell(i32) = .of(0)` and `doubled: Derived(i32) = .of(0)` are
+field defaults, and a signal is created by its cell's first change (a dependency list holding one
+not created yet reads it as version 0). `doubled.update(sig, &.{count.signal}, double, .{n})`
+names the inputs once and calls `double` on the first update and then only after an input
+changed; examples/counter uses it.
+
+## The widget kit
+
+`lcgf.widgets.on(f, th)` holds the frame and the theme for the common widgets, each with its
+options by name; an id is an enum literal (or an `Id` made at run time). `ui.text` and
+`f.textf` format straight into the frame's strings (`std.fmt`), so no buffer of yours is needed.
+State needs no setting up either, and `animate` moves a `Rect` as it moves an f32:
+
+```zig
+const Mixer = struct {
+    theme: w.Theme = .default,
+    gain: f32 = 1,
+    count: lcgf.runtime_signals.Cell(u32) = .of(0),
+    doubled: lcgf.runtime_signals.Derived(u32) = .of(0),
+    box: lcgf.types.Rect = .{ .x1 = 40, .y1 = 10 },
+
+    fn build(app: *Mixer, f: *Frame) void {
+        const sig = &f.ctx.signals;
+        const ui = lcgf.widgets.on(f, &app.theme);
+        if (ui.button(.add, .{ .label = "Add" }).clicked) app.count.set(sig, app.count.get() + 1);
+        _ = ui.slider(.gain, &app.gain, .{ .min = 0, .max = 4 });
+        const twice = app.doubled.update(sig, &.{app.count.signal}, double, .{app.count.get()});
+        _ = ui.text("{d} added, {d} doubled, gain {d:.1}", .{ app.count.get(), twice, app.gain });
+        // Any value made of numbers moves on springs, one per number.
+        const r = f.animate(.from("box"), app.box, .{});
+        _ = f.leaf(.from("swatch"), .{ .size = .{ .px(r.x1 - r.x0), .px(r.y1 - r.y0) }, .fill = th_accent });
+    }
+```
+
+The kit adds no behaviour: `ui.button(.add, .{ .label = "Add" })` is
+`widgets_button.button(f, th, .from("add"), "Add")`, and the positional functions stay.
+
+## A window in one call
+
+`lcgf_app.run(App, &app, init, .{ .title = "Hello" })` opens a desktop window and runs `App`'s
+`build` in it until it closes: Wayland or X11 on Linux, Win32, or AppKit with Metal on macOS,
+chosen from the target and the environment, with the shells' loop above and text from the
+bundled bitmap font. In build.zig, `lcgf.addApp(b, dep, .{ .name = "hello", .root_source_file
+= b.path("main.zig"), .target = target, .optimize = optimize })` gives the executable the
+`lcgf_app` module with the shells its target needs. examples/app/main.zig is a whole program;
+`zig build app-example -Dtarget=x86_64-windows` builds it for Windows from anywhere. The web,
+Android and iOS start an application their own way: see their shells' examples.
+
 ## A widget of your own
 
 A widget is a function over `Frame`, written with the same calls the built-in widgets use:
@@ -164,7 +212,10 @@ focus; `.any` adds drag). Other queries: `drag(id)` for movement while dragged, 
 the held widget's last rectangle, `lastRect(id)` for any widget's. Animation is asked for the
 same way: `f.animate(id, target, spring)` returns this frame's value of a spring,
 `f.tween` an eased value, `f.timer(id, seconds, mode)` whether a timer fired, and each keeps the
-host awake only while it moves.
+host awake only while it moves. `animate` and `tween` move more than f32s: a `Color`, a `Rect`,
+`[2]f32`, a vector or any struct of numbers, each component on its own spring or tween
+(`f.animate(.from("card"), app.target_rect, .{})`). An argument whose type comes from its result,
+such as `@floatFromInt(k)`, needs an `@as(f32, ...)` there.
 
 The header of `src/widgets/base.zig` lists the five parts every built-in widget has (spec, look,
 behaviour, accessibility, tests), which is a good checklist for your own.

@@ -98,6 +98,38 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
   worth removing is the abstraction and validation layer above the GPU API, not the API.
 - **wgpu**: the portable back end, and the route for applications that want raw wgpu. The host owns
   the device, queue and pass. The production interface documents five kinds of raw access. [wgpu backend](../src/render/wgpu/wgpu.zig)
+- **`lcgf_render.gpu`**: custom drawing written once, in WebGPU's object model and WGSL, projected
+  at compile time onto the selected back end's API (src/render/gpu/, each back end's `gpu.zig`).
+  It is not a portability layer:
+  - its types are the native handles, with public fields;
+  - its calls compile to the native calls (ci/jobs/gpu-zero-cost.sh: instruction-identical to
+    hand-written Vulkan);
+  - nothing tracks state. The caller owns the memory (an `Arena`), a frame moves through fixed
+    phases (upload, then passes), and textures rest in one layout between passes;
+  - bind groups are structs reflected from the WGSL, so binding mistakes are compile errors.
+
+  naga translates the WGSL when you build, or the translations are committed. It replaced the
+  wgpu-native guest experiment (docs/research/custom-webgpu/), which needed a second device
+  object model, a second submission per redraw and 4.57 MiB. docs/guide/gpu.md.
+- **C++ and Rust** reach the comptime front end through two seams, not a C++ or Rust binary
+  interface. Above the first, `lcgf-gen` runs the same `plan` (src/abi/plan.zig) that Zig runs at
+  comptime, and writes tables and inline code in the user's language. Below the second, the
+  prebuilt liblcgf reads those tables through a few `extern "C"` calls per frame (src/abi/lcgf.h).
+  The tables carry a version and a layout hash. Draw lists match Zig's byte for byte
+  (ci/jobs/bindings.sh). The table logic exists once: `ComptimeUi` pushes its rows from the same
+  plan, made at comptime, through the same `plan.emit` the seam's frame calls; only its walk of
+  the spec (regions, custom widgets with Zig code) is its own. The runtime front end crosses too
+  (src/abi/runtime.zig): C++ and Rust make each row from its style themselves (folded at compile
+  time when the style is constant) and store it into the frame's columns inline, so a runtime
+  UI costs what it costs in Zig; the other calls are one direct call each. Static UIs cross
+  as well (src/abi/ct.zig): `lcgf-gen --static` makes the comptime pipeline's tables (fold,
+  constant columns, paint templates) with the functions `ct_layout` and `ct_paint` call at
+  comptime (src/comptime/tables.zig) and writes them as compile-time constants, and the
+  tier-0 passes, the paint and the hit test are ported to C++ templates (lcgf/ct.hpp) and
+  Rust generics (lcgf::ct) compiled against them, so the compiler folds them as Zig's does.
+  Draw lists and events match Zig's byte for byte; Rust and clang run at Zig's speed or
+  faster. liblcgf runs the same tables through its own frame too (`SeamUi`). The GPU projection is written per language on Vulkan, GL ES 3, wgpu-native, Metal
+  and Direct3D 12. docs/guide/bindings.md.
 - **One per build.** `-Drender=auto|sw|vk|metal|d3d12|gles|web|wgpu` picks the back end the
   `lcgf_render` module exposes (src/render/select.zig); `auto` is the target's own API (Metal on
   Apple, Direct3D 12 on Windows, Vulkan on Linux and Android, web on wasm32, software on

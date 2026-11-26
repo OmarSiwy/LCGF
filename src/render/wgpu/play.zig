@@ -6,8 +6,9 @@
 //!
 //! SAMPLES (default 1) above 1 draws through a multisampled target resolved into the image.
 //!
-//! Custom commands go through the host's loop (`iface.drawUntilCustom`), drawn by a pipeline of
-//! the host's own, so the scene `custom` checks that the renderer rebinds all state after it.
+//! Custom commands go through the host's loop (`iface.drawUntilCustom`), drawn through
+//! lcgf_render.gpu (src/render/gpu/gradient.zig, the same code every back end runs) with its own
+//! pipeline, so the scene `custom` checks that the renderer rebinds all state after it.
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas.
 const std = @import("std");
@@ -17,6 +18,8 @@ const host = native.host;
 const c = native.c;
 const conformance = lcgf.render_conformance;
 const iface = lcgf.render_iface;
+const gpu = native.gpu;
+const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 
 var st: conformance.Storage = .{};
 
@@ -52,6 +55,10 @@ pub fn main(init: std.process.Init) !void {
     var atlas_tex = native.glyphs.GlyphTexture.init(h.device, 64, 64);
     defer atlas_tex.deinit();
     const atlas_handle = gfx.addTexture(&ctx, atlas_tex.view, sampler);
+    const dev: gpu.Device = .wrap(h.device, h.queue);
+    var arena: gpu.Arena = try .init(dev, .{ .bytes = 0 });
+    var gradient: Gradient = try .init(dev, &arena, .{ .format = .rgba8_unorm, .samples = samples });
+    defer gradient.deinit(dev);
 
     for (&conformance.scenes) |*s| {
         st.load(s);
@@ -71,20 +78,18 @@ pub fn main(init: std.process.Init) !void {
             host.beginPass(encoder, m.view, target.view, .{ 0, 0, 0, 1 })
         else
             host.beginPass(encoder, target.view, null, .{ 0, 0, 0, 1 });
-        // The host's loop: UI draws up to each custom command, the host's own draw there.
-        const scene = hostPipeline(h.device, w, ht, samples);
-        defer c.wgpuRenderPipelineRelease(scene);
+        // The host's loop: UI draws up to each custom command, the custom draw there, written
+        // once against lcgf_render.gpu (src/render/gpu/gradient.zig).
+        var up: gpu.Upload = .begin(dev, encoder);
+        gradient.upload(&up, w, ht);
+        _ = up.finish();
+        var gp: gpu.RenderPass = .wrap(dev, pass, w, ht);
         var i = iface.drawUntilCustom(&gfx, pass, &st.draw, 0);
         while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(&gfx, pass, &st.draw, i + 1)) {
-            const r = st.draw.customs[st.draw.command(i).custom].rect;
-            const x0: u32 = @intFromFloat(std.math.clamp(r[0], 0, s.viewport[0]));
-            const y0: u32 = @intFromFloat(std.math.clamp(r[1], 0, s.viewport[1]));
-            const x1: u32 = @intFromFloat(std.math.clamp(r[2], r[0], s.viewport[0]));
-            const y1: u32 = @intFromFloat(std.math.clamp(r[3], r[1], s.viewport[1]));
-            c.wgpuRenderPassEncoderSetPipeline(pass, scene);
-            c.wgpuRenderPassEncoderSetScissorRect(pass, x0, y0, x1 - x0, y1 - y0);
-            c.wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
-            c.wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, w, ht);
+            const k = st.draw.customs[st.draw.command(i).custom];
+            gradient.draw(&gp, gpu.scissor(k.rect, k.clip, 1, w, ht), w, ht);
+            // The UI's pipeline uses no scissor of its own: give it the whole target back.
+            gp.setScissorRect(0, 0, w, ht);
         }
         host.endPass(pass);
         h.submit(encoder);
@@ -94,30 +99,6 @@ pub fn main(init: std.process.Init) !void {
         var name: [64]u8 = undefined;
         try out.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.png", .{s.name}), .data = try png(gpa, w, ht, px) });
     }
-}
-
-/// The goldens' host draw for a custom command (render.py `scene_pipe`): one triangle over the
-/// whole target, a gradient over position, replacing what is under it; the scissor limits it to
-/// the custom rect. Its own pipeline and layout: the UI's state is gone after it.
-fn hostPipeline(device: c.WGPUDevice, w: u32, h: u32, samples: u32) c.WGPURenderPipeline {
-    var buf: [512]u8 = undefined;
-    const wgsl = std.fmt.bufPrint(&buf,
-        \\@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {{
-        \\  return vec4f(f32(i & 1u) * 4.0 - 1.0, f32(i >> 1u) * 4.0 - 1.0, 0.0, 1.0); }}
-        \\@fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {{
-        \\  return vec4f(p.x / {d}.0 * 0.5, 0.25, p.y / {d}.0 * 0.6, 1.0); }}
-    , .{ w, h }) catch unreachable;
-    const source: c.WGPUShaderSourceWGSL = .{ .chain = .{ .sType = c.WGPUSType_ShaderSourceWGSL }, .code = host.sv(wgsl) };
-    const module = c.wgpuDeviceCreateShaderModule(device, &.{ .nextInChain = @constCast(&source.chain) });
-    defer c.wgpuShaderModuleRelease(module);
-    const color: c.WGPUColorTargetState = .{ .format = c.WGPUTextureFormat_RGBA8Unorm, .writeMask = c.WGPUColorWriteMask_All };
-    const fragment: c.WGPUFragmentState = .{ .module = module, .entryPoint = host.sv("fs"), .targetCount = 1, .targets = &color };
-    return c.wgpuDeviceCreateRenderPipeline(device, &.{
-        .vertex = .{ .module = module, .entryPoint = host.sv("vs") },
-        .primitive = .{ .topology = c.WGPUPrimitiveTopology_TriangleList },
-        .multisample = .{ .count = samples, .mask = 0xffff_ffff },
-        .fragment = &fragment,
-    });
 }
 
 /// RGBA rows as a PNG with stored (uncompressed) deflate blocks.

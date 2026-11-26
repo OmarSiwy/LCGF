@@ -11,7 +11,11 @@ for v in v27 v29; do
         out=zig-out/wgpu/$v-x$samples; rm -rf "$out"
         zig-out/bin/wgpu-play "$out" "$samples"
         for ref in src/render/conformance/*.png; do
-            python3 tools/golden/golden.py "$out/$(basename "$ref")" "$ref"
+            # At 4x, lavapipe's scissor lets half of the samples above and left of the custom
+            # draw's rectangle through (tools/golden/golden.py, --scissor-ring).
+            ring=""
+            if [ "$samples" -gt 1 ] && [ "$(basename "$ref")" = custom.png ]; then ring="--scissor-ring 8,8,152,112"; fi
+            python3 tools/golden/golden.py "$out/$(basename "$ref")" "$ref" $ring
         done
     done
 done

@@ -4,10 +4,11 @@
 <!-- Draws every render conformance scene with the WebGPU back end (webgpu.zig, scenes.wasm) and
      reads each back. The host side mirrors src/render/wgpu/play.zig and render.py, which drew
      the goldens: an RGBA8 target cleared to black, nearest sampling, scale 1, the stand-in glyph
-     atlas, and the host's own gradient pipeline at each custom command. browser.py --out writes
+     atlas, and the custom draw through lcgf_render.gpu (src/render/gpu/gradient.zig, compiled into
+     scenes.wasm and calling WebGPU through lcgf.js gpuProjection). browser.py --out writes
      the images; ci/jobs/web.sh compares them with src/render/conformance/*.png. -->
 <script type="module">
-import { load, webgpu, canvas2d } from "./lcgf.js";
+import { load, webgpu, gpuProjection, canvas2d } from "./lcgf.js";
 import { readback, base64, standInAtlas } from "./test_util.js";
 
 window.lcgfTest = (async () => {
@@ -16,17 +17,7 @@ window.lcgfTest = (async () => {
     const errors = [];
     device.addEventListener("uncapturederror", (e) => errors.push(e.error.message));
 
-    let scene = null; // the host pipeline of the scene being drawn
-    const host = (ui) => ({
-        host_custom(p, x0, y0, x1, y1) {
-            const pass = ui.gpu.get(p);
-            pass.setPipeline(scene.pipe);
-            pass.setScissorRect(x0, y0, x1 - x0, y1 - y0);
-            pass.draw(3);
-            pass.setScissorRect(0, 0, scene.w, scene.h);
-        },
-    });
-    const ui = await load("scenes.wasm", webgpu, canvas2d(document.createElement("canvas")), host);
+    const ui = await load("scenes.wasm", webgpu, gpuProjection, canvas2d(document.createElement("canvas")));
     const { put, release } = ui.gpu;
 
     const texture = (w, h, px) => {
@@ -42,13 +33,6 @@ window.lcgfTest = (async () => {
         const size = ui.exports.lcgf_scene_size(i);
         const name = ui.logs.at(-1);
         const w = size & 0xffff, h = size >>> 16;
-        const module = device.createShaderModule({ code: `
-@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
-  return vec4f(f32(i & 1u) * 4.0 - 1.0, f32(i >> 1u) * 4.0 - 1.0, 0.0, 1.0); }
-@fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-  return vec4f(p.x / ${w}.0 * 0.5, 0.25, p.y / ${h}.0 * 0.6, 1.0); }` });
-        scene = { w, h, pipe: device.createRenderPipeline({ layout: "auto", vertex: { module, entryPoint: "vs" }, fragment: { module, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] } }) };
-
         const target = device.createTexture({ size: [w, h], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
         ui.exports.lcgf_scene_prepare(i);
         const encoder = device.createCommandEncoder();

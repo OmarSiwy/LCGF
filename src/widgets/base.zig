@@ -61,6 +61,7 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const Strings = @import("../core/strings.zig").Strings;
+const fmt = @import("../core/fmt.zig");
 const Input = @import("../core/input.zig").Input;
 const DrawList = @import("../draw/draw_list.zig").DrawList;
 const paint = @import("../draw/paint.zig");
@@ -318,6 +319,12 @@ pub const ct = struct {
     }
 
     /// A slider named `id` setting the f32 field `bind`, 0 to 1.
+    /// A node named `id` that the host draws itself: its rect comes back as a custom command
+    /// carrying `data`.
+    pub fn custom(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec {
+        return .{ .kind = .col, .id = @tagName(id), .style = style, .custom = data };
+    }
+
     pub fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec {
         var s = spec_zig.row(sliderTrack(&th), .{Spec{ .kind = .col }});
         s.kind = .slider;
@@ -561,7 +568,15 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             switch (n.kind) {
                 .label => {
                     const i = tb.t.push(parent, .none, &n.style);
-                    const span = tb.strings.add(spec_zig.labelBytes(n, state));
+                    const span = if (comptime n.format) |f| blk: {
+                        const segs = comptime fmt.compile(State, f.text, f.args);
+                        var sink: fmt.Sink = .{ .buf = tb.strings.buf[tb.strings.len..] };
+                        fmt.write(segs, f.text, fmt.Fields(State, f.args){ .state = state }, &sink);
+                        const sp: @import("../core/strings.zig").Span = .{ .start = tb.strings.len, .bytes = @intCast(sink.len) };
+                        tb.strings.len += sp.bytes;
+                        tb.strings.overflow = simd.orB(tb.strings.overflow, sink.cut);
+                        break :blk sp;
+                    } else tb.strings.add(spec_zig.labelBytes(n, state));
                     tb.t.c.text[i] = tb.tx.push(i, span, &(n.text_style orelse labelText(&th)));
                 },
                 .checkbox => {
