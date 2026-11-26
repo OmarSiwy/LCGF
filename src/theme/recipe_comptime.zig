@@ -43,21 +43,31 @@ pub const Config = struct {
 
 const Kind = enum { button, checkbox, switch_control, slider, input };
 
-pub fn button(comptime id: @EnumLiteral(), comptime text: @EnumLiteral(), comptime config: Config) Spec {
-    return build(.button, @tagName(id), @tagName(text), @tagName(text), .{}, config);
+/// `text` is the caption: a `[]const u8` field of the State (`.save`) or a literal ("Save").
+pub fn button(comptime id: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
+    return build(.button, @tagName(id), if (comptime isLiteral(text)) "" else @tagName(text), captionName(text), .{}, config, isLiteral(text));
 }
-pub fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral(), comptime config: Config) Spec {
-    return build(.checkbox, @tagName(id), @tagName(bind), @tagName(text), .{}, config);
+pub fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
+    return build(.checkbox, @tagName(id), @tagName(bind), captionName(text), .{}, config, isLiteral(text));
 }
-pub fn switchControl(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral(), comptime config: Config) Spec {
-    return build(.switch_control, @tagName(id), @tagName(bind), @tagName(text), .{}, config);
+pub fn switchControl(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: anytype, comptime config: Config) Spec {
+    return build(.switch_control, @tagName(id), @tagName(bind), captionName(text), .{}, config, isLiteral(text));
+}
+
+fn isLiteral(comptime text: anytype) bool {
+    return @TypeOf(text) != @EnumLiteral();
+}
+
+/// The caption's field name, or the literal itself.
+fn captionName(comptime text: anytype) []const u8 {
+    return if (comptime isLiteral(text)) text else @tagName(text);
 }
 pub fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime limits: slider_zig.Range, comptime config: Config) Spec {
     if (!(limits.lo < limits.hi)) @compileError("recipe slider requires lo below hi");
-    return build(.slider, @tagName(id), @tagName(bind), "", limits, config);
+    return build(.slider, @tagName(id), @tagName(bind), "", limits, config, false);
 }
 pub fn textfield(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: @EnumLiteral(), comptime config: Config) Spec {
-    return build(.input, @tagName(id), @tagName(bind), @tagName(hint), .{}, config);
+    return build(.input, @tagName(id), @tagName(bind), @tagName(hint), .{}, config, false);
 }
 
 fn stock(comptime kind: Kind) model.Recipe {
@@ -70,8 +80,9 @@ fn stock(comptime kind: Kind) model.Recipe {
     };
 }
 
-fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config) Spec {
-    const label_node: Spec = .{ .kind = .label, .bind = if (kind == .button or kind == .checkbox or kind == .switch_control) text else null };
+fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config, comptime literal: bool) Spec {
+    const captioned = kind == .button or kind == .checkbox or kind == .switch_control;
+    const label_node: Spec = if (literal) .{ .kind = .label, .text = text } else .{ .kind = .label, .bind = if (captioned) text else null };
     const mark: Spec = .{ .kind = .col, .children = &.{.{ .kind = .col }} };
     const children: []const Spec = switch (kind) {
         .button => &.{ label_node, .{ .kind = .col } },
@@ -87,13 +98,13 @@ fn build(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []cons
     return .{
         .kind = .row,
         .id = name,
-        .bind = bind,
+        .bind = if (bind.len > 0) bind else null,
         .children = children,
-        .widget = Widget(kind, name, bind, text, limits, config),
+        .widget = Widget(kind, name, bind, text, limits, config, literal),
     };
 }
 
-fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config) type {
+fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []const u8, comptime text: []const u8, comptime limits: slider_zig.Range, comptime config: Config, comptime literal: bool) type {
     return struct {
         pub const focusable = true;
         pub const Payload = switch (kind) {
@@ -115,7 +126,12 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             } else if (kind == .switch_control) {
                 if (base.fieldError(State, "recipe switch", bind, bool)) |err| return err;
             }
+            if (literal) return null;
             return base.fieldError(State, "recipe label", text, []const u8);
+        }
+
+        fn caption(ui: anytype) []const u8 {
+            return if (literal) text else @field(ui.signals.state, text);
         }
 
         fn state(ui: anytype) style.States {
@@ -201,7 +217,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             if (kind == .button or kind == .input) ui.setCursor(tb.t.cursor(row) orelse if (kind == .input) .text else .pointer, response.hovered);
             switch (kind) {
                 .button => {
-                    pushText(ui, row, @field(ui.signals.state, text), label_part);
+                    pushText(ui, row, caption(ui), label_part);
                     next.* += 3;
                 },
                 .checkbox, .switch_control => {
@@ -210,7 +226,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     const mark = tb.t.push(row, .none, &background.box);
                     _ = tb.t.push(mark, .none, &indicator.box);
                     tb.t.seal(mark);
-                    pushText(ui, row, @field(ui.signals.state, text), label_part);
+                    pushText(ui, row, caption(ui), label_part);
                     if (kind == .switch_control) switch_zig.expose(&tb.t, row, @field(ui.signals.state, bind));
                     next.* += 5;
                 },

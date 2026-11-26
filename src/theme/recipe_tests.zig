@@ -235,3 +235,36 @@ test "a runtime token error in a comptime recipe is returned as frame data" {
     ui.signals.set(.recipe, model.button);
     try std.testing.expectEqual(@as(?anyerror, null), ui.frame(&.{}).failure);
 }
+
+test "a literal caption draws as a bound one, and a hover rule changes the face in both front ends" {
+    @setEvalBranchQuota(200_000);
+    const Literal = struct {
+        const hot: types.Color = .rgb(200, 10, 10);
+        const rules = model.button_rules ++ [_]style.Rule{.{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, hot)} }};
+        const recipe: model.Recipe = .{ .parts = model.button.parts, .rules = &rules };
+        const App = struct {
+            pub fn build(_: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.button(f, .from("go"), "Go", .{ .recipe = recipe }) catch unreachable;
+                _ = controls.checkbox(f, .from("on"), &on, "On", .{}) catch unreachable;
+                f.close();
+            }
+            var on = false;
+        };
+        const State_ = struct { on: bool = false };
+        const LUi = base.ComptimeUi(State_, spec.col(panel, .{ ct.button(.go, "Go", .{ .recipe = recipe }), ct.checkbox(.on, .on, "On", .{}) }), .default);
+        const LRun = base.Harness(App, LUi, .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 });
+        var run: LRun = .{};
+    };
+    const hot = Literal.hot;
+    const run = &Literal.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 } };
+    var output = try run.frame(&input);
+    const go = output.runtime.tree.find(.from("go"));
+    try std.testing.expect(output.runtime.tree.c.look[go].fill != hot.bitsOf());
+    const r = output.runtime.tree.rect(go);
+    input.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    output = try run.frame(&input);
+    try std.testing.expectEqual(hot.bitsOf(), output.runtime.tree.c.look[go].fill);
+}
