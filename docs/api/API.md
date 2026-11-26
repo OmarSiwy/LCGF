@@ -1089,6 +1089,7 @@ The measure / wrap protocol: how text extents reach layout.
 ### Top level
 
 - `Span = struct { start: u32, style: types.TextStyle }`: One style run of a paragraph: from byte `start` of its text on (to the next span's start), `style`'s size, colour and font instead of the run's.
+- `fn insertAfter(d: *DrawList, j: u32, first: u32) u32`: Puts quads `first..d.quad_len` (just appended after `paint.emit`) right after op `j`, the text op of their run: their ops after it, and the quads themselves moved to where the next quad op's quads begin, so every run of consecutive quad ops still names consecutive quads (`paint.encode` merges them).
 - `fn StaticAtlas(comptime strings: []const []const u8) type`: Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
 
 ### `Mono` (struct)
@@ -1103,6 +1104,12 @@ Fields: `advance`, `line`
 - `fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: The same metrics and geometry, with UVs from a static atlas subset.
 - `fn quadsForCommands(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: Expands only runs referenced by text commands.
 
+### `Styled` (struct)
+Styled runs of a frame, for any font: run `rows[i]` of `Texts` takes `table[styles[i]]`, and `decorations` and `spans`, when not empty, have one row per `table` row.
+
+Fields: `rows`, `styles`, `table`, `decorations`, `spans`
+
+
 ### `MonoParagraphs` (struct)
 `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
 
@@ -1112,6 +1119,7 @@ Fields: `mono`, `rows`, `styles`, `table`, `decorations`, `spans`, `strings`
 - `fn wrap(p: MonoParagraphs, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
 - `fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them, each glyph in its span's size and colour.
 - `fn decorate(p: MonoParagraphs, d: *DrawList) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
+- `fn styled(p: MonoParagraphs) Styled`: The styled runs this font measures, for a real shaper (`text_stack.Stack.style`).
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -3581,7 +3589,8 @@ Fields: `ctx`, `in`
 - `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.
 - `fn finalizeLayout(f: *Frame, options: rounding.Options) error{InvalidScale}!void`: Apply layout transitions after all placement passes, then snap, transform and clip.
 - `fn endText(f: *Frame, stack: *TextStack, ascent: []f32) Output`: Font-backed counterpart of `end`.
-- `fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and arrangement only, the public half of endText.
+- `fn endTextStyled(f: *Frame, stack: *TextStack, ascent: []f32, s: protocol.Styled, rows: text_stack.StyledRows, rects: []types.Rect) Output`: Font-backed measurement and arrangement only, the public half of endText.
+- `fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void`
 - `fn endTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!Output`
 - `fn layoutTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and placement before caller passes and finalizeLayout.
@@ -3716,11 +3725,19 @@ Optional rich paragraph row.
 Fields: `spans`, `metrics`, `normalized_spans`
 
 
+### `StyledRows` (struct)
+Caller-owned rows for `Stack.style`: a paragraph and a rich row per text, spans for the styled runs that have them (their span columns: every span plus one per run), and metrics scratch for the longest span list (plus one).
+
+Fields: `paragraphs`, `rich`, `spans`, `start`, `font`, `px`, `color`, `metrics`
+
+
 ### `Stack` (struct)
 Shapers by font index, and scratch for one paragraph.
 
 Fields: `shapers`, `cache`, `font_ids`, `font_generations`, `run`, `g`, `l`, `bidi`, `direction`, `paragraphs`, `default_paragraph`, `normalization`, `fallback`, `rich`, `paint_colors`, `span_px`, `px`, `text`, `normalized`, `ellipsis_glyph`, `ellipsis_font`, `ellipsis_px`, `overflow`
 
+- `fn style(st: *Stack, tx: *const Texts, s: protocol.Styled, rows: StyledRows) error{NoSpace}!void`: Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as `spec.paragraph`, `spec.spans` and the markup lower to): each listed row's paragraph, and for a run with spans a rich row whose first span is the run's own style.
+- `fn decorate(st: *Stack, tx: *const Texts, strings: *const Strings, s: protocol.Styled, d: *DrawList, rects: []Rect) void`: After `paint.emit`: the decorations of `s`'s decorated runs as solid quads right after each run's text (`protocol.insertAfter`), each run laid out again as drawn (`paragraph`) and decorated by `text_decorations.quads` with its face's metrics.
 - `fn serves(st: *const Stack, tx: *const Texts, k: usize) bool`: Whether this stack measures row `k`.
 - `fn layoutAt(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32) error{NoSpace}!void`: Lays row `k` of `tx` out into the scratch (`g`, `l`), start aligned, broken at `width`: shaped with its font at its size, then `lines.breakLines`, `lines.place` and, with `bidi`, `lines.reorder`.
 - `fn paragraph(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize) error{NoSpace}!void`: Row `k` laid out as `wrap` left it: broken at `avail` when it wraps, else not at all.
