@@ -106,8 +106,10 @@ inline fn minNum(comptime V: type, a: V, b: V) V {
 pub fn localPaintBounds(rect: [4]f32, params: [4]f32) [4]f32 {
     const words: [4]u32 = @bitCast(params);
     const sigma: f32 = @bitCast(words[1]);
-    const growth = if (words[0] == @backingInt(features.Kind.shadow) and std.math.isFinite(sigma)) @max(0, sigma) * 3 else 0;
-    return expand(rect, @splat(growth));
+    const shadow = (words[0] == @backingInt(features.Kind.shadow)) & std.math.isFinite(sigma);
+    // A vector select stays a blend; the scalar one was turned back into two jumps.
+    const growth = @select(f32, @as(@Vector(4, bool), @splat(shadow)), @as(V4, @splat(@max(0, sigma) * 3)), @as(V4, @splat(0)));
+    return expand(rect, growth);
 }
 
 /// Shared by damage, visibility and overlap-sensitive batching. `clip` is in screen space.
@@ -235,13 +237,17 @@ pub fn clipsContain(t: anytype, node: u32, screen: [2]f32) bool {
 }
 
 /// One coarse decision keeps rectangular trees on their existing SIMD hit path.
+/// Every extras row is read, with no early exit: the loop's jumps are its bound alone.
 pub fn needsExactHit(t: anytype) bool {
+    const V6 = @Vector(6, f32);
+    var exact = false;
     for (1..t.xlen) |r| {
         const extra = t.x.row[r];
-        if (!std.mem.eql(f32, &extra.transform, &identity)) return true;
-        if (t.c.clips[t.x.node[r]] != 0 and @reduce(.Or, @as(V4, extra.radii) > @as(V4, @splat(0)))) return true;
+        const moved = !@reduce(.And, @as(V6, extra.transform) == @as(V6, identity));
+        const rounded = (t.c.clips[t.x.node[r]] != 0) & @reduce(.Or, @as(V4, extra.radii) > @as(V4, @splat(0)));
+        exact = exact | moved | rounded;
     }
-    return false;
+    return exact;
 }
 
 /// Maps a logical edge to a physical pixel boundary without changing layout measurements.
