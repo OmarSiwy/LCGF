@@ -96,8 +96,8 @@ pub fn check(comptime B: type) void {
 /// Whether back end `B` draws `canvas` commands: it declares `drawCanvas(*const B, B.Pass, k: u32)`,
 /// drawing `DrawList.canvases[k]` inside `customs[k]`. `drawUntilCustom` skips canvas commands
 /// for any other back end, which draws nothing there; `capabilities.checkDraw` with
-/// `Profile.canvas` false reports them as `UnsupportedFeature`. Only sw draws them until each
-/// GPU back end has its canvas pipeline (docs/plans/schemify.md, C4).
+/// `Profile.canvas` false reports them as `UnsupportedFeature`. sw draws them, and so does every
+/// GPU back end whose renderer was given `Desc.canvas_rows` (src/render/gpu/canvas.zig).
 pub fn drawsCanvas(comptime B: type) bool {
     return @hasDecl(B, "drawCanvas");
 }

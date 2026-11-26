@@ -66,8 +66,9 @@ pub const Profile = struct {
     custom_material: bool = false,
     inline_custom: bool = false,
     depth_scene: bool = false,
-    /// The back end draws `canvas` commands (it declares `drawCanvas`: sw); the others draw
-    /// nothing for them, and `checkDraw` reports a canvas as `UnsupportedFeature`.
+    /// The back end draws `canvas` commands: it declares `drawCanvas` (sw, and every GPU back
+    /// end) and, on a GPU, was given `Desc.canvas_rows`. Otherwise it draws nothing for them,
+    /// and `checkDraw` reports a canvas as `UnsupportedFeature`.
     canvas: bool = false,
 
     pub const stock: Profile = .{};

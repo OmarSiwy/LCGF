@@ -1,13 +1,14 @@
 //! The canvas batch in software: `DrawList.canvases[k]` drawn inside custom draw k, with the
 //! distance functions of src/draw/canvas.zig, `simd.lanes` pixels of a row at a time as the
-//! quad shader loop does (sw.zig `shadeRows`). The GPU back ends' canvas.wgsl (C4 in
-//! docs/plans/schemify.md) repeats this file; the canvas golden holds them to the same pixels.
+//! quad shader loop does (sw.zig `shadeRows`). The GPU back ends' src/render/shaders/canvas.wgsl
+//! repeats this file; the canvas golden holds them to the same pixels.
 //!
 //! Per instance: one decode (`canvas.Shape.of`), one test of its pixel box against the
 //! target's scissor and the node, and one branch on its kind, which picks the loop compiled
 //! for it. Per pixel there is no branch. The node clips like a quad's clip, by pixel centre
 //! (its rect half open, its clip closed); rounded clip corners and a transformed node are not
-//! applied (ponytail: canvases in transformed or rounded parents come with C4's shader).
+//! applied, here or in canvas.wgsl (ponytail: add both together when a canvas sits in a
+//! transformed or rounded parent).
 //! Output is premultiplied "over", in 8 bits per channel through `sw.overColor`.
 
 const std = @import("std");
