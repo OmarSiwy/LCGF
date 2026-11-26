@@ -1,3 +1,4 @@
+#include <cstdlib>
 // The C++ side of the static UIs' gate (bindings/check/run.sh): the comptime examples' `.zon`
 // (src/abi/testdata/static/) through lcgf-gen --static and lcgf::StaticUi, over the frames of
 // bindings/check/ct_dump.zig, dumped in its format. The dump must equal Zig's comptime pipeline's.
@@ -92,7 +93,8 @@ int run(const char* name, const char* how, U& ui, std::uint32_t frames, const ch
     const bool bench = std::strcmp(out_path, "--bench") == 0;
     std::vector<char> o, ev;
     long long best = -1;
-    for (int rep = 0; rep < (bench ? 50 : 1); ++rep) {
+    const int reps_ = std::getenv("LCGF_REPS") ? std::atoi(std::getenv("LCGF_REPS")) : 50;
+    for (int rep = 0; rep < (bench ? reps_ : 1); ++rep) {
         const auto t0 = std::chrono::steady_clock::now();
         for (std::uint32_t f = 0; f < frames; ++f) {
             texts_of(ui.state, f);

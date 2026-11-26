@@ -71,7 +71,10 @@ pub fn main(init: std.process.Init) !void {
     const name = args.next() orelse return error.Usage;
     const frames = try std.fmt.parseInt(u32, args.next() orelse return error.Usage, 10);
     const out_path = args.next() orelse return error.Usage;
-    const partial = if (args.next()) |a| std.mem.eql(u8, a, "partial") else false;
+    const a4 = args.next();
+    const partial = if (a4) |a| std.mem.eql(u8, a, "partial") else false;
+    if (a4) |a| g_mode = a;
+    if (args.next()) |r| g_reps = try std.fmt.parseInt(u32, r, 10);
     inline for (ct.static_examples) |e| if (std.mem.eql(u8, e.name, name)) {
         if (partial) return runPartial(e, init.io, arena, frames, out_path);
         return run(e, init.io, arena, frames, out_path);
@@ -99,9 +102,10 @@ fn run(comptime e: anytype, io: std.Io, arena: std.mem.Allocator, frames: u32, o
     const bench = std.mem.eql(u8, out_path, "--bench");
     var out: std.ArrayList(u8) = .empty;
     var events: std.ArrayList(u8) = .empty;
-    const reps: u32 = if (bench) 50 else 1;
+    const reps: u32 = if (bench) envReps() else 1;
+    const skip_zig = bench and std.mem.eql(u8, g_mode, "engine");
     var best: u64 = std.math.maxInt(u64);
-    for (0..reps) |_| {
+    for (0..if (skip_zig) 0 else reps) |_| {
         const start = std.Io.Timestamp.now(io, .awake);
         for (0..frames) |fi| {
             const f: u32 = @intCast(fi);
@@ -109,7 +113,17 @@ fn run(comptime e: anytype, io: std.Io, arena: std.mem.Allocator, frames: u32, o
             // The labels' text, gathered in label order as the static UI's frame does.
             const at = ct.gatherText(e.State, &nodes, &state, &strings, spans);
             const sel = L.Regions.select(e.State, &state);
+            if (std.mem.eql(u8, g_mode, "gather")) {
+                std.mem.doNotOptimizeAway(&strings);
+                std.mem.doNotOptimizeAway(&spans_buf);
+                std.mem.doNotOptimizeAway(&sel);
+                continue;
+            }
             L.runLiveText(&scratch, &ram, viewport(f), sel, spans, lcgf.protocol.Mono{});
+            if (std.mem.eql(u8, g_mode, "layout")) {
+                std.mem.doNotOptimizeAway(&ram);
+                continue;
+            }
             Pt.rebuildLiveText(&state, &ram, sel, spans, strings[0..at], &d, &dirty);
             if (!bench) {
                 try dumpDraw(arena, &out, &d);
@@ -142,7 +156,8 @@ fn run(comptime e: anytype, io: std.Io, arena: std.mem.Allocator, frames: u32, o
         best = @min(best, ns);
     }
     if (bench) {
-        std.debug.print("ct {s:<9} zig     {d:>7} ns/frame\n", .{ e.name, best / frames });
+        if (!skip_zig) std.debug.print("ct {s:<9} zig     {d:>7} ns/frame\n", .{ e.name, best / frames });
+        if (!std.mem.eql(u8, g_mode, "engine") and g_mode.len > 0) return;
         return benchEngine(e, io, arena, frames);
     }
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = out.items });
@@ -160,7 +175,7 @@ fn benchEngine(comptime e: anytype, io: std.Io, arena: std.mem.Allocator, frames
     const ui = try ct.Ui.init(words, buf);
     const cstate = try arena.alignedAlloc(u8, .@"8", @max(st.size, 1));
     var best: u64 = std.math.maxInt(u64);
-    for (0..50) |_| {
+    for (0..envReps()) |_| {
         const start = std.Io.Timestamp.now(io, .awake);
         for (0..frames) |fi| {
             const f: u32 = @intCast(fi);
@@ -245,4 +260,10 @@ fn runPartial(comptime e: anytype, io: std.Io, arena: std.mem.Allocator, frames:
         for (0..P.quad_count) |k| try out.append(arena, @intFromBool(dirty.isSet(k)));
     }
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = out.items });
+}
+
+var g_mode: []const u8 = "";
+var g_reps: u32 = 50;
+fn envReps() u32 {
+    return g_reps;
 }
