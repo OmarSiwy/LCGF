@@ -1,7 +1,7 @@
 //! fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`, a `.zon`
-//! `.text`), one meaning in every engine: Zig's front ends and seam, and Rust's native engine
-//! (bindings/rust/lcgf/src/ct.rs), which ports the writers below and must give the same bytes. Tier 0: no allocator; the caller holds the
-//! segments and the output.
+//! `.text`), one meaning in every front end: Zig's comptime UIs and seam, and the static UIs of C++
+//! and Rust, whose frames are Zig's. Tier 0: no allocator; the caller holds the segments and the
+//! output.
 //!
 //! The language:
 //! - `{}` is the next argument: a string as it is, a bool as `true` or `false`, an integer in

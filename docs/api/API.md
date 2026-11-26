@@ -308,7 +308,7 @@ Fields: `buf`, `len`, `overflow`
 
 ## `lcgf.text_format` (src/core/fmt.zig)
 
-fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`, a `.zon` `.text`), one meaning in every engine: Zig's front ends and seam, and Rust's native engine (bindings/rust/lcgf/src/ct.rs), which ports the writers below and must give the same bytes.
+fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`, a `.zon` `.text`), one meaning in every front end: Zig's comptime UIs and seam, and the static UIs of C++ and Rust, whose frames are Zig's.
 
 ### Top level
 

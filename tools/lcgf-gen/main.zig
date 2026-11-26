@@ -398,80 +398,8 @@ fn stateRust(arena: std.mem.Allocator, out: *std.ArrayList(u8), state: []const z
     for (fields) |f| try out.print(arena, "const _: () = assert!(::core::mem::offset_of!(State, {s}) == {d});\n", .{ f.name, f.offset });
 }
 
-/// One tree of a static UI's words, as the passes compiled in C++ and Rust read it: the
-/// columns they use, `n` rows each (floats as bits), `border` resolved from the extras, and
-/// the regions with their choice windows in one list.
-const NativeBlock = struct {
-    n: u32,
-    u32s: [names.len][2][]const u32,
-    clips: []const u8,
-    border: []const u32,
-    label_rows: []const u32,
-    regions: []const [8]u32,
-    alts: []const [2]u32,
-
-    /// The u32 / f32 columns emitted, by their C++ and Rust names; `true`: per axis.
-    const names = [_][]const u8{ "parent", "min", "max", "grow", "pct", "pad_lo", "pad_hi", "offset", "scroll", "main", "gap", "gap_total", "flow", "shrink", "align_main", "align_cross" };
-    const axes = [_]bool{ false, true, true, true, true, true, true, true, true, true, false, false, false, false, false, false };
-
-    fn column(words: []const u32, b: *const ct.Block, field: []const u8, axis: u32) ?u32 {
-        const offs = words[b.cols..][0..ct.column_arrays.len];
-        for (ct.column_arrays, 0..) |c, k| if (std.mem.eql(u8, c.field, field) and c.axis == axis) {
-            return if (offs[k] == ct.none) null else offs[k];
-        };
-        unreachable;
-    }
-
-    fn decode(arena: std.mem.Allocator, words: []const u32, h: *const ct.Header, b: *const ct.Block) !NativeBlock {
-        const n = b.n;
-        var out: NativeBlock = .{ .n = n, .u32s = undefined, .clips = &.{}, .border = &.{}, .label_rows = words[b.label_rows..][0..h.labels], .regions = &.{}, .alts = &.{} };
-        const zeros = try arena.alloc(u32, n);
-        @memset(zeros, 0);
-        for (names, axes, 0..) |name, per_axis, k| for (0..2) |a| {
-            if (!per_axis and a == 1) {
-                out.u32s[k][1] = &.{};
-                continue;
-            }
-            // The masked columns' sources when regions rewrite them; the gap totals are then
-            // made each frame from `gap`.
-            const src: ?u32 = if (h.regions > 0 and std.mem.eql(u8, name, "max"))
-                b.max_src[a]
-            else if (h.regions > 0 and std.mem.eql(u8, name, "flow"))
-                b.flow_src
-            else if (h.has_windows != 0 and std.mem.eql(u8, name, "scroll"))
-                b.scroll_src[a]
-            else
-                column(words, b, name, @intCast(a));
-            out.u32s[k][a] = if (src) |o| words[o..][0..n] else zeros;
-        };
-        out.clips = std.mem.sliceAsBytes(words[column(words, b, "clips", 0).?..])[0..n];
-        // `x.row[extra[i]].border`, row by row.
-        const extra = words[column(words, b, "extra", 0).?..][0..n];
-        const xw = @sizeOf(lcgf.tree.Extra) / 4;
-        const bw = @offsetOf(lcgf.tree.Extra, "border") / 4;
-        const border = try arena.alloc(u32, n);
-        for (border, extra) |*o, e| o.* = words[b.extras + e * xw + bw];
-        out.border = border;
-        var regions: std.ArrayList([8]u32) = .empty;
-        var alts: std.ArrayList([2]u32) = .empty;
-        const rs = std.mem.bytesAsSlice(ct.Region, std.mem.sliceAsBytes(words[b.regions..][0 .. h.regions * @sizeOf(ct.Region) / 4]));
-        for (rs) |r| {
-            const first: u32 = @intCast(alts.items.len);
-            if (r.kind == @backingInt(ct.RegionKind.choice)) {
-                for (0..r.max + 1) |k| try alts.append(arena, .{ words[r.alts + 2 * k], words[r.alts + 2 * k + 1] });
-            }
-            try regions.append(arena, .{ r.kind, r.row, r.end, r.stride, r.max, first, @intFromBool(r.scroll_offset != ct.none), @bitCast(r.height) });
-        }
-        if (alts.items.len == 0) try alts.append(arena, .{ 0, 0 });
-        out.regions = regions.items;
-        out.alts = alts.items;
-        return out;
-    }
-};
-
-/// A static UI's generated code: the state, the tables as compile-time constants for the
-/// passes compiled in the program's language (`lcgf::ct`), and the words (`ct.make`) for
-/// liblcgf's frame behind the seam.
+/// A static UI's generated code: the state, the widgets and fields, the words (`ct.make`) for
+/// liblcgf's frame, and the UI's own frame specialized to them (as Zig or C).
 const StaticGen = struct {
     arena: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -505,61 +433,6 @@ const StaticGen = struct {
             .color => "std::uint32_t",
             .other => unreachable,
         };
-    }
-
-    /// `n` words as a list: `{ 0x.., .. }` (C++) or `[0x.., ..]` (Rust).
-    fn list(g: *const StaticGen, ws: []const u32, in_rust: bool) !void {
-        try g.print("{s}", .{if (in_rust) "[" else "{"});
-        for (ws, 0..) |w, i| try g.print("{s}0x{x}", .{ if (i == 0) "" else ", ", w });
-        if (!in_rust and ws.len == 0) try g.print("0", .{});
-        try g.print("{s}", .{if (in_rust) "]" else "}"});
-    }
-
-    fn sel(ws: []const u32, k: usize) []const u32 {
-        return ws[k..][0..1];
-    }
-
-    /// The body of `texts`: each label in label order written to the sink `o` (its string
-    /// field, or its format as straight-line calls: the format is read here, not at run
-    /// time), then its end in the strings, `end[k]`.
-    fn texts(g: *const StaticGen, comptime in_rust: bool) !void {
-        const s = if (in_rust) "_s" else "s";
-        var k: usize = 0;
-        for (g.x.nodes) |nd| {
-            if (!nd.isLabel()) continue;
-            if (nd.format) |f| {
-                for (f.segs) |sg| {
-                    if (sg.kind == .literal) {
-                        try g.print(if (in_rust) " o.put(b\"" else " o.put(\"", .{});
-                        for (f.text[sg.start..][0..sg.len]) |c| {
-                            if (c == '"' or c == '\\') try g.print("\\{c}", .{c}) else if (c >= 0x20 and c < 0x7f) try g.print("{c}", .{c}) else if (in_rust) try g.print("\\x{x:0>2}", .{c}) else try g.print("\\{o:0>3}", .{c});
-                        }
-                        if (in_rust) try g.print("\");", .{}) else try g.print("\", {d});", .{sg.len});
-                        continue;
-                    }
-                    const name = g.x.fields[f.args[sg.arg]].name;
-                    switch (sg.kind) {
-                        .str => try g.print(if (in_rust) " o.put_str({s}.{s});" else " o.put({s}.{s});", .{ s, name }),
-                        .bool => try g.print(" o.put_bool({s}.{s});", .{ s, name }),
-                        .u32, .u8 => try g.print(if (in_rust) " o.put_uint({s}.{s} as u64);" else " o.put_uint({s}.{s});", .{ s, name }),
-                        .f32 => try g.print(" o.put_f32({s}.{s}, {d});", .{ s, name, sg.prec }),
-                        .literal => unreachable,
-                    }
-                }
-            } else try g.print(if (in_rust) " o.put_str({s}.{s});" else " o.put({s}.{s});", .{ s, g.x.fields[nd.label_field].name });
-            try g.print(if (in_rust) " end[{d}] = o.len as u32;" else " end[{d}] = o.len;", .{k});
-            k += 1;
-        }
-    }
-
-    const Selector = struct { field: plan.Field, scroll: ?[]const u8 };
-    fn selectors(g: *const StaticGen) []const Selector {
-        var out: std.ArrayList(Selector) = .empty;
-        for (g.x.nodes) |nd| if (nd.region != .none) out.append(g.arena, .{
-            .field = g.x.fields[nd.region_field],
-            .scroll = if (nd.scroll_field != ct.none) g.x.fields[nd.scroll_field].name else null,
-        }) catch @panic("OOM");
-        return out.items;
     }
 
     fn widgetsRust(g: *const StaticGen) !void {
@@ -802,14 +675,12 @@ const StaticGen = struct {
     }
 
     fn rust(g: *const StaticGen) !void {
-        const h = g.header();
-        const n = h.full.n;
-        const full = try NativeBlock.decode(g.arena, g.words, h, &h.full);
+        const name = g.x.spec.name;
         try g.print(
             \\// Generated by lcgf-gen --static from {s}. Do not edit: change the spec and run lcgf-gen again.
-            \\// A static UI: the comptime pipeline's tables (src/abi/ct.zig: the fold, the constant columns
-            \\// and the paint templates), the values Zig makes at compile time, as constants the passes of
-            \\// `lcgf::ct` are compiled against. `SeamUi` runs the same UI through liblcgf instead.
+            \\// A static UI: liblcgf's static-UI frame (src/abi/ct.zig, the comptime pipeline's frame over the
+            \\// tables lcgf-gen made of the spec), specialized to this UI by its own frame, which the crate's
+            \\// build script builds with `lcgf_build::static_ui` (lcgf-gen --static --lang zig, or c).
             \\
             \\
         , .{g.source});
@@ -818,181 +689,52 @@ const StaticGen = struct {
         try g.widgetsRust();
         try g.print("/// The state's fields, for `relayout` and `patch`.\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n#[repr(u32)]\npub enum Field {{\n", .{});
         for (g.x.fields, 0..) |f, k| try g.print("    {s} = {d},\n", .{ camel(g.arena, f.name), k });
-        try g.print("}}\n\n", .{});
-        try g.print("/// The tables, as compile-time constants (floats as their bits).\npub struct Tables;\n\n", .{});
-        try g.blockRust("FULL", &full);
-        if (h.folded > 0) {
-            const skel = try NativeBlock.decode(g.arena, g.words, h, &h.skel);
-            try g.blockRust("SKEL", &skel);
-        }
-        try g.print(
-            \\impl ::lcgf::ct::Tables for Tables {{
-            \\    type State = State;
-            \\    type Widget = Widget;
-            \\    type Event = Event;
-            \\    type Field = Field;
-            \\    const N: usize = {d};
-            \\    const LABELS: usize = {d};
-            \\    const QUADS: usize = {d};
-            \\    const BATCHES: usize = {d};
-            \\    const REGIONS: usize = {d};
-            \\    const SLOT_COUNT: usize = {d};
-            \\    const COORD: u32 = {d};
-            \\    const STRING_CAP: usize = {d};
-            \\    const FOLDED: bool = {};
-            \\    const LIVE: bool = {};
-            \\    const WINDOWS: bool = {};
-            \\    const HAS_CHILD_CLIP: bool = {};
-            \\    const ROOT_WHEN: bool = {};
-            \\    const SLOTS_SHARED: bool = {};
-            \\    const TEXT_PX: u32 = 0x{x};
-            \\    const TEXT_FONT: u32 = {d};
-            \\    const ADVANCE: u32 = 0x{x};
-            \\    const LINE: u32 = 0x{x};
-            \\    const FULL: ::lcgf::ct::Block = FULL;
-            \\    const SKEL: ::lcgf::ct::Block = {s};
-            \\
-        , .{
-            n,                                          h.labels,                                           h.quads,                                         h.batches,                            h.regions,
-            h.slot_count,                               h.coord,                                            h.string_cap,                                    h.folded > 0,                         h.regions > 0,
-            h.has_windows != 0,                         h.has_child_clip != 0,                              h.root_when != 0,                                h.slot_count != n,                    @as(u32, @bitCast((lcgf.types.TextStyle{}).px)),
-            @backingInt((lcgf.types.TextStyle{}).font), @as(u32, @bitCast((lcgf.protocol.Mono{}).advance)), @as(u32, @bitCast((lcgf.protocol.Mono{}).line)), if (h.folded > 0) "SKEL" else "FULL",
-        });
-        const empty: []const u32 = &.{};
-        const folded = h.folded > 0;
-        try g.sliceRust("EXPAND_BASE", if (folded) g.words[h.expand[0]..][0..n] else empty);
-        try g.print("    const EXPAND_REL: [&'static [u32]; 2] = [&", .{});
-        try g.list(if (folded) g.words[h.expand[1]..][0..n] else empty, true);
-        try g.print(", &", .{});
-        try g.list(if (folded) g.words[h.expand[2]..][0..n] else empty, true);
-        try g.print("];\n    const EXPAND_SIZE: [&'static [u32]; 2] = [&", .{});
-        try g.list(if (folded) g.words[h.expand[3]..][0..n] else empty, true);
-        try g.print(", &", .{});
-        try g.list(if (folded) g.words[h.expand[4]..][0..n] else empty, true);
-        try g.print("];\n", .{});
-        try g.sliceRust("EXPAND_KEEP", if (folded) g.words[h.expand[5]..][0..n] else empty);
-        try g.sliceRust("PAINT_NODE", g.words[h.paint_node..][0..h.quads]);
-        try g.sliceRust("CLIP_NODE", g.words[h.clip_node..][0..h.quads]);
-        try g.sliceRust("KEYS", g.words[h.keys..][0..h.quads]);
-        try g.rowsRust("TEMPLATES", g.words[h.templates..][0 .. h.quads * 34], 34);
-        try g.sliceRust("BATCH_FIRST", g.words[h.batch_first..][0..h.batches]);
-        try g.sliceRust("BATCH_COUNT", g.words[h.batch_count..][0..h.batches]);
-        try g.sliceRust("BATCH_KEY", g.words[h.batch_key..][0..h.batches]);
-        try g.rowsRust("LABEL_PLANS", g.words[h.label_plans..][0 .. h.labels * 8], 8);
-        {
-            const ws = g.x.widgets;
-            const rows = try g.arena.alloc(u32, ws.len);
-            const order = try g.arena.alloc(u32, ws.len);
-            for (ws, rows, order, 0..) |w, *r, *o, k| {
-                r.* = w.row;
-                o.* = @intCast(k);
-            }
-            try g.sliceRust("WIDGET_ROWS", rows);
-            try g.print("    const WIDGET_SLIDER: &'static [bool] = &[", .{});
-            for (ws, 0..) |w, k| try g.print("{s}{}", .{ if (k == 0) "" else ", ", w.slider });
-            try g.print("];\n", .{});
-            try g.sliceRust("FOCUS_ORDER", order);
-            try g.print("    fn widget(slot: usize) -> Widget {{\n        match slot {{\n", .{});
-            for (ws, 0..) |w, k| try g.print("            {d} => Widget::{s},\n", .{ k, camel(g.arena, w.name) });
-            try g.print("            _ => unreachable!(),\n        }}\n    }}\n    fn event(slot: usize, _value: f32) -> Event {{\n        match slot {{\n", .{});
-            for (ws, 0..) |w, k| try g.print("            {d} => Event::{s}{s},\n", .{ k, camel(g.arena, w.name), if (w.slider) "(_value)" else "" });
-            try g.print("            _ => unreachable!(),\n        }}\n    }}\n", .{});
-        }
-        try g.rowsRust("SPANS", g.words[h.spans..][0 .. h.fields * 2], 2);
-        try g.rowsRust("PATCHES", g.words[h.patches..][0 .. h.patch_count * 4], 4);
-        try g.print("    #[inline(always)]\n    fn field_index(f: Field) -> usize {{\n        f as usize\n    }}\n    #[inline(always)]\n    fn color(_s: &State, field: usize) -> u32 {{\n        match field {{\n", .{});
-        for (g.x.fields, 0..) |f, k| if (f.type == .color) try g.print("            {d} => _s.{s},\n", .{ k, f.name });
-        try g.print("            _ => 0,\n        }}\n    }}\n", .{});
-        try g.sliceRust("SLOT_OF", g.words[h.slots..][0..n]);
-        try g.sliceRust("SLOT_DEFAULTS", g.words[h.slot_defaults..][0..h.slot_count]);
-        try g.print("    #[inline(always)]\n    fn texts(_s: &State, o: &mut ::lcgf::ct::Sink<'_>, end: &mut [u32]) {{", .{});
-        try g.texts(true);
-        try g.print(" }}\n    #[inline(always)]\n    fn select(_s: &State, _n: &mut [u32], _scroll: &mut [f32]) {{", .{});
-        for (g.selectors(), 0..) |sl, k| {
-            try g.print(" _n[{d}] = _s.{s} as u32;", .{ k, sl.field.name });
-            if (sl.scroll) |sc| try g.print(" _scroll[{d}] = _s.{s};", .{ k, sc }) else try g.print(" _scroll[{d}] = 0.0;", .{k});
-        }
-        const skel_n = if (h.folded > 0) h.skel.n else n;
-        try g.print(
-            \\ }}
-            \\}}
-            \\
-            \\/// The UI: a value holding its state and its frame's columns, compiled against `Tables`.
-            \\pub type Ui = ::lcgf::ct::Ui<Tables, {d}, {d}, {d}, {d}, {d}, {d}>;
-            \\
-            \\/// The same UI through liblcgf's frame (lcgf.h), over these words.
-            \\pub static WORDS: ::lcgf::StaticTables<{d}> = ::lcgf::StaticTables([
-        , .{ n, skel_n, @max(h.labels, 1), h.quads + 1, h.labels + 1, h.quads + h.labels + 4, g.words.len });
+        try g.print("}}\n\n/// The tables (`ct.make`), for liblcgf's frame.\npub static WORDS: ::lcgf::StaticTables<{d}> = ::lcgf::StaticTables([", .{g.words.len});
         try g.words_();
         try g.print(
             \\
             \\]);
-            \\/// Bytes `SeamUi` needs in your buffer, for any lane count.
+            \\/// Bytes the UI needs in your buffer, for any lane count.
             \\pub const BYTES: usize = {0d};
             \\
             \\unsafe extern "C" {{
             \\    fn lcgf_ui_{1s}_frame(buf: *mut u8, bytes: usize, state: *const u8, width: f32, height: f32, out: *mut ::core::ffi::c_void);
             \\}}
             \\
-            \\/// The UI through liblcgf's frame, specialized to these tables by `lcgf_build::static_ui`.
-            \\pub struct SeamUi<'a> {{
-            \\    pub inner: ::lcgf::StaticUi<'a, State>,
+            \\/// This UI's types and tables, for `lcgf::StaticUi`.
+            \\pub struct Spec;
+            \\
+            \\impl ::lcgf::StaticSpec for Spec {{
+            \\    type State = State;
+            \\    type Widget = Widget;
+            \\    type Event = Event;
+            \\    type Field = Field;
+            \\    const WORDS: &'static [u32] = &WORDS.0;
+            \\    const FRAME: ::lcgf::StaticFrame = lcgf_ui_{1s}_frame;
+            \\    fn field(f: Field) -> u32 {{
+            \\        f as u32
+            \\    }}
+            \\    #[allow(unreachable_code)]
+            \\    fn widget_row(w: Widget) -> u32 {{
+            \\        w.row()
+            \\    }}
+            \\    fn widget(row: u32) -> Widget {{
+            \\        match row {{
+            \\
+        , .{ g.bytes, name });
+        for (g.x.widgets) |w| try g.print("            {d} => Widget::{s},\n", .{ w.row, camel(g.arena, w.name) });
+        try g.print("            _ => unreachable!(),\n        }}\n    }}\n    fn event(row: u32, _value: f32) -> Event {{\n        match row {{\n", .{});
+        for (g.x.widgets) |w| try g.print("            {d} => Event::{s}{s},\n", .{ w.row, camel(g.arena, w.name), if (w.slider) "(_value)" else "" });
+        try g.print(
+            \\            _ => unreachable!(),
+            \\        }}
+            \\    }}
             \\}}
             \\
-            \\impl<'a> SeamUi<'a> {{
-            \\    pub fn new(buffer: &'a mut ::lcgf::Buffer<BYTES>) -> Result<Self, ::lcgf::Status> {{
-            \\        Ok(Self {{ inner: ::lcgf::StaticUi::new(&WORDS.0, buffer.bytes(), State::default(), lcgf_ui_{1s}_frame)? }})
-            \\    }}
-            \\    pub fn frame(&mut self, width: f32, height: f32) -> ::lcgf::DrawList<'_> {{
-            \\        self.inner.frame(width, height)
-            \\    }}
-            \\}}
+            \\/// The UI, in your buffer: `Ui::new(buffer.bytes(), State::default())` with a `Buffer<BYTES>`.
+            \\pub type Ui<'a> = ::lcgf::StaticUi<'a, Spec>;
             \\
-        , .{ g.bytes, g.x.spec.name });
-    }
-
-    fn sliceRust(g: *const StaticGen, name: []const u8, ws: []const u32) !void {
-        try g.print("    const {s}: &'static [u32] = &", .{name});
-        try g.list(ws, true);
-        try g.print(";\n", .{});
-    }
-
-    fn rowsRust(g: *const StaticGen, name: []const u8, ws: []const u32, comptime per: usize) !void {
-        try g.print("    const {s}: &'static [[u32; {d}]] = &[", .{ name, per });
-        var k: usize = 0;
-        while (k < ws.len) : (k += per) {
-            try g.print("{s}", .{if (k == 0) "" else ", "});
-            try g.list(ws[k..][0..per], true);
-        }
-        try g.print("];\n", .{});
-    }
-
-    fn blockRust(g: *const StaticGen, name: []const u8, b: *const NativeBlock) !void {
-        try g.print("const {s}: ::lcgf::ct::Block = ::lcgf::ct::Block {{\n    n: {d},\n", .{ name, b.n });
-        for (NativeBlock.names, NativeBlock.axes, 0..) |col, per_axis, k| {
-            if (per_axis) {
-                try g.print("    {s}: [&", .{col});
-                try g.list(b.u32s[k][0], true);
-                try g.print(", &", .{});
-                try g.list(b.u32s[k][1], true);
-                try g.print("],\n", .{});
-            } else {
-                try g.print("    {s}: &", .{col});
-                try g.list(b.u32s[k][0], true);
-                try g.print(",\n", .{});
-            }
-        }
-        try g.print("    clips: &[", .{});
-        for (b.clips, 0..) |c, i| try g.print("{s}{d}", .{ if (i == 0) "" else ", ", c });
-        try g.print("],\n    border: &", .{});
-        try g.list(b.border, true);
-        try g.print(",\n    label_rows: &", .{});
-        try g.list(b.label_rows, true);
-        try g.print(",\n    regions: &[", .{});
-        for (b.regions, 0..) |r, i| try g.print("{s}::lcgf::ct::Region {{ kind: {d}, row: {d}, end: {d}, stride: {d}, max: {d}, alts: {d}, scroll: {d}, height: 0x{x} }}", .{ if (i == 0) "" else ", ", r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7] });
-        try g.print("],\n    alts: &[", .{});
-        for (b.alts, 0..) |w, i| try g.print("{s}[{d}, {d}]", .{ if (i == 0) "" else ", ", w[0], w[1] });
-        try g.print("],\n}};\n\n", .{});
+        , .{});
     }
 };
 

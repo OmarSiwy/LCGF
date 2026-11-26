@@ -1,6 +1,6 @@
 //! A static UI's frame, built from a crate's build script, for `include_ui!(.., static)`'s
-//! `SeamUi`: liblcgf's static frame specialized to the UI's tables, as Zig's compiler
-//! specializes a comptime UI.
+//! `Ui`: liblcgf's static frame specialized to the UI's tables, as Zig's compiler specializes a
+//! comptime UI.
 //!
 //! ```ignore
 //! // build.rs, with `lcgf` a dependency and `lcgf-build` a build-dependency

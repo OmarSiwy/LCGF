@@ -1,9 +1,10 @@
 //! The Rust side of the static UIs' gate (bindings/check/run.sh): the comptime examples' `.zon`
-//! (src/abi/testdata/static/) through `include_ui!(.., static)` and `lcgf::StaticUi`, over the
-//! frames of bindings/check/ct_dump.zig, dumped in its format. The dump must equal Zig's
-//! comptime pipeline's.
+//! (src/abi/testdata/static/) through `include_ui!(.., static)` and `lcgf::StaticUi` (liblcgf's
+//! static frame, specialized per UI by this crate's build script), over the frames of
+//! bindings/check/ct_dump.zig, dumped in its format. The dump must equal Zig's comptime
+//! pipeline's.
 //!
-//!   lcgf-ct-check <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter> <frames> <out.bin|--bench> [seam|partial]
+//!   lcgf-ct-check <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter> <frames> <out.bin|--bench> [partial]
 //!
 //! Field k of frame f's state is what src/abi/ct.zig's `stateFor` makes (see `text`, `flag`,
 //! `count`, `pick` and `value`).
@@ -116,18 +117,15 @@ fn tab_of(f: u32) -> [KeyEvent; 1] {
     }]
 }
 
-/// One UI's frames: `set` writes the state for frame f, `frame` runs one, `events` (the
-/// compiled UI only) runs frame f's input and gives the event's widget row, value bits and the
-/// focus row.
-fn run<U>(
+/// One UI's frames: `set` writes the state for frame f, then a frame runs, then frame f's
+/// input: the event's widget row, value bits and the focus row.
+fn run<'a, T: lcgf::StaticSpec>(
     name: &str,
-    how: &str,
     frames: u32,
     out: &str,
-    mut ui: U,
-    set: impl Fn(&mut U, u32),
-    frame: impl for<'a> Fn(&'a mut U, f32, f32) -> DrawList<'a>,
-    events: Option<fn(&mut U, u32) -> [u32; 3]>,
+    mut ui: lcgf::StaticUi<'a, T>,
+    set: impl Fn(&mut T::State, u32),
+    event: impl Fn(&T::Event) -> (u32, u32),
 ) {
     let bench = out == "--bench";
     let mut o = Vec::new();
@@ -140,15 +138,23 @@ fn run<U>(
     for _ in 0..(if bench { reps_ } else { 1 }) {
         let t0 = std::time::Instant::now();
         for f in 0..frames {
-            set(&mut ui, f);
+            set(&mut ui.state, f);
             let (w, h) = viewport(f);
-            let d = frame(&mut ui, w, h);
+            let d = ui.frame(w, h);
             if !bench {
                 dump(&mut o, &d);
-                if let Some(e) = events {
-                    for v in e(&mut ui, f) {
-                        put(&mut ev, v);
-                    }
+                let tab = tab_of(f);
+                let input = input_of(f, &tab);
+                let mut e = [u32::MAX, 0, u32::MAX];
+                if let Some(x) = ui.pointer(&input) {
+                    (e[0], e[1]) = event(&x);
+                }
+                ui.focus_keys(&input, Input::TAB);
+                if let Some(w) = ui.focus() {
+                    e[2] = T::widget_row(w);
+                }
+                for v in e {
+                    put(&mut ev, v);
                 }
             }
         }
@@ -156,66 +162,30 @@ fn run<U>(
     }
     if bench {
         println!(
-            "ct {name:<9} {how:<7} {:>7} ns/frame",
+            "ct {name:<9} {:<7} {:>7} ns/frame",
+            "rust",
             best / frames as u128
         );
     } else {
         std::fs::write(out, o).expect("writing the dump");
-        if events.is_some() {
-            std::fs::write(format!("{out}.events"), ev).expect("writing the events");
-        }
+        std::fs::write(format!("{out}.events"), ev).expect("writing the events");
     }
 }
 
-/// The UI compiled against its tables (`<m>::Ui`, `lcgf::ct`), or with `seam` through liblcgf
-/// (`<m>::SeamUi`).
+/// UI `m`'s frames, `set` writing frame f's state.
 macro_rules! static_ui {
-    ($m:ident, $name:expr, $seam:expr, $frames:expr, $out:expr, |$s:ident, $f:ident| $set:block) => {{
-        if $seam {
-            let buffer: &'static mut Buffer<{ $m::BYTES }> = Box::leak(Box::new(Buffer::new()));
-            let ui = $m::SeamUi::new(buffer).expect("the tables and the buffer");
-            run(
-                $name,
-                "rust/sm",
-                $frames,
-                $out,
-                ui,
-                |ui, $f| {
-                    let $s = &mut ui.inner.state;
-                    $set
-                },
-                |ui, w, h| ui.frame(w, h),
-                None,
-            )
-        } else {
-            let ui: Box<$m::Ui> = Box::new($m::Ui::new($m::State::default()));
-            run(
-                $name,
-                "rust",
-                $frames,
-                $out,
-                ui,
-                |ui, $f| {
-                    let $s = &mut ui.state;
-                    $set
-                },
-                |ui, w, h| ui.frame(w, h),
-                Some(|ui: &mut Box<$m::Ui>, f: u32| {
-                    let tab = tab_of(f);
-                    let input = input_of(f, &tab);
-                    let mut out = [u32::MAX, 0, u32::MAX];
-                    if let Some(e) = ui.pointer(&input) {
-                        out[0] = e.widget().row();
-                        out[1] = e.value().map(f32::to_bits).unwrap_or(0);
-                    }
-                    ui.focus_keys(&input, Input::TAB);
-                    if let Some(w) = ui.focus() {
-                        out[2] = w.row();
-                    }
-                    out
-                }),
-            )
-        }
+    ($m:ident, $name:expr, $frames:expr, $out:expr, |$s:ident, $f:ident| $set:block) => {{
+        let buffer: &'static mut Buffer<{ $m::BYTES }> = Box::leak(Box::new(Buffer::new()));
+        let ui =
+            $m::Ui::new(buffer.bytes(), $m::State::default()).expect("the tables and the buffer");
+        run(
+            $name,
+            $frames,
+            $out,
+            ui,
+            |$s: &mut $m::State, $f| $set,
+            |e: &$m::Event| (e.widget().row(), e.value().map(f32::to_bits).unwrap_or(0)),
+        )
     }};
 }
 
@@ -229,7 +199,7 @@ fn run_partial<U>(
     full: impl Fn(&mut U, u32),
     text: impl Fn(&mut U, u32),
     colors: impl Fn(&mut U, u32),
-    draw: impl for<'a> Fn(&'a U) -> (DrawList<'a>, &'a [bool]),
+    draw: impl Fn(&mut U, &mut Vec<u8>),
 ) {
     let mut o = Vec::new();
     for f in 0..frames {
@@ -238,16 +208,16 @@ fn run_partial<U>(
             1 | 2 => text(&mut ui, f),
             _ => colors(&mut ui, f),
         }
-        let (d, dirty) = draw(&ui);
-        dump(&mut o, &d);
-        o.extend(dirty.iter().map(|&b| b as u8));
+        draw(&mut ui, &mut o);
     }
     std::fs::write(out, o).expect("writing the dump");
 }
 
 macro_rules! partial_ui {
     ($m:ident, $frames:expr, $out:expr, full: |$s:ident, $f:ident| $full:block, text: |$u:ident, $g:ident| $text:block, colors: |$c:ident, $h:ident| $colors:block) => {{
-        let ui: Box<$m::Ui> = Box::new($m::Ui::new($m::State::default()));
+        let buffer: &'static mut Buffer<{ $m::BYTES }> = Box::leak(Box::new(Buffer::new()));
+        let ui =
+            $m::Ui::new(buffer.bytes(), $m::State::default()).expect("the tables and the buffer");
         run_partial(
             ui,
             $frames,
@@ -265,7 +235,10 @@ macro_rules! partial_ui {
                 $c.clear_dirty();
                 $colors
             },
-            |ui| (ui.draw(), ui.dirty()),
+            |ui, o| {
+                dump(o, &ui.draw());
+                o.extend(ui.dirty().iter().map(|&b| (b != 0) as u8));
+            },
         )
     }};
 }
@@ -323,27 +296,26 @@ fn partial(ui: &str, frames: u32, out: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        eprintln!("usage: lcgf-ct-check <ui> <frames> <out.bin|--bench> [seam]");
+        eprintln!("usage: lcgf-ct-check <ui> <frames> <out.bin|--bench> [partial]");
         std::process::exit(2);
     }
     let frames: u32 = args[2].parse().expect("frames");
     let out = args[3].as_str();
-    let seam = args.get(4).map(|a| a == "seam").unwrap_or(false);
     if args.get(4).map(|a| a == "partial").unwrap_or(false) {
         return partial(args[1].as_str(), frames, out);
     }
     match args[1].as_str() {
-        "mixer" => static_ui!(mixer, "mixer", seam, frames, out, |s, f| {
+        "mixer" => static_ui!(mixer, "mixer", frames, out, |s, f| {
             s.title = text(f, 0);
             s.volume = value(f, 1);
             s.muted = flag(f, 2);
             s.pan = value(f, 3);
         }),
-        "card" => static_ui!(card, "card", seam, frames, out, |s, f| {
+        "card" => static_ui!(card, "card", frames, out, |s, f| {
             s.heading = text(f, 0);
             s.body = text(f, 1);
         }),
-        "settings" => static_ui!(settings, "settings", seam, frames, out, |s, f| {
+        "settings" => static_ui!(settings, "settings", frames, out, |s, f| {
             s.title = text(f, 0);
             s.wifi = flag(f, 1);
             s.bluetooth = flag(f, 2);
@@ -356,42 +328,42 @@ fn main() {
             s.contrast = value(f, 9);
             s.location = flag(f, 10);
         }),
-        "badge" => static_ui!(badge, "badge", seam, frames, out, |s, f| {
+        "badge" => static_ui!(badge, "badge", frames, out, |s, f| {
             s.name = text(f, 0);
             s.level = value(f, 1);
         }),
-        "dash" => static_ui!(dash, "dash", seam, frames, out, |s, f| {
+        "dash" => static_ui!(dash, "dash", frames, out, |s, f| {
             s.title = text(f, 0);
             s.a = text(f, 1);
             s.b = text(f, 2);
             s.c = text(f, 3);
             s.level = value(f, 4);
         }),
-        "todo" => static_ui!(todo, "todo", seam, frames, out, |s, f| {
+        "todo" => static_ui!(todo, "todo", frames, out, |s, f| {
             s.title = text(f, 0);
             s.len = count(f, 1);
             s.footer = flag(f, 2);
             s.mode = pick(f, 3);
         }),
-        "controls" => static_ui!(controls, "controls", seam, frames, out, |s, f| {
+        "controls" => static_ui!(controls, "controls", frames, out, |s, f| {
             s.title = text(f, 0);
             s.muted = flag(f, 1);
             s.volume = value(f, 2);
             s.pan = value(f, 3);
         }),
-        "palette" => static_ui!(palette, "palette", seam, frames, out, |s, f| {
+        "palette" => static_ui!(palette, "palette", frames, out, |s, f| {
             s.title = text(f, 0);
             s.accent = color(f, 1);
             s.edge = color(f, 2);
         }),
-        "meter" => static_ui!(meter, "meter", seam, frames, out, |s, f| {
+        "meter" => static_ui!(meter, "meter", frames, out, |s, f| {
             s.name = text(f, 0);
             s.level = value(f, 1);
             s.count = count(f, 2);
             s.on = flag(f, 3);
             s.peak = value(f, 4);
         }),
-        "feed" => static_ui!(feed, "feed", seam, frames, out, |s, f| {
+        "feed" => static_ui!(feed, "feed", frames, out, |s, f| {
             s.count = count(f, 0);
             s.scroll = value(f, 1);
         }),

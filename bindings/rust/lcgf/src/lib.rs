@@ -29,7 +29,6 @@
 pub use lcgf_macros::{include_shader, include_ui, ui};
 
 pub mod canvas;
-pub mod ct;
 pub mod gpu;
 pub mod runtime;
 
@@ -372,6 +371,18 @@ pub struct StaticTables<const N: usize>(pub [u32; N]);
 unsafe extern "C" {
     fn lcgf_ct_init(tables: *const u32, len: usize, buf: *mut u8, buf_len: usize) -> i32;
     pub fn lcgf_ct_layout() -> u32;
+    fn lcgf_ct_relayout(ui: *mut u8, state: *const u8, field: u32, out: *mut RawDraw) -> i32;
+    fn lcgf_ct_patch(ui: *mut u8, state: *const u8, field: u32);
+    fn lcgf_ct_dirty(ui: *mut u8) -> *const u8;
+    fn lcgf_ct_clear_dirty(ui: *mut u8);
+    fn lcgf_ct_draw(ui: *mut u8, out: *mut RawDraw);
+    fn lcgf_ct_at(ui: *mut u8, x: f32, y: f32) -> u32;
+    fn lcgf_ct_pointer(ui: *mut u8, input: *const Input, widget: *mut u32, value: *mut f32) -> i32;
+    fn lcgf_ct_focus_keys(ui: *mut u8, input: *const Input, tab: u8);
+    fn lcgf_ct_focus(ui: *mut u8) -> u32;
+    fn lcgf_ct_set_focus(ui: *mut u8, widget: u32);
+    fn lcgf_ct_next_focus(ui: *mut u8, from: u32, back: i32) -> u32;
+    fn lcgf_ct_shortcut(list: *const u8, len: usize, code: u8, mods: u8) -> u32;
 }
 
 /// A static UI's own frame, `lcgf_ui_<name>_frame`: liblcgf's static frame specialized to the
@@ -386,49 +397,169 @@ pub type StaticFrame = unsafe extern "C" fn(
     out: *mut core::ffi::c_void,
 );
 
-/// A static UI (lcgf-gen --static): liblcgf's static frame over its tables, in the caller's
-/// buffer, through the UI's own `frame`. A frame reads the labels' text and the regions'
-/// selectors from the state.
-pub struct StaticUi<'a, S> {
-    pub state: S,
-    buf: &'a mut [u8],
-    frame: StaticFrame,
+/// What lcgf-gen --static writes for a UI (`<name>::Spec`): its types, tables and frame.
+pub trait StaticSpec {
+    type State;
+    /// The widgets, valued by their rows.
+    type Widget: Copy;
+    /// An event on a widget: a click, or a slider's value.
+    type Event;
+    /// The state's fields, for `relayout` and `patch`.
+    type Field: Copy;
+    const WORDS: &'static [u32];
+    const FRAME: StaticFrame;
+    fn field(f: Self::Field) -> u32;
+    fn widget_row(w: Self::Widget) -> u32;
+    fn widget(row: u32) -> Self::Widget;
+    fn event(row: u32, value: f32) -> Self::Event;
 }
 
-impl<'a, S> StaticUi<'a, S> {
-    /// Checks the tables once and places the UI at the start of `buf`.
-    pub fn new(
-        tables: &[u32],
-        buf: &'a mut [u8],
-        state: S,
-        frame: StaticFrame,
-    ) -> Result<Self, Status> {
-        let r = unsafe { lcgf_ct_init(tables.as_ptr(), tables.len(), buf.as_mut_ptr(), buf.len()) };
+/// One keyboard shortcut: a scancode, the modifiers that must be held exactly (`Input::SHIFT`,
+/// ...) and the widget it activates. Laid out as lcgf.h's `lcgf_shortcut`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Shortcut<W> {
+    pub code: u8,
+    pub mods: u8,
+    pub widget: W,
+}
+
+/// A static UI (lcgf-gen --static, the generated `<name>::Ui`): liblcgf's static frame over the
+/// UI's tables, specialized to them by the UI's own frame, in the caller's buffer, with its
+/// relayout, colour patches, hit test, pointer events and focus. A frame reads the labels'
+/// text and the regions' selectors from the state.
+pub struct StaticUi<'a, T: StaticSpec> {
+    pub state: T::State,
+    buf: &'a mut [u8],
+    last: RawDraw,
+}
+
+impl<'a, T: StaticSpec> StaticUi<'a, T> {
+    /// Checks the tables once and places the UI at the start of `buf` (a `Buffer<BYTES>`).
+    pub fn new(buf: &'a mut [u8], state: T::State) -> Result<Self, Status> {
+        let r = unsafe {
+            lcgf_ct_init(
+                T::WORDS.as_ptr(),
+                T::WORDS.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
         if r != 0 {
             // SAFETY: lcgf_ct_init returns 0 or one of Status's values.
             return Err(unsafe { core::mem::transmute::<i32, Status>(r) });
         }
-        Ok(Self { state, buf, frame })
+        let mut out = core::mem::MaybeUninit::<RawDraw>::uninit();
+        let last = unsafe {
+            lcgf_ct_draw(buf.as_mut_ptr(), out.as_mut_ptr());
+            out.assume_init()
+        };
+        Ok(Self { state, buf, last })
+    }
+
+    fn state_ptr(&self) -> *const u8 {
+        (&self.state as *const T::State).cast()
     }
 
     /// One frame in a `width` x `height` viewport.
     pub fn frame(&mut self, width: f32, height: f32) -> DrawList<'_> {
-        let mut out = core::mem::MaybeUninit::<RawDraw>::uninit();
-        let raw = unsafe {
-            (self.frame)(
+        let state = self.state_ptr();
+        unsafe {
+            (T::FRAME)(
                 self.buf.as_mut_ptr(),
                 self.buf.len(),
-                (&self.state as *const S).cast(),
+                state,
                 width,
                 height,
-                out.as_mut_ptr().cast(),
+                (&mut self.last as *mut RawDraw).cast(),
             );
-            out.assume_init()
-        };
+        }
+        self.draw()
+    }
+
+    /// The last frame's draw list, with any patches since.
+    pub fn draw(&self) -> DrawList<'_> {
         DrawList {
-            raw,
+            raw: self.last,
             _ui: PhantomData,
         }
+    }
+
+    /// After a frame: lays out again only what `field` moves (ct_layout's `relayout`), and
+    /// paints again. Last frame's viewport and selection stay.
+    pub fn relayout(&mut self, field: T::Field) -> DrawList<'_> {
+        let state = self.state_ptr();
+        unsafe {
+            lcgf_ct_relayout(
+                self.buf.as_mut_ptr(),
+                state,
+                T::field(field),
+                &mut self.last,
+            )
+        };
+        self.draw()
+    }
+
+    /// `field`'s colour into the quads bound to it (ct_paint's `Patches.apply`), which become
+    /// dirty. No layout, no paint.
+    pub fn patch(&mut self, field: T::Field) {
+        let state = self.state_ptr();
+        unsafe { lcgf_ct_patch(self.buf.as_mut_ptr(), state, T::field(field)) };
+    }
+
+    /// The draw list's quads a patch changed since `clear_dirty`, one byte each; all of them
+    /// after a frame.
+    pub fn dirty(&mut self) -> &[u8] {
+        let n = self.last.quad_len as usize;
+        unsafe { core::slice::from_raw_parts(lcgf_ct_dirty(self.buf.as_mut_ptr()), n) }
+    }
+    pub fn clear_dirty(&mut self) {
+        unsafe { lcgf_ct_clear_dirty(self.buf.as_mut_ptr()) }
+    }
+
+    fn widget(row: u32) -> Option<T::Widget> {
+        (row != NO_WIDGET).then(|| T::widget(row))
+    }
+
+    /// The topmost widget under (x, y) in the last frame's layout: half-open edges, and the
+    /// latest widget wins where widgets overlap.
+    pub fn at(&mut self, x: f32, y: f32) -> Option<T::Widget> {
+        Self::widget(unsafe { lcgf_ct_at(self.buf.as_mut_ptr(), x, y) })
+    }
+
+    /// This frame's pointer event: a press picks the widget under the pointer; a checkbox is
+    /// clicked when the release is over it too; a slider reports its value every frame it is
+    /// held.
+    pub fn pointer(&mut self, input: &Input) -> Option<T::Event> {
+        let (mut row, mut value) = (0u32, 0f32);
+        let kind = unsafe { lcgf_ct_pointer(self.buf.as_mut_ptr(), input, &mut row, &mut value) };
+        (kind != 0).then(|| T::event(row, value))
+    }
+
+    /// Moves focus for every Tab press and repeat in this frame's keys; Shift goes back.
+    pub fn focus_keys(&mut self, input: &Input, tab: u8) {
+        unsafe { lcgf_ct_focus_keys(self.buf.as_mut_ptr(), input, tab) }
+    }
+    pub fn focus(&mut self) -> Option<T::Widget> {
+        Self::widget(unsafe { lcgf_ct_focus(self.buf.as_mut_ptr()) })
+    }
+    pub fn set_focus(&mut self, w: Option<T::Widget>) {
+        let row = w.map(T::widget_row).unwrap_or(NO_WIDGET);
+        unsafe { lcgf_ct_set_focus(self.buf.as_mut_ptr(), row) }
+    }
+    /// The widget Tab (`back` false) or Shift+Tab moves focus to from `from`, wrapping.
+    pub fn next_focus(&mut self, from: Option<T::Widget>, back: bool) -> Option<T::Widget> {
+        let row = from.map(T::widget_row).unwrap_or(NO_WIDGET);
+        Self::widget(unsafe { lcgf_ct_next_focus(self.buf.as_mut_ptr(), row, back as i32) })
+    }
+
+    /// The widget a shortcut of `list` activates for key `code` with exactly `mods` held.
+    pub fn shortcut(list: &[Shortcut<T::Widget>], code: u8, mods: u8) -> Option<T::Widget> {
+        assert!(
+            core::mem::size_of::<Shortcut<T::Widget>>() == 8,
+            "a widget is a u32"
+        );
+        Self::widget(unsafe { lcgf_ct_shortcut(list.as_ptr().cast(), list.len(), code, mods) })
     }
 }
 

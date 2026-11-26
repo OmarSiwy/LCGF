@@ -45,7 +45,8 @@ pub fn ui(input: TokenStream) -> TokenStream {
 /// `include_ui!("toolbar.zon")`: a spec from a file, relative to `$LCGF_SPECS` when set, else
 /// to the crate's manifest directory. `include_ui!("card.zon", static)` makes a static UI:
 /// the comptime pipeline's tables (`lcgf::StaticUi`: folded layout, paint templates) for a
-/// spec whose structure never changes (`lcgf-gen --static`).
+/// spec whose structure never changes (`lcgf-gen --static`); its frame, `lcgf_ui_<name>_frame`,
+/// comes from `lcgf_build::static_ui` in the crate's build script.
 #[proc_macro]
 pub fn include_ui(input: TokenStream) -> TokenStream {
     let tokens: Vec<TokenTree> = input.into_iter().collect();

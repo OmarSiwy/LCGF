@@ -128,8 +128,8 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
   frame, generic over where its tables come from (folded constants in Zig, these words at run
   time). Each C++ UI gets that frame specialized to its words: `zig build-obj` over
   `lcgf-gen --static --lang zig` (or, without Zig, clang over `--lang c`, the engine made C by
-  Zig's C backend). Rust still compiles a port of the passes (lcgf::ct) against the tables as
-  compile-time constants. Draw lists and events match Zig's byte for byte. The GPU projection is written per language on Vulkan, GL ES 3, wgpu-native, Metal
+  Zig's C backend), and so does each Rust UI (`lcgf_build::static_ui`). No language ports the
+  passes. Draw lists and events match Zig's byte for byte. The GPU projection is written per language on Vulkan, GL ES 3, wgpu-native, Metal
   and Direct3D 12. docs/guide/bindings.md.
 - **One per build.** `-Drender=auto|sw|vk|metal|d3d12|gles|web|wgpu` picks the back end the
   `lcgf_render` module exposes (src/render/select.zig); `auto` is the target's own API (Metal on
