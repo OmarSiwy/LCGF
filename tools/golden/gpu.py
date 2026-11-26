@@ -17,6 +17,24 @@ indices, the uniforms of src/render/shaders/canvas.zig `Uniforms`, one draw per 
 import math, struct, sys
 from pathlib import Path
 import wgpu
+
+def pick_adapter():
+    """The adapter LCGF_WGPU_ADAPTER names (a substring of its device name), else the first
+    Vulkan one (lavapipe in the dev shells), else wgpu's default: a host's own GPU and its
+    OpenGL adapter are never picked by accident."""
+    import os
+    adapters = wgpu.gpu.enumerate_adapters_sync()
+    want = os.environ.get("LCGF_WGPU_ADAPTER")
+    for a in adapters:
+        if want and want in a.info["device"]:
+            return a
+    if want:
+        sys.exit(f"no wgpu adapter matches LCGF_WGPU_ADAPTER={want!r}")
+    for a in adapters:
+        if a.info["backend_type"] == "Vulkan":
+            return a
+    return wgpu.gpu.request_adapter_sync()
+
 from golden import write_png
 
 d, out_png = Path(sys.argv[1]), sys.argv[2]
@@ -28,7 +46,7 @@ lines = [l.split() for l in (d / "cmds.txt").read_text().splitlines()]
 stride = int([l for l in lines if l[0] == "stride"][0][1])
 attrs = [{"shader_location": int(l[1]), "offset": int(l[2]), "format": l[3]} for l in lines if l[0] == "attr"]
 
-adapter = wgpu.gpu.request_adapter_sync()
+adapter = pick_adapter()
 device = adapter.request_device_sync()
 print("adapter:", adapter.info["device"], adapter.info["backend_type"])
 

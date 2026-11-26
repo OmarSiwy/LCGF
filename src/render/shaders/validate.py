@@ -11,12 +11,30 @@ import sys
 from pathlib import Path
 import wgpu
 
+def pick_adapter():
+    """The adapter LCGF_WGPU_ADAPTER names (a substring of its device name), else the first
+    Vulkan one (lavapipe in the dev shells), else wgpu's default: a host's own GPU and its
+    OpenGL adapter are never picked by accident."""
+    import os
+    adapters = wgpu.gpu.enumerate_adapters_sync()
+    want = os.environ.get("LCGF_WGPU_ADAPTER")
+    for a in adapters:
+        if want and want in a.info["device"]:
+            return a
+    if want:
+        sys.exit(f"no wgpu adapter matches LCGF_WGPU_ADAPTER={want!r}")
+    for a in adapters:
+        if a.info["backend_type"] == "Vulkan":
+            return a
+    return wgpu.gpu.request_adapter_sync()
+
+
 d = Path(sys.argv[1])
 lines = [l.split() for l in (d / "layout.txt").read_text().splitlines()]
 stride = int([l for l in lines if l[0] == "stride"][0][1])
 attrs = [{"shader_location": int(l[1]), "offset": int(l[2]), "format": l[3]} for l in lines if l[0] == "attr"]
 
-device = wgpu.gpu.request_adapter_sync().request_device_sync()
+device = pick_adapter().request_device_sync()
 VF = wgpu.ShaderStage.VERTEX | wgpu.ShaderStage.FRAGMENT
 bgl0 = device.create_bind_group_layout(entries=[{"binding": 0, "visibility": VF, "buffer": {"type": "uniform"}}])
 bgl1 = device.create_bind_group_layout(entries=[
