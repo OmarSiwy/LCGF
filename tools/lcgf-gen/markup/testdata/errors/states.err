@@ -22,10 +22,10 @@ states.html:8:11: error: media feature 'hover' is not lowered; use min-/max-widt
 states.html:9:26: error: a media query list is not lowered; write one @media per query
   @media (min-width: 1px), (max-width: 2px) { button { color: red; } }
                          ^
-states.html:6:31: error: @media on <p> is not lowered: it restyles a <div>-like box, a <button>, a checkbox or a switch outside lcgf-each
+states.html:6:31: error: @media on <p> is not lowered: it restyles a <div>-like box, a <button>, a checkbox, a switch, a range or a text field outside lcgf-each
   @media (min-width: 600px) { p { gap: 2px; } }
                               ^
-states.html:10:3: error: state CSS on <p> is not lowered: it restyles a <div>-like box, a <button>, a checkbox or a switch outside lcgf-each
+states.html:10:3: error: state CSS on <p> is not lowered: it restyles a <div>-like box, a <button>, a checkbox, a switch, a range or a text field outside lcgf-each
   p:hover { color: red; }
   ^
 states.html:11:6: error: :hover here styles another element than its own; a state pseudo-class is lowered on the element the rule styles

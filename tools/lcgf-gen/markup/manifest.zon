@@ -317,5 +317,6 @@
         .{ .name = "media" },
         .{ .name = "boxes" },
         .{ .name = "disabled" },
+        .{ .name = "inputs" },
     },
 }

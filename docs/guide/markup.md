@@ -387,8 +387,10 @@ while the runs' byte offsets are fixed at build time. Other elements inside it a
 ### State CSS
 
 `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within`, `:checked`, `:indeterminate`,
-`:disabled` and `:enabled` on a `<button>`, a checkbox or a switch make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
-`recipes.button` on a runtime one, with a generated `recipe_<id>`. The recipe is the stock
+`:disabled` and `:enabled` on a `<button>`, a checkbox, a switch, a range or a text field
+make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
+`recipes.button` on a runtime one (`slider`, `textfield` likewise), with a generated
+`recipe_<id>`. The recipe is the stock
 one, then one rule per CSS rule in cascade order: the widget's static CSS, then each state
 rule requiring its states. A static declaration that outranks a state one drops it, as in a
 browser. A state rule sets `background-color`, `color`, `border-color`, `border-width`,
@@ -398,7 +400,7 @@ looks like the theme widgets beside it until its CSS says otherwise. State CSS o
 `:not()` or `:is()`, or inside lcgf-each is an error.
 
 The `disabled` attribute, or a `<fieldset disabled>` around the control (outside its first
-`<legend>`), makes it a recipe widget with `States.disabled`: no pointer or keyboard input, no
+`<legend>`), makes it (one of those widgets) a recipe widget with `States.disabled`: no pointer or keyboard input, no
 Tab stop, the stock muted text, and `:disabled` rules. On other controls it is an error, as
 is a bound `disabled="{f}"`. A bool checkbox is never `:indeterminate`.
 

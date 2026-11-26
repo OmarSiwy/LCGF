@@ -1,0 +1,14 @@
+<!doctype html>
+<html lcgf-page="inputs">
+<head>
+  <title>Fields</title>
+  <style>
+    input[type=range]:hover { background-color: #5078c8; }
+    input[type=text]:focus { border-color: #ffd040; }
+  </style>
+</head>
+<body>
+  <input type="range" id="level" bind:value="level" on:change="moved">
+  <input type="text" id="name" bind:value="name" placeholder="Your name" on:submit="done">
+</body>
+</html>

@@ -535,8 +535,8 @@ pub const Lowerer = struct {
             if (x == none or !l.disabledElement(n)) continue;
             nodes.items(.disabled)[x] = true;
             switch (nodes.items(.kind)[x]) {
-                .button, .checkbox, .@"switch", .container => {},
-                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a checkbox or a switch", .{l.tag(n)}),
+                .button, .checkbox, .@"switch", .container, .slider, .textfield => {},
+                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a checkbox, a switch, a range or a text field", .{l.tag(n)}),
             }
             if (l.attr(n, "disabled")) |v| if (isBound(v)) l.ds.err(l.valueLoc(n, "disabled"), "a bound disabled is not lowered yet; write the attribute or leave it out", .{});
         }
@@ -722,14 +722,15 @@ pub const Lowerer = struct {
         const kind = if (x != none) nodes.items(.kind)[x] else .container;
         const is_box = kind == .container;
         const fits = x != none and switch (kind) {
-            .button, .checkbox, .@"switch", .container => l.eachOf(n) == none,
+            .button, .checkbox, .@"switch", .container, .slider => l.eachOf(n) == none,
+            .textfield => l.eachOf(n) == none and !nodes.items(.secure)[x],
             else => false,
         };
         var entries: std.ArrayList(cascade.Dynamic) = .empty;
         for (l.k.dynamic.items) |d| if (d.node == n) ok(entries.append(l.arena, d));
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a checkbox or a switch outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a checkbox, a switch, a range or a text field outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }

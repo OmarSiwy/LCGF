@@ -435,7 +435,11 @@ pub const Emit = struct {
                 e.print(", {s})", .{e.config(n)});
             } else e.boolSpec(n),
             .toggle => e.boolSpec(n),
-            .slider => {
+            .slider => if (n.recipe.len > 0) {
+                e.print("recipes.ct.slider(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.structure(lcgf.widgets_slider.Range{ .lo = n.range[0], .hi = n.range[1] }, .{});
+                e.print(", {s})", .{e.config(n)});
+            } else {
                 e.print("{s}.ct.slider(theme, .{f}, .{f}, ", .{ e.use("slider"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.structure(lcgf.widgets_slider.Range{ .lo = n.range[0], .hi = n.range[1] }, .{});
                 e.write(")");
@@ -483,7 +487,11 @@ pub const Emit = struct {
                 }
                 e.write(" })");
             },
-            .textfield, .search => {
+            .textfield, .search => if (n.recipe.len > 0) {
+                e.print("recipes.ct.textfield(.{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+                e.print(", {s})", .{e.config(n)});
+            } else {
                 const m = if (n.kind == .search) "search" else "textfield";
                 e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use(m), if (n.secure) "password" else m, std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
@@ -726,24 +734,26 @@ pub const Emit = struct {
             const stock = switch (n.kind) {
                 .button => "button",
                 .checkbox => "checkbox",
+                .slider => "slider",
+                .textfield => "input",
                 else => "switch_control",
             };
             const rules = switch (n.kind) {
-                .button => "button",
-                .checkbox => "checkbox",
-                else => "switch",
+                .@"switch" => "switch",
+                else => stock,
             };
-            // A checkbox's or switch's colours and border are its box's.
+            // A checkbox's or switch's colours and border are its box's; the others' their root's.
             const box = switch (n.kind) {
-                .button => "root",
                 .checkbox => "background",
-                else => "track",
+                .@"switch" => "track",
+                else => "root",
             };
             e.print("/// The recipe of `{s}` ({s}): the stock {s}'s, then its CSS in cascade order.\n", .{ n.id, e.where(n.loc), stock });
             e.print("const {s}: recipes.Recipe = .{{ .parts = recipes.model.{s}.parts, .rules = &(recipes.model.{s}_rules ++ [_]style.Rule{{\n", .{ e.recipeName(n), stock, rules });
             for (n.recipe) |r| {
-                e.rule(r, "root", .{ .text_color = r.text_color, .opacity = r.opacity, .fill = if (n.kind == .button) r.fill else null, .border_color = if (n.kind == .button) r.border_color else null, .border = if (n.kind == .button) r.border else null });
-                if (n.kind != .button) e.rule(r, box, .{ .fill = r.fill, .border_color = r.border_color, .border = r.border });
+                const own = std.mem.eql(u8, box, "root");
+                e.rule(r, "root", .{ .text_color = r.text_color, .opacity = r.opacity, .fill = if (own) r.fill else null, .border_color = if (own) r.border_color else null, .border = if (own) r.border else null });
+                if (!own) e.rule(r, box, .{ .fill = r.fill, .border_color = r.border_color, .border = r.border });
             }
             e.write("}) };\n\n");
         }
@@ -1120,6 +1130,10 @@ pub const Emit = struct {
             },
             .slider => {
                 const item = e.eachOf(i) != none;
+                if (n.recipe.len > 0) {
+                    e.print("_ = recipes.slider(f, {s}, {s}, {d}, {d}, {s}) catch unreachable;", .{ e.rtId(n.id, list_depth), e.ref(n.bind), n.range[0], n.range[1], e.config(n) });
+                    return "";
+                }
                 if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
                 const face = e.rtFace(n);
                 e.print("_ = {s}.{s}(f, &theme, {s}, {s}, {d}, {d}{s});", .{ e.use("slider"), if (face.len > 0) "sliderFace" else "slider", e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind), n.range[0], n.range[1], face });
@@ -1168,6 +1182,12 @@ pub const Emit = struct {
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(face);
                 e.write(");");
+                e.submitFlag(n);
+                return "";
+            } else if (n.recipe.len > 0) {
+                e.print("_ = recipes.textfield(f, {s}, &{s}, ", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+                e.print(", {s}) catch unreachable;", .{e.config(n)});
                 e.submitFlag(n);
                 return "";
             } else {
