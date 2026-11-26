@@ -123,16 +123,22 @@ pub fn reuse(f: *Frame, id: Id, deps: []const Signal) bool {
     // rebuild original inputs instead of reviving rows whose stored dimensions were zeroed.
     const new_parent = ctx.stack[ctx.depth - 1];
     const same_participation = @as(u8, @bitCast(t.participation(new_parent))) == @as(u8, @bitCast(prev.participation(prev.c.parent[a])));
+    // A paint reference out of the subtree (and not to its parent) must name a node already
+    // built this frame. Checked only for a copy that could happen: otherwise the range is
+    // empty. The search covers 0 rows unless it is needed, so there is no jump per row.
     var references_valid = true;
-    if (from_last_frame and fits) {
-        for (x0..x1) |r| {
-            const source = prev.x.row[r].paint_reference;
-            if (source == none or (source >= a and source < b) or source == prev.c.parent[a]) continue;
-            references_valid = references_valid and source < prev.len and prev.c.id[@min(source, prev.cap - 1)] != 0;
-            if (references_valid) references_valid = t.find(@fromBackingInt(prev.c.id[source])) != none;
-        }
+    const checked = x0 + (x1 -% x0) * @intFromBool(andB(from_last_frame, fits));
+    for (x0..checked) |r| {
+        const source = prev.x.row[r].paint_reference;
+        const external = !orB(orB(source == none, (source -% a) < count), source == prev.c.parent[a]);
+        const source_id = prev.c.id[@min(source, prev.cap - 1)];
+        const search = andB(external, references_valid);
+        const built = simd.find(t.c.id[0..], t.len * @intFromBool(search), source_id);
+        references_valid = andB(references_valid, orB(!external, andB(andB(source < prev.len, source_id != 0), built != none)));
     }
-    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), andB(!busy, andB(andB(same_participation, t.cursor(new_parent) == prev.cursor(prev.c.parent[a])), references_valid))));
+    // The cursors as stored (255 for none), compared without unwrapping optionals.
+    const same_cursor = t.x.row[t.c.scope[new_parent]].active_cursor == prev.x.row[prev.c.scope[prev.c.parent[a]]].active_cursor;
+    const ok = andB(andB(same_inputs, from_last_frame), andB(andB(!touched, fits), andB(!busy, andB(andB(same_participation, same_cursor), references_valid))));
 
     // The subtree starts at the next row whether it is copied or rebuilt.
     m.c.id[slot] = k;
@@ -239,9 +245,15 @@ fn copySubtree(f: *Frame, a: u32, b: u32, ks: [2]u32, cs: [2]u32, xs: [2]u32) vo
     const xn = x1 - x0;
     mem.copyRows(Tree.Extras, &t.x, t.xlen, &prev.x, x0, xn);
     rebaseNodes(t.x.node, t.xlen, xn, delta);
+    // Paint references move with the copy, to the new parent, or to the node built this frame
+    // with the same id; selected, with the search over 0 rows when it is not the answer.
     for (t.xlen..t.xlen + xn) |r| {
         const source = t.x.row[r].paint_reference;
-        if (source != none) t.x.row[r].paint_reference = if (source >= a and source < b) source +% delta else if (source == prev.c.parent[a]) parent else t.find(@fromBackingInt(prev.c.id[source]));
+        const inside = (source -% a) < count;
+        const to_parent = source == prev.c.parent[a];
+        const external = !orB(orB(source == none, inside), to_parent);
+        const found = simd.find(t.c.id[0..], t.len * @intFromBool(external), prev.c.id[@min(source, prev.cap - 1)]);
+        t.x.row[r].paint_reference = selU(inside, source +% delta, selU(to_parent, parent, selU(source == none, none, found)));
     }
     t.xlen += xn;
 
