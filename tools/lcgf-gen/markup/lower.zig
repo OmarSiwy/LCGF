@@ -1852,7 +1852,7 @@ pub const Lowerer = struct {
             }
             if (css.eq(ty, "number")) return l.numberField(n, parent);
             if (css.eq(ty, "radio")) return l.radio(n, parent);
-            for ([_][]const u8{ "text", "email", "url", "tel", "search" }) |x| if (css.eq(ty, x)) return l.textInput(n, parent, if (css.eq(ty, "search")) .search else .textfield);
+            for ([_][]const u8{ "text", "email", "url", "tel", "search", "password" }) |x| if (css.eq(ty, x)) return l.textInput(n, parent, if (css.eq(ty, "search")) .search else .textfield);
             if (l.refused("attribute", "type", ty, l.valueLoc(n, "type"))) {
                 l.skip[n] = true;
                 return true;
@@ -2095,6 +2095,7 @@ pub const Lowerer = struct {
             return true;
         }
         var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind, .one_way = one_way };
+        node.secure = kind == .textfield and css.eq(l.attr(n, "type") orelse "", "password");
         node.id = l.widgetId(n, bind, what) orelse return true;
         const hint = l.attr(n, "placeholder") orelse "";
         l.caption(&node, hint, l.valueLoc(n, "placeholder"));

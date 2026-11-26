@@ -226,24 +226,31 @@ pub const Shown = struct {
 };
 
 pub fn shown(s: anytype, th: *const Theme, hint: []const u8) Shown {
-    const ed = s.editor();
+    return shownAs(false, s, th, hint, &.{});
+}
+
+/// `shown`, and for a password field (`secure`) its text as one `mask` per grapheme
+/// (`Editor.display`, written to `buf`, at least the field's capacity), with the caret and
+/// the selection over the mask.
+pub fn shownAs(comptime secure: bool, s: anytype, th: *const Theme, hint: []const u8, buf: []u8) Shown {
+    const ed = editorAs(secure, s);
     const t = ed.text();
     const adv = advance(th);
     const sel = ed.selection();
     const empty = t.len == 0;
-    const mono = [2]f32{ @as(f32, @floatFromInt(sel[0])) * adv, @as(f32, @floatFromInt(sel[1])) * adv };
+    const mono = [2]f32{ @as(f32, @floatFromInt(shownAt(secure, ed, sel[0]))) * adv, @as(f32, @floatFromInt(shownAt(secure, ed, sel[1]))) * adv };
     var band: [bands][2]f32 = @splat(.{ 0, 0 });
     band[0] = mono;
-    if (fresh(s)) |v| {
+    if (if (secure) null else fresh(s)) |v| {
         var rects: [bands]Rect = undefined;
         const n = query.selection(v.l, v.g, v.text, sel[0], sel[1], &rects);
         band = @splat(.{ 0, 0 });
         for (rects[0..n], 0..) |r, k| band[k] = .{ r.x0, r.x1 };
     }
     return .{
-        .str = if (empty) hint else t,
+        .str = if (empty) hint else if (secure) ed.display(buf) else t,
         .hint = empty,
-        .caret = caretX(s, th, ed.shownCaret()),
+        .caret = caretXAs(secure, s, th, ed.shownCaret()),
         .sel = mono,
         .band = band,
     };
@@ -258,8 +265,33 @@ pub fn fresh(s: anytype) ?moves.View {
 /// The caret's x at byte `at`, px from the text's left edge: from the view when fresh, else
 /// `at` advances.
 pub fn caretX(s: anytype, th: *const Theme, at: u32) f32 {
-    if (fresh(s)) |v| return v.caretRect(at).x0;
-    return @as(f32, @floatFromInt(at)) * advance(th);
+    return caretXAs(false, s, th, at);
+}
+
+fn caretXAs(comptime secure: bool, s: anytype, th: *const Theme, at: u32) f32 {
+    if (!secure) if (fresh(s)) |v| return v.caretRect(at).x0;
+    const shown_at = if (secure) s.editor().toDisplay(at) else at;
+    return @as(f32, @floatFromInt(shown_at)) * advance(th);
+}
+
+/// Where text offset `at` is in what the field shows: `at`, or in a password its mask's.
+fn shownAt(comptime secure: bool, ed: *edit.Editor, at: u32) u32 {
+    return if (secure) ed.toDisplay(at) else at;
+}
+
+/// What a password field shows once per grapheme of its text: how long it is, nothing else.
+/// One byte, so that it is one `Mono` advance and one atlas cell.
+pub const mask = "*";
+
+/// The editor of field `s`, in password mode (`Editor.Mode.password`, `mask`) when `secure`.
+/// A password's view never matches its text, so it is always laid out as `Mono`.
+fn editorAs(comptime secure: bool, s: anytype) *edit.Editor {
+    const ed = s.editor();
+    if (secure) {
+        ed.mode.password = true;
+        ed.mode.bullet = mask;
+    }
+    return ed;
 }
 
 // ---- behaviour ------------------------------------------------------------------------------
@@ -290,15 +322,26 @@ pub fn reveal(scroll: f32, x: f32, view: f32, content: f32) f32 {
 /// view scrolls to the caret, and a focused field asks for text input at it. Both front ends
 /// call this with what they know of the frame.
 pub fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in: *const Input) void {
-    const ed = point(s, th, r, last, in);
+    behaveAs(false, s, th, id, r, last, in);
+}
+
+/// `behave`, for a password field when `secure`: the editor's password mode, so its text is
+/// never copied or cut, word moves go to the ends and the host is asked for secure input.
+pub fn behaveAs(comptime secure: bool, s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in: *const Input) void {
+    if (secure) _ = editorAs(true, s);
+    const ed = pointAs(secure, s, th, r, last, in);
     const k = keyboardOf(in, id, r.focused);
-    s.result = ed.update(&k, id, .{ .view = fresh(s), .clipboard = &s.clipboard, .copy_buf = &s.copied, .composition = k.composition(id, &s.ime) });
-    follow(s, th, r, last);
+    s.result = ed.update(&k, id, .{ .view = if (secure) null else fresh(s), .clipboard = &s.clipboard, .copy_buf = &s.copied, .composition = k.composition(id, &s.ime) });
+    followAs(secure, s, th, r, last);
 }
 
 /// The first part of `behave`: resets what the field asks of the host, and places the caret
 /// where the pointer holds the field. Returns the single-line editor, for the keys.
 pub fn point(s: anytype, th: *const Theme, r: Response, last: Rect, in: *const Input) *edit.Editor {
+    return pointAs(false, s, th, r, last, in);
+}
+
+fn pointAs(comptime secure: bool, s: anytype, th: *const Theme, r: Response, last: Rect, in: *const Input) *edit.Editor {
     const ed = s.editor();
     ed.mode.single_line = true;
     s.clipboard.reset();
@@ -306,7 +349,10 @@ pub fn point(s: anytype, th: *const Theme, r: Response, last: Rect, in: *const I
     if (r.held) {
         const x0 = last.x0 + padding(th)[0];
         const px = in.pointer[0] - x0 + s.scroll;
-        const at = if (fresh(s)) |v| v.hit(px, v.l.top[0] + v.l.height[0] / 2) else stopNear(ed.text(), px / advance(th));
+        // A password's mask is one byte per grapheme: the nearest mask boundary, back to text.
+        const at = if (secure)
+            ed.fromDisplay(@intFromFloat(std.math.clamp(@round(px / advance(th)), 0, @as(f32, @floatFromInt(ed.toDisplay(@intCast(ed.text().len)))))))
+        else if (fresh(s)) |v| v.hit(px, v.l.top[0] + v.l.height[0] / 2) else stopNear(ed.text(), px / advance(th));
         ed.caret = at;
         if (!s.held and !in.mods.shift) ed.anchor = at;
         ed.goal = std.math.nan(f32);
@@ -319,17 +365,22 @@ pub fn point(s: anytype, th: *const Theme, r: Response, last: Rect, in: *const I
 /// The last part of `behave`, after the keys: scrolls the view to the caret, and asks for text
 /// input at it while focused.
 pub fn follow(s: anytype, th: *const Theme, r: Response, last: Rect) void {
+    followAs(false, s, th, r, last);
+}
+
+fn followAs(comptime secure: bool, s: anytype, th: *const Theme, r: Response, last: Rect) void {
     const ed = s.editor();
     const adv = advance(th);
     const pad = padding(th);
-    const x = caretX(s, th, ed.shownCaret());
-    const content = if (fresh(s)) |v| lines_.widest(v.l) else @as(f32, @floatFromInt(ed.text().len)) * adv;
+    const x = caretXAs(secure, s, th, ed.shownCaret());
+    const shown_view = if (secure) null else fresh(s);
+    const content = if (shown_view) |v| lines_.widest(v.l) else @as(f32, @floatFromInt(shownAt(secure, ed, @intCast(ed.text().len)))) * adv;
     const view = last.w() - pad[0] - pad[2];
     if (view > 0) s.scroll = reveal(s.scroll, x, view, content);
     if (r.focused) {
         const cx = last.x0 + pad[0] - s.scroll + x;
         const top = last.y0 + pad[1];
-        s.input.request(.{ .x0 = cx, .y0 = top, .x1 = cx + 1, .y1 = top + lineHeight(th) }, .normal);
+        s.input.request(.{ .x0 = cx, .y0 = top, .x1 = cx + 1, .y1 = top + lineHeight(th) }, if (secure) .secure else .normal);
     }
 }
 
@@ -385,13 +436,24 @@ pub fn textValue(t: *const Tree, s: *a11y.Semantics, str: *Strings, name: Id, fi
 /// A text field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty. Returns its
 /// response; what the input did to the text is `s.result`.
 pub fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
+    return fieldAs(false, f, th, id, s, hint);
+}
+
+/// A password field (`<input type=password>`): a text field that shows one `mask` per
+/// grapheme, never puts its text on the clipboard and asks for secure input.
+pub fn password(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
+    return fieldAs(true, f, th, id, s, hint);
+}
+
+fn fieldAs(comptime secure: bool, f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response {
     const r0 = f.ctx.inter.response(id);
-    behave(s, th, id, r0, f.lastRect(id), f.in);
+    behaveAs(secure, s, th, id, r0, f.lastRect(id), f.in);
     platform(f, s);
     const node = f.open(id, fieldStyle(th, r0.focused, s.scroll));
     const r = f.interact(node, types.Sense.any);
     f.setCursor(.text, r.hovered);
-    const v = shown(s, th, hint);
+    var buf: [if (secure) @TypeOf(s.*).capacity else 0]u8 = undefined;
+    const v = shownAs(secure, s, th, hint, &buf);
     for (v.band) |b| _ = f.leaf(.none, selectionStyle(th, b, 0));
     _ = f.textStyled(v.str, textStyle(th, v.hint), .{});
     _ = f.leaf(.none, caretStyle(th, v.caret, 0, r0.focused));
@@ -428,14 +490,21 @@ pub const ct = struct {
         var s = spec_zig.row(fieldStyle(&th, false, 0), band ++ [2]Spec{ .{ .kind = .label }, .{ .kind = .col } });
         s.id = @tagName(id);
         s.bind = @tagName(bind);
-        s.widget = Comptime(@tagName(id), @tagName(bind), hintSpec(hint));
+        s.widget = Comptime(@tagName(id), @tagName(bind), hintSpec(hint), false);
+        return s;
+    }
+
+    /// `textfield` as a password field (`password`).
+    pub fn password(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype) Spec {
+        var s = ct.textfield(th, id, bind, hint);
+        s.widget = Comptime(@tagName(id), @tagName(bind), hintSpec(hint), true);
         return s;
     }
 };
 
 /// The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`)
 /// (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
-pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec) type {
+pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec, comptime secure: bool) type {
     return struct {
         pub const focusable = true;
         pub const Payload = edit.Result;
@@ -453,7 +522,8 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const t = &ui.tables.t;
             next.* += bands + 3; // the box, the selection bands, the text and the caret
             const i = t.push(parent, .hash(name), &fieldStyle(th, focused, s.scroll));
-            const v = shown(s, th, spec_zig.labelBytes(hint, &ui.signals.state));
+            var buf: [if (secure) @TypeOf(s.*).capacity else 0]u8 = undefined;
+            const v = shownAs(secure, s, th, spec_zig.labelBytes(hint, &ui.signals.state), &buf);
             for (v.band) |b| _ = t.push(i, .none, &selectionStyle(th, b, 0));
             pushText(ui, i, v.str, textStyle(th, v.hint));
             _ = t.push(i, .none, &caretStyle(th, v.caret, 0, focused));
@@ -465,7 +535,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
             const r = base.ctResponse(ui, row, event, in);
             const last: Rect = ui.lastRect(row);
             const s = &@field(ui.signals.state, bind);
-            behave(s, &Ui.theme, .hash(name), r, last, in);
+            behaveAs(secure, s, &Ui.theme, .hash(name), r, last, in);
             if (!(s.result.changed or s.result.submitted)) return null;
             return @unionInit(Ui.Events.Event, name, s.result);
         }
@@ -994,6 +1064,71 @@ test "Page: the text field replay types, selects and submits, in both front ends
     try testing.expectEqual(Rect{ .x0 = 12, .y0 = 38, .x1 = 308, .y1 = 63 }, t.rect(t.find(.from("name"))));
     try testing.expectEqual(Rect{ .x0 = 12, .y0 = 97, .x1 = 308, .y1 = 122 }, t.rect(t.find(.from("city"))));
     inline for (Page.golden_frames) |g| try testing.expect(g[1] < 11);
+}
+
+/// One password field, in both front ends.
+const Secret = struct {
+    const th = Theme.default;
+    const panel: Style = .{ .size = .{ .fill, .fill }, .pad = @splat(12), .fill = th.panel };
+    pub const App = struct {
+        pin: Text(16) = .{},
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.from("panel"), panel);
+            _ = password(f, &th, .from("pin"), &app.pin, "PIN");
+            f.close();
+        }
+    };
+    pub const State = struct { pin: Text(16) = .{} };
+    pub const spec = spec_zig.col(panel, .{ct.password(th, .pin, .pin, "PIN")});
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, .{ .nodes = 16, .texts = 2, .customs = 1, .strings = 256, .depth = 4 });
+};
+
+var secret: Secret.Run = .{};
+
+test "password: one mask per grapheme, never copied, secure input, in both front ends" {
+    const h = &secret;
+    h.init();
+    var in: Input = .{ .viewport = .{ 320, 80 } };
+    var out = try h.frame(&in);
+    const t = out.runtime.tree;
+    const box = t.rect(t.find(.from("pin")));
+    const adv = advance(&Theme.default);
+    const x0 = box.x0 + Theme.default.pad;
+    in.pointer = .{ box.x0 + 4, (box.y0 + box.y1) * 0.5 };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    // "é" is two bytes and "e\u{301}" one grapheme of three: four graphemes in all.
+    var typed = "p\u{e9}e\u{301}x".*;
+    const ev = [_]Input.Event{.{ .kind = .text, .at = 0, .len = typed.len }};
+    in.text = &typed;
+    in.events = &ev;
+    out = try h.frame(&in);
+    try testing.expectEqualStrings("p\u{e9}e\u{301}x", h.app.pin.text());
+    try testing.expectEqualStrings(h.app.pin.text(), h.ui.signals.state.pin.text());
+    const dl = out.runtime.draw;
+    try testing.expectEqualStrings("****", dl.strings[dl.runs[0].start..][0..dl.runs[0].bytes]);
+    // The caret after the fourth mask; the host is asked for secure input, told no text.
+    try testing.expectEqual(x0 + 4 * adv, out.runtime.platform.ime_rect.x0);
+    try testing.expectEqual(keyboard.Purpose.secure, out.runtime.platform.purpose);
+    try testing.expectEqualStrings("", out.runtime.platform.surrounding);
+    // Select all and copy: nothing reaches the clipboard.
+    const copy = [_]Input.Event{ press(0x04, .{ .ctrl = true }), press(0x06, .{ .ctrl = true }) };
+    in.text = "";
+    in.events = &copy;
+    out = try h.frame(&in);
+    try testing.expectEqualStrings("", h.app.pin.clipboard.set);
+    try testing.expectEqualStrings("", out.runtime.platform.clipboard);
+    // A click between the second and third masks puts the caret after "pé", byte 3.
+    in.events = &.{};
+    in.pointer = .{ x0 + 2.2 * adv, in.pointer[1] };
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    try testing.expectEqual(@as(u32, 3), h.app.pin.ed.caret);
+    try testing.expectEqual(@as(u32, 3), h.ui.signals.state.pin.ed.caret);
 }
 
 test {

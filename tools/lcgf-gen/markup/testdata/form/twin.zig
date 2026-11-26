@@ -1,5 +1,5 @@
 //! form, written by hand: text controls with literal placeholders, and on:submit on the field
-//! and the text area.
+//! and the text area; a password field.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -14,13 +14,14 @@ pub const theme: w.Theme = .{};
 /// Accessible names the a11y export must carry (parity.zig).
 pub const names = .{ "Sign up", "Search" };
 
-pub const State = struct { name: textfield.Text(256) = .{}, find: textfield.Text(256) = .{}, bio: textfield.Text(256) = .{} };
+pub const State = struct { name: textfield.Text(256) = .{}, find: textfield.Text(256) = .{}, bio: textfield.Text(256) = .{}, pin: textfield.Text(256) = .{} };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     s.named(s.landmark(.form, .{}, .{
         textfield.ct.textfield(theme, .name, .name, "Your name"),
         s.named(search.ct.search(theme, .find, .find, "Find"), "Search"),
         textarea.ct.textarea(theme, .bio, .bio, 4, "About you"),
+        textfield.ct.password(theme, .pin, .pin, "Password"),
     }), "Sign up"),
 });
 
@@ -60,6 +61,7 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     const t = p.frame(h, &in).tree;
     const field = t.rect(t.find(.from("name")));
     const area = t.rect(t.find(.from("bio")));
+    const pin = t.rect(t.find(.from("pin")));
     // Focus the field with a click, then type and press Enter.
     in.pointer = .{ (field.x0 + field.x1) / 2, (field.y0 + field.y1) / 2 };
     in.buttons.left = true;
@@ -100,4 +102,16 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     // Enter submitted the name without changing it.
     try std.testing.expectEqual(1, h.edits);
     try std.testing.expectEqual(0, h.finds);
+    // The password field shows one mask per character.
+    in.pointer = .{ (pin.x0 + pin.x1) / 2, (pin.y0 + pin.y1) / 2 };
+    in.buttons.left = true;
+    _ = p.frame(h, &in);
+    in.buttons.left = false;
+    in.events = &typed;
+    in.text = "pw";
+    const d = p.frame(h, &in).draw;
+    try std.testing.expectEqualStrings("pw", p.ui.signals.state.pin.text());
+    for (d.runs[0..d.run_len]) |r| {
+        if (std.mem.eql(u8, d.strings[r.start..][0..r.bytes], "**")) break;
+    } else return error.NoMask;
 }

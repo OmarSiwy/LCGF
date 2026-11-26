@@ -113,6 +113,8 @@ pub const Node = struct {
     /// Style fields read from run-time theme tokens, and the text style's.
     uses: []const TokenUse = &.{},
     text_uses: TextTokens = .{},
+    /// A text field that is `<input type=password>`: `widgets_textfield.password`.
+    secure: bool = false,
     /// A component's props, in attribute order.
     props: []const Prop = &.{},
 };

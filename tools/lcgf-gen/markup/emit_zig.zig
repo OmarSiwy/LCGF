@@ -346,7 +346,7 @@ pub const Emit = struct {
             },
             .textfield, .search => {
                 const m = if (n.kind == .search) "search" else "textfield";
-                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use(m), m, std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use(m), if (n.secure) "password" else m, std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(")");
             },
@@ -739,7 +739,7 @@ pub const Emit = struct {
                 return "";
             } else {
                 const m = if (n.kind == .search) "search" else "textfield";
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), m, e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), if (n.secure) "password" else m, e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(");");
                 e.submitFlag(n);
@@ -907,7 +907,7 @@ pub const Emit = struct {
         };
         const id = n.id;
         e.print("{{ const editing = p.edit_{s}_row == @as(u32, @intCast(copy0)); var scratch: lcgf.widgets_textfield.Text(256) = .{{}}; if (!editing) scratch.set({s}); const st = if (editing) &p.edit_{s} else &scratch; ", .{ id, e.stateRef(n.bind), id });
-        e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), m, e.rtId(id, list_depth) });
+        e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), if (n.secure) "password" else m, e.rtId(id, list_depth) });
         if (n.kind == .textarea) e.print("{d}, ", .{n.level});
         e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
         e.print("); if (r.focused and !editing) {{ p.edit_{s} = st.*; p.edit_{s}_row = @intCast(copy0); }} ", .{ id, id });
