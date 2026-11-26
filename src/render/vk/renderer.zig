@@ -24,6 +24,14 @@ const quad_shader = lcgf.quad_shader;
 const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
 const Quad = draw_list.Quad;
+const gpu = @import("gpu.zig");
+
+/// canvas.wgsl as SPIR-V, for the canvas pipeline (src/render/gpu/canvas.zig).
+const canvas_source = struct {
+    pub const wgsl = lcgf.canvas_shader.wgsl;
+    pub const spv = @embedFile("canvas_spv");
+};
+pub const Canvas = lcgf.gpu_canvas.Canvas(gpu, canvas_source);
 
 /// quad.wgsl's stock shader as SPIR-V (both entry points, `vs` and `fs`). Copied into a
 /// u32-aligned array: vkCreateShaderModule reads words.
@@ -80,6 +88,10 @@ pub const Desc = struct {
     max_glyphs: u32 = 16 * 1024,
     /// Frames the host lets the GPU work on while it prepares the next: one ring slot each.
     frames: u32 = 2,
+    /// Canvas instance rows and polygon vertices kept on the GPU (`frames` copies of 32 and 8
+    /// bytes each, host-visible); 0 rows: no canvas pipeline, and canvases draw nothing.
+    canvas_rows: u32 = 0,
+    canvas_verts: u32 = 0,
 };
 
 /// Bytes kept for the globals at the start of each slot: the largest
@@ -115,7 +127,11 @@ pub const Renderer = struct {
     pool: c.VkDescriptorPool = null,
     globals_set: c.VkDescriptorSet = null,
     textures: [max_textures]c.VkDescriptorSet = @splat(null),
+    /// The views behind `textures`, for the canvas pipeline's glyph atlas.
+    views: [max_textures]c.VkImageView = @splat(null),
     texture_count: u16 = 0,
+    canvas: ?Canvas = null,
+    list: ?*const DrawList = null,
 
     pub const max_textures = 64;
 
@@ -130,7 +146,7 @@ pub const Renderer = struct {
     pub const Pass = c.VkCommandBuffer;
 
     /// `white` is a 1x1 opaque white image view; it becomes `Texture.white`.
-    pub fn init(d: *const Device, desc: Desc, white: c.VkImageView, sampler: c.VkSampler) Error!Renderer {
+    pub fn init(d: *const Device, desc: Desc, white: c.VkImageView, sampler: c.VkSampler) gpu.Error!Renderer {
         var r: Renderer = .{ .desc = desc, .dev = d };
         errdefer r.deinit(d);
         const globals_binding: c.VkDescriptorSetLayoutBinding = .{
@@ -185,10 +201,16 @@ pub const Renderer = struct {
             .pBufferInfo = &globals_info,
         }, 0, null);
         _ = try r.addTexture(d, white, sampler); // Texture.white
+        if (desc.canvas_rows > 0) {
+            r.canvas = @as(Canvas, undefined);
+            try r.canvas.?.init(.wrap(d), .{ .format = gpu.fromVkFormat(desc.format), .samples = desc.samples }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .frames = desc.frames });
+        }
         return r;
     }
 
     pub fn deinit(r: *Renderer, d: *const Device) void {
+        if (r.canvas) |*cv| cv.deinit(.wrap(d));
+        r.canvas = null;
         if (r.pool != null) d.fns.vkDestroyDescriptorPool.?(d.handle, r.pool, null); // frees the sets
         r.pool = null;
         r.texture_count = 0;
@@ -245,6 +267,7 @@ pub const Renderer = struct {
         const i: u16 = @min(r.texture_count, max_textures - 1);
         if (i == r.texture_count) r.textures[i] = try r.allocateSet(d, r.texture_layout);
         writeTexture(d, r.textures[i], view, sampler);
+        r.views[i] = view;
         r.texture_count = i + 1;
         return @fromBackingInt(i);
     }
@@ -253,7 +276,9 @@ pub const Renderer = struct {
     /// that grew); nodes keep their `Style.texture`. Same rule as `addTexture`: no frame that
     /// samples the old set may still be pending. A stale handle clamps to the last entry.
     pub fn setTexture(r: *Renderer, d: *const Device, texture: types.Texture, view: c.VkImageView, sampler: c.VkSampler) void {
-        writeTexture(d, r.textures[@min(@backingInt(texture), r.texture_count - 1)], view, sampler);
+        const i = @min(@backingInt(texture), r.texture_count - 1);
+        writeTexture(d, r.textures[i], view, sampler);
+        r.views[i] = view;
     }
 
     /// Full state, every draw (iface.zig, "Full state rebinding"): pipeline, both sets, the
@@ -296,6 +321,20 @@ pub const Renderer = struct {
         r.glyphs = glyphs;
         r.scale = scale;
         r.extent = .{ .width = @intFromFloat(@round(viewport[0] * scale)), .height = @intFromFloat(@round(viewport[1] * scale)) };
+        r.list = draw;
+        if (r.canvas) |*cv| {
+            const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+            cv.prepare(.wrap(r.dev), null, draw, frame, scale, .{ r.extent.width, r.extent.height }, .{ .view = r.views[atlas], .image = null, .width = 0, .height = 0 }, atlas);
+        }
+    }
+
+    /// Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the canvas
+    /// pipeline, scissored to the node. Needs `Desc.canvas_rows`; the host calls
+    /// `Instances.clearDirty` after `prepare` (src/render/gpu/canvas.zig).
+    pub fn drawCanvas(r: *const Renderer, cmd: Pass, k: u32) void {
+        const cv = if (r.canvas) |*cv| cv else return;
+        var pass = gpu.RenderPass.wrap(.wrap(r.dev), cmd, r.extent.width, r.extent.height);
+        cv.draw(&pass, r.list.?, k);
     }
 
     /// One instanced draw for a run of quads. `Pass` carries no device, so the renderer keeps
@@ -455,6 +494,51 @@ test "renderer: quad pipelines build from the committed SPIR-V on a real device"
     // Past the cap the last entry is replaced, not written past.
     for (0..max_materials + 2) |_| _ = try r.addMaterial(&h.device, example_spv);
     try testing.expectEqual(@as(u16, max_materials), r.material_count);
+}
+
+test "renderer: a canvas uploads its rows once, then only dirty rows; each ring slot catches up" {
+    var h: host.Host = undefined;
+    try h.init();
+    defer h.deinit();
+    var white = try h.sampled(1, 1, &.{ 255, 255, 255, 255 });
+    defer h.device.destroyImage(&white);
+    const sampler = try host.nearestSampler(&h.device);
+    defer h.device.fns.vkDestroySampler.?(h.device.handle, sampler, null);
+    const sc = conformance.canvas_scene;
+    var r = try Renderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, white.view, sampler);
+    defer r.deinit(&h.device);
+    const st = try testing.allocator.create(conformance.CanvasStorage);
+    defer testing.allocator.destroy(st);
+    st.load();
+    const s = &st.shapes;
+    const cv = &r.canvas.?;
+    // Each draw writes its head, its six palette rows and its one override.
+    const uniforms = lcgf.canvas_shader.Uniforms.headBytes(sc.palette.layers.len) + 16;
+    // A new batch: every row and vertex, into each slot on its first frame.
+    for (0..2) |slot| {
+        r.prepare(@intCast(slot), &st.draw, .{}, sc.viewport, 1);
+        s.clearDirty();
+        try testing.expectEqual(32 * s.len + 8 * s.vert_len + uniforms, cv.uploaded);
+        try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(s.c.look[0..s.len]), cv.slots[slot].look.mapped.?[0 .. 16 * s.len]);
+    }
+    // A pan: the camera only.
+    st.rows[0].camera.origin[0] += 1000;
+    r.prepare(0, &st.draw, .{}, sc.viewport, 1);
+    s.clearDirty();
+    try testing.expectEqual(uniforms, cv.uploaded);
+    // An edit of two rows: written into this frame's slot, and into the other on its turn.
+    s.kill(3);
+    s.kill(4);
+    r.prepare(1, &st.draw, .{}, sc.viewport, 1);
+    s.clearDirty();
+    try testing.expectEqual(2 * 32 + uniforms, cv.uploaded);
+    try testing.expect(cv.slots[0].look.mapped.?[16 * 3 + 1] & 2 == 0);
+    r.prepare(0, &st.draw, .{}, sc.viewport, 1);
+    s.clearDirty();
+    try testing.expectEqual(2 * 32 + uniforms, cv.uploaded);
+    try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(s.c.look[0..s.len]), cv.slots[0].look.mapped.?[0 .. 16 * s.len]);
+    r.prepare(1, &st.draw, .{}, sc.viewport, 1);
+    try testing.expectEqual(uniforms, cv.uploaded);
 }
 
 test "renderer: prepare writes each frame into its own slot of the mapped ring" {

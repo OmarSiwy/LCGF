@@ -30,6 +30,8 @@ pub const Mode = enum { offscreen, present };
 
 /// Every scene's size.
 pub const size: c.VkExtent2D = .{ .width = 160, .height = 120 };
+/// The canvas scene's.
+pub const canvas_size: c.VkExtent2D = .{ .width = 800, .height = 600 };
 
 pub const Player = struct {
     mode: Mode,
@@ -154,8 +156,26 @@ pub const Player = struct {
         }
     }
 
-    /// The host's loop: UI draws up to each custom command, the host's own pipeline there, in
-    /// the same command buffer.
+    /// The canvas scene (conformance.canvas_scene, `canvas_size`) offscreen, with a renderer
+    /// of its own that has the canvas pipeline: RGBA rows into `px`.
+    pub fn drawCanvas(p: *Player, st: *const conformance.CanvasStorage, px: []u8) !void {
+        const d = &p.h.device;
+        const sc = conformance.canvas_scene;
+        var gfx = try Renderer.init(d, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .samples = p.samples, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, p.white.view, p.sampler);
+        defer gfx.deinit(d);
+        const atlas = try gfx.addTexture(d, p.atlas.view, p.sampler);
+        var target = try host.Target.init(d, canvas_size.width, canvas_size.height, p.samples);
+        defer target.deinit(d);
+        gfx.prepare(0, &st.draw, .{ .texture = atlas }, sc.viewport, 1);
+        const cmd = try p.h.once.begin(d);
+        const bg = sc.clear;
+        pass.begin(d, cmd, target.begin(.{ @as(f32, @floatFromInt(bg.r)) / 255, @as(f32, @floatFromInt(bg.g)) / 255, @as(f32, @floatFromInt(bg.b)) / 255, 1 }));
+        iface.render(&gfx, cmd, &st.draw);
+        pass.end(d, cmd, .{ .image = target.image.handle, .layout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL });
+        try p.h.once.submit(d);
+        try p.h.readback(target.image.handle, target.image.extent, px);
+    }
+
     /// The frame's upload phase: the gradient's target size, before the pass begins.
     fn upload(p: *const Player, cmd: c.VkCommandBuffer) void {
         var up: gpu.Upload = .begin(.wrap(&p.h.device), cmd);

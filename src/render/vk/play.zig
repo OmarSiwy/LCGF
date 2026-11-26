@@ -1,7 +1,7 @@
 //! Draws every render conformance scene (src/render/conformance.zig) with the Vulkan back end
 //! and writes each as a PNG, for comparison with the golden images (ci/jobs/vk.sh):
 //!
-//!     vk-play OUT [offscreen|present] [SAMPLES]      ->  OUT/<scene>.png
+//!     vk-play OUT [offscreen|present] [SAMPLES]      ->  OUT/<scene>.png, OUT/canvas.png
 //!
 //! The drawing is scenes.zig's `Player`: offscreen into an RGBA8 image, or present through a
 //! headless swapchain; SAMPLES (default 1) above 1 resolves a multisampled target.
@@ -11,6 +11,7 @@ const scenes = @import("scenes.zig");
 const conformance = lcgf.render_conformance;
 
 var player: scenes.Player = undefined;
+var canvas: conformance.CanvasStorage = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -35,6 +36,13 @@ pub fn main(init: std.process.Init) !void {
         var name: [64]u8 = undefined;
         try out.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.png", .{s.name}), .data = try png(gpa, w, h, px) });
     }
+    // The canvas scene (golden tools/golden/ref/draw/canvas.png), offscreen in either mode.
+    canvas.load();
+    const cw = scenes.canvas_size.width;
+    const ch = scenes.canvas_size.height;
+    const cpx = try gpa.alloc(u8, @as(usize, cw) * ch * 4);
+    try player.drawCanvas(&canvas, cpx);
+    try out.writeFile(io, .{ .sub_path = "canvas.png", .data = try png(gpa, cw, ch, cpx) });
 }
 
 /// RGBA rows as a PNG (filter byte 0 before each row).
