@@ -993,6 +993,9 @@ fn labelCount(comptime n: Spec) u32 {
 /// The spec node at depth-first row `row` of `n`.
 fn nodeAt(comptime n: Spec, comptime row: comptime_int) Spec {
     comptime {
+        // The walk visits every row before `row`: a page of a few dozen widgets passed the
+        // default quota of 1000 backward branches.
+        @setEvalBranchQuota(10_000 + 100 * row);
         var i = 0;
         return nodeWalk(n, row, &i).?;
     }
