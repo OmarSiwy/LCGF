@@ -2186,14 +2186,6 @@ pub const Lowerer = struct {
             } else inline for (.{ Prop.@"grid-column", Prop.@"grid-row", Prop.@"grid-area", Prop.@"justify-self" }) |q| if (l.declared(n, q)) |v|
                 l.ds.err(v.loc, "{s} applies to a child of a display: grid box", .{@tagName(q)});
         }
-        var grids = false;
-        var margins = false;
-        for (nodes.items(.placed), nodes.items(.margin)) |pl, m| {
-            grids = grids or pl.grid != null;
-            margins = margins or m != null;
-        }
-        if (grids and margins) for (nodes.items(.margin), nodes.items(.loc)) |m, at| if (m != null)
-            l.ds.err(at, "margins on a page with a grid are not supported yet (engine spec F2 with F7)", .{});
     }
 
     fn gridItem(l: *Lowerer, n: u32, grid_node: u32) ?lcgf.grid.Item {
@@ -2585,11 +2577,7 @@ pub const Lowerer = struct {
     /// function that takes its style (`<widget>Face`; engine spec R1).
     pub fn checkRuntime(l: *Lowerer) void {
         const nodes = l.page.nodes.slice();
-        // Frame.endFlex and Frame.endSides are two frame ends; a page takes one.
-        var positioned = false;
-        for (nodes.items(.placed)) |pl| positioned = positioned or pl.anchor != null or pl.sticky != null or pl.layer != 0;
-        if (positioned) for (nodes.items(.margin), nodes.items(.loc)) |m, at| if (m != null)
-            l.ds.err(at, "margins on a page with positioned boxes (right, bottom, fixed, sticky, z-index) are carried on comptime pages only so far", .{});
+
         for (0..nodes.len) |i| {
             const kind = nodes.items(.kind)[i];
             switch (kind) {

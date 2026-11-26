@@ -1,0 +1,21 @@
+<!doctype html>
+<html lcgf-page="mixed">
+<head>
+  <title>Mixed</title>
+  <style>
+    .bar { display: flex; gap: 4px; }
+    .bar span { margin: 2px 6px; }
+    .grid { display: grid; grid-template-columns: 80px auto; gap: 4px; margin: 8px 0 0 10px; }
+    .grid .pad { margin-left: 5px; }
+    .note { position: absolute; right: 4px; bottom: 4px; margin: 2px; z-index: 1; }
+  </style>
+</head>
+<body>
+  <div class="bar"><span>A</span><span>B</span></div>
+  <div class="grid">
+    <div><span class="pad">One</span></div>
+    <span>Two</span>
+  </div>
+  <span class="note">Note</span>
+</body>
+</html>

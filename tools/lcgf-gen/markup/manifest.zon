@@ -284,6 +284,7 @@
         .{ .name = "grid" },
         .{ .name = "table" },
         .{ .name = "positioned" },
+        .{ .name = "mixed" },
         .{ .name = "components", .app = true, .wrong_apps = .{ "wrong", "missing", "chip" }, .spec_apps = .{"spec"} },
         .{ .name = "themed", .app = true, .runtime_vars = "t-" },
         .{ .name = "content" },

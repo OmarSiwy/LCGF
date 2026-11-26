@@ -300,8 +300,8 @@ takes the farthest corner of a box with a px size. Ellipses and conic gradients 
 `grid-area: name`, `grid-column`/`grid-row` (`N`, `N / M`, `span K`), `grid-auto-rows`,
 `grid-auto-flow`, both gaps and the `justify-`/`align-` items, self and content keywords are
 lowered. Rows past the template are added for the children that need them. Not yet:
-`repeat(auto-fill)`, named lines, `%` tracks, a line on one axis only, and margins on a page
-with a grid. A control directly in a cell needs a `<div>` around it on runtime pages.
+`repeat(auto-fill)`, named lines, `%` tracks and a line on one axis only. Flex rules
+(margins, wrap, align-self) apply around and inside grids. A control directly in a cell needs a `<div>` around it on runtime pages.
 
 Positioning: `relative` is a translate (`right` and `bottom` move the other way). `absolute`
 floats the box at its parent's content box: `top`/`left` are its offset, `right`/`bottom`

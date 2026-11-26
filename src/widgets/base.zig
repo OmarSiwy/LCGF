@@ -388,7 +388,6 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     // Grid columns and passes only for a page with a `spec.grid` node.
     const grid_cap = comptime gridCapacity(spec);
     const has_grid = grid_cap.grids > 0;
-    if (has_flex and has_grid) @compileError("a page with both spec.flexed and spec.grid nodes is not supported yet");
     // Anchor, sticky and layer columns and passes only for a page that uses them.
     const anchor_rows = comptime countPositioned(spec, .anchor);
     const sticky_rows = comptime countPositioned(spec, .sticky);
@@ -698,7 +697,22 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             font.measure(tx);
             layout.prepare(t);
             layout.applyText(t, tx, .x);
-            if (has_flex) {
+            if (has_grid) {
+                // `grid.run`'s sequence, with the font's measure and wrap and, on a page with
+                // flex rules too, `layout.runFlex`'s rules around the grids.
+                const gs = &tb.gs;
+                const fx = if (has_flex) &tb.fx else {};
+                grid.autoPlace(gs);
+                grid.fitWith(t, gs, fx, .x);
+                grid.resolveWith(t, gs, fx, .x, in.viewport[0]);
+                if (has_flex) @import("../layout/wrap.zig").wrap(t, fx);
+                layout.textAvail(t, tx);
+                font.wrap(tx);
+                layout.applyText(t, tx, .y);
+                grid.fitWith(t, gs, fx, .y);
+                grid.resolveWith(t, gs, fx, .y, in.viewport[1]);
+                if (has_flex) layout.placeFlex(t, fx) else layout.place(t);
+            } else if (has_flex) {
                 // `layout.runFlex`'s sequence.
                 const fx = &tb.fx;
                 layout.fitFlexOpts(t, fx, .x, flex_opts);
@@ -710,18 +724,6 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 layout.fitFlexOpts(t, fx, .y, flex_opts);
                 layout.resolveFlex(t, fx, .y, in.viewport[1]);
                 layout.placeFlexOpts(t, fx, flex_opts);
-            } else if (has_grid) {
-                // `grid.run`'s sequence, with the font's measure and wrap.
-                const gs = &tb.gs;
-                grid.autoPlace(gs);
-                grid.fit(t, gs, .x);
-                grid.resolve(t, gs, .x, in.viewport[0]);
-                layout.textAvail(t, tx);
-                ui.font.wrap(tx);
-                layout.applyText(t, tx, .y);
-                grid.fit(t, gs, .y);
-                grid.resolve(t, gs, .y, in.viewport[1]);
-                layout.place(t);
             } else {
                 layout.fit(t, .x);
                 layout.resolve(t, .x, in.viewport[0]);
@@ -1948,6 +1950,64 @@ test "flexed: margins, wrap and align-self lay out the same in both front ends" 
         try std.testing.expectEqual(@as(f32, 86), out.rect(4).x0);
         try std.testing.expect(out.rect(5).y0 >= 24);
         try std.testing.expectEqual(@as(f32, 10), out.rect(6).x0);
+    }
+}
+
+test "grid and flex on one page: margins inside a cell and beside the grid, in both front ends" {
+    const th: Theme = .default;
+    const box: Style = comptime .{ .size = .{ .px(30), .px(20) }, .fill = .rgb(200, 0, 0) };
+    const decl: grid.Decl = comptime .{ .columns = &.{ .px(80), .fit }, .gap = .{ 4, 0 } };
+    const spec = comptime spec_zig.col(.{}, .{
+        spec_zig.flexed(spec_zig.grid(.{}, decl, .{
+            spec_zig.row(.{}, .{spec_zig.flexed(spec_zig.styled(spec_zig.row(.{}, .{}), box), .{ .margin = .{ 5, 3, 0, 0 } })}),
+            spec_zig.styled(spec_zig.row(.{}, .{}), box),
+        }), .{ .margin = .{ 10, 6, 0, 0 } }),
+        spec_zig.flexed(spec_zig.label("after"), .{ .margin = .{ 2, 2, 0, 0 } }),
+    });
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        buf: [48 * 1024]u8 align(mem.column_align) = undefined,
+        gs: grid.Grids = undefined,
+        fx: ?Flex = null,
+        pub fn build(app: *@This(), f: *Frame) void {
+            if (app.fx == null) {
+                var c: mem.Carver = .{ .buf = &app.buf };
+                app.fx = Flex.init(&c, 16);
+                app.gs = grid.Grids.init(&c, .{ .grids = 1, .tracks = 4, .items = 2, .cells = 4 });
+            }
+            const fx = &app.fx.?;
+            var b = box;
+            b.dir = .x;
+            var fb = b;
+            fb.float = true;
+            _ = f.open(.none, .{});
+            const g = f.open(.none, .{});
+            fx.set(@backingInt(g), &.{ .margin = .{ 10, 6, 0, 0 } });
+            const k = app.gs.declare(@backingInt(g), decl, grid.implicitTracks(decl, &.{ .{}, .{} }));
+            _ = app.gs.place(k, @intCast(f.tree().len), .{});
+            _ = f.open(.none, .{ .dir = .x, .float = true });
+            fx.set(@backingInt(f.leaf(.none, b)), &.{ .margin = .{ 5, 3, 0, 0 } });
+            f.close();
+            _ = app.gs.place(k, @intCast(f.tree().len), .{});
+            _ = f.leaf(.none, fb);
+            f.close();
+            fx.set(@backingInt(f.textStyled("after", labelText(&th), .{})), &.{ .margin = .{ 2, 2, 0, 0 } });
+            f.close();
+        }
+        pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
+            return f.endSides(font, .{ .grids = &app.gs, .flex = &app.fx.? });
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 16, .texts = 4, .strings = 64, .depth = 8 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    for (0..2) |_| {
+        const out = (try h.frame(&in)).comptime_.tree;
+        // Root, col, grid (10, 6), cell 0 { box past its margin }, cell 1, after.
+        try std.testing.expectEqual(@as(f32, 10), out.rect(2).x0);
+        try std.testing.expectEqual(types.Rect{ .x0 = 15, .y0 = 9, .x1 = 45, .y1 = 29 }, out.rect(4));
+        try std.testing.expectEqual(@as(f32, 94), out.rect(5).x0);
+        try std.testing.expectEqual(@as(f32, 2), out.rect(6).x0);
     }
 }
 

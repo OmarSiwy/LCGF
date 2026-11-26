@@ -104,6 +104,20 @@ pub fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void {
     fitOf(t, {}, axis, first, last, .{});
 }
 
+/// `fitSpan` with the extra sizing rules of `fx` (flex.zig), for grids on a flex page.
+/// The rows past `last` that `fitOf` clears with whole vectors were folded by an earlier piece
+/// (grid.zig), so their sums are kept around it.
+// ponytail: saved and restored rather than an exact clear in fitOf, which moved stack slots in
+// every page's frame (markup-zero-cost).
+pub fn fitSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32) void {
+    const a = @backingInt(axis);
+    const tail = simd.padded(last) - last;
+    var keep: [3][W]f32 = undefined;
+    inline for (.{ fx.c.shrink_sum[a], fx.c.base_kids, fx.c.below_kids }, 0..) |col, k| @memcpy(keep[k][0..tail], col[last..][0..tail]);
+    fitOf(t, fx, axis, first, last, .{});
+    inline for (.{ fx.c.shrink_sum[a], fx.c.base_kids, fx.c.below_kids }, 0..) |col, k| @memcpy(col[last..][0..tail], keep[k][0..tail]);
+}
+
 /// One body for every form: with `fx` void every flex term is compiled out, so `fit` keeps the
 /// prototype's code; `first`/`last` select a subtree for incremental layout.
 inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32, comptime opts: FlexOptions) void {
@@ -204,6 +218,11 @@ pub fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void {
 /// [from - 1, to) from the top. Same test as `fitSpan`.
 pub fn resolveSpan(t: anytype, axis: Axis, first: u32, last: u32) void {
     resolveOf(t, {}, axis, first, last);
+}
+
+/// `resolveSpan` with the extra sizing rules of `fx` (flex.zig), for grids on a flex page.
+pub fn resolveSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32) void {
+    resolveOf(t, fx, axis, first, last);
 }
 
 inline fn resolveOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void {

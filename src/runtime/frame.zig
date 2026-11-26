@@ -534,51 +534,78 @@ pub const Frame = struct {
         sticky: ?*scroll.Sticky = null,
         /// Stacking layers (`ly.c.own[node] = z`): the frame paints in layer order.
         layers: ?*overlay.Layers = null,
+        /// Flex rules, as `endFlex` takes them, laid out around and inside the grids.
+        flex: ?*Flex = null,
     };
 
-    /// `end` with the side tables in `sides`. A frame without any calls `end`.
-    pub fn endSides(f: *Frame, font: Mono, sides: Sides) Output {
+    /// `end` with the side tables in `sides`. `font` is a `Mono`, or a `MonoParagraphs` for
+    /// paragraph styles and decorations as `endParagraphs` takes them. A frame without side
+    /// tables calls `end`.
+    pub fn endSides(f: *Frame, font: anytype, sides: Sides) Output {
         f.layoutSides(font, sides);
-        if (sides.layers) |ly| return f.finishLayered(ly);
-        return f.finish();
+        return f.finishSides(font, sides);
     }
 
     /// The layout half of `endSides`: `grid.run`'s passes when there are grids, else
-    /// `layout.run`'s, with the font's measure and wrap; then the anchors and the sticky
-    /// nodes.
-    pub fn layoutSides(f: *Frame, font: Mono, sides: Sides) void {
+    /// `layout.run`'s (with flex rules, `runFlex`'s), with the font's measure and wrap; then
+    /// the anchors and the sticky nodes.
+    pub fn layoutSides(f: *Frame, font: anytype, sides: Sides) void {
+        if (@TypeOf(font) == MonoParagraphs) f.layoutSidesWith(f.withStrings(font), sides) else f.layoutSidesWith(font, sides);
+    }
+
+    /// The paint half of `endSides`: in layer order when `sides.layers` is given, then a
+    /// `MonoParagraphs` font's decorations.
+    pub fn finishSides(f: *Frame, font: anytype, sides: Sides) Output {
+        const out = if (sides.layers) |ly| f.finishLayered(ly) else f.finish();
+        if (@TypeOf(font) == MonoParagraphs) f.withStrings(font).decorate(&f.ctx.draw);
+        return out;
+    }
+
+    fn layoutSidesWith(f: *Frame, font: anytype, sides: Sides) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
         f.ctx.memos.kept_len = 0;
         font.measure(tx);
+        if (sides.flex) |fx| {
+            std.debug.assert(fx.c.aspect.len >= simd.rows(t.cap));
+            @memset(fx.c.text_has, 0);
+        }
         layout.prepare(t);
         layout.applyText(t, tx, .x);
-        if (sides.grids) |gs| {
-            grid.autoPlace(gs);
-            grid.fit(t, gs, .x);
-            grid.resolve(t, gs, .x, f.in.viewport[0]);
-        } else {
-            layout.fit(t, .x);
-            layout.resolve(t, .x, f.in.viewport[0]);
+        inline for (.{ types.Axis.x, types.Axis.y }) |axis| {
+            const a = @backingInt(axis);
+            if (axis == .y) {
+                layout.textAvail(t, tx);
+                font.wrap(tx);
+                layout.applyText(t, tx, .y);
+            }
+            if (sides.grids) |gs| {
+                if (axis == .x) grid.autoPlace(gs);
+                if (sides.flex) |fx| {
+                    grid.fitWith(t, gs, fx, axis);
+                    grid.resolveWith(t, gs, fx, axis, f.in.viewport[a]);
+                } else {
+                    grid.fit(t, gs, axis);
+                    grid.resolve(t, gs, axis, f.in.viewport[a]);
+                }
+            } else if (sides.flex) |fx| {
+                layout.fitFlex(t, fx, axis);
+                layout.resolveFlex(t, fx, axis, f.in.viewport[a]);
+            } else {
+                layout.fit(t, axis);
+                layout.resolve(t, axis, f.in.viewport[a]);
+            }
+            if (axis == .x) if (sides.flex) |fx| @import("../layout/wrap.zig").wrap(t, fx);
         }
-        layout.textAvail(t, tx);
-        font.wrap(tx);
-        layout.applyText(t, tx, .y);
-        if (sides.grids) |gs| {
-            grid.fit(t, gs, .y);
-            grid.resolve(t, gs, .y, f.in.viewport[1]);
-        } else {
-            layout.fit(t, .y);
-            layout.resolve(t, .y, f.in.viewport[1]);
-        }
-        layout.place(t);
+        if (sides.flex) |fx| layout.placeFlex(t, fx) else layout.place(t);
         if (sides.anchors) |an| overlay.anchor(t, an, .{ .x1 = f.in.viewport[0], .y1 = f.in.viewport[1] });
         if (sides.sticky) |st| scroll.stick(t, st);
         f.finalizeLayout(.{}) catch unreachable;
         if (sides.grids) |gs| gs.reset();
         if (sides.anchors) |an| an.reset();
         if (sides.sticky) |st| st.reset();
+        if (sides.flex) |fx| for (0..t.len) |i| fx.set(@intCast(i), &.{});
     }
 
     /// `endSides` with grids only.

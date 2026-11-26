@@ -585,6 +585,12 @@ fn free(occ: []const u8, cols: u32, col: u32, row: u32, sc: u32, sr: u32) bool {
 /// sweep runs last row first, so all its items are done), its tracks take their content from
 /// the items' natural sizes and the grid's `fit` becomes the tracks' total.
 pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
+    fitWith(t, gs, {}, axis);
+}
+
+/// `fit` with the flex rules of `fx` (a `*const Flex`, or void for none) on the rows around
+/// the grids, for a page with both.
+pub fn fitWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis) void {
     if (t.len == 0) return;
     const a = @backingInt(axis);
     const nat = t.c.nat[a];
@@ -594,7 +600,7 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
         k -= 1;
         const node = gs.g.node[k];
         // Folds rows (node, to); `node` itself is folded by the next piece, after its fit is set.
-        layout.fitSpan(t, axis, node, to);
+        fitRows(t, fx, axis, node, to);
         to = node + 1;
         const first = gs.g.first[a][k];
         @memset(gs.tr.content[first..][0..gs.g.count[a][k]], 0);
@@ -618,7 +624,7 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
         }
         t.c.fit[a][node] = sizeTracks(gs, k, a, 0);
     }
-    layout.fitSpan(t, axis, 0, to);
+    fitRows(t, fx, axis, 0, to);
 }
 
 /// `layout.resolve` for a tree with grids. Rows are resolved in order, in pieces: after a grid
@@ -626,6 +632,11 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
 /// an item row then takes its cell size (within its own min and max) instead of the flow
 /// formula, and its children are resolved inside it as usual.
 pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
+    resolveWith(t, gs, {}, axis, viewport);
+}
+
+/// `resolve` with the flex rules of `fx`, as `fitWith`.
+pub fn resolveWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis, viewport: f32) void {
     if (t.len == 0) return;
     const a = @backingInt(axis);
     const c = &t.c;
@@ -639,7 +650,7 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
         if (grid_row == none and item_row == none) break;
         if (item_row <= grid_row) {
             // An item that is also a grid is sized as an item first.
-            resolveRows(t, axis, from, item_row);
+            resolveRows(t, fx, axis, from, item_row);
             const min = c.min[a][item_row];
             const max = c.max[a][item_row];
             const cell = gs.it.cell_size[a][r];
@@ -651,7 +662,7 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
             from = item_row + 1;
             r += 1;
         } else {
-            resolveRows(t, axis, from, grid_row + 1);
+            resolveRows(t, fx, axis, from, grid_row + 1);
             from = grid_row + 1;
             const node = gs.g.node[k];
             const parent = gs.g.parent[a][k];
@@ -676,14 +687,18 @@ pub fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void {
             k += 1;
         }
     }
-    resolveRows(t, axis, from, t.len);
+    resolveRows(t, fx, axis, from, t.len);
 }
 
 /// `layout.resolve`'s sweep over rows [from, to), `from` >= 1 and `from` <= `to`: the parents
 /// of those rows are sized already. `resolveSpan` resolves the rows after its `first`, and
 /// reads nothing of `first` itself but as a parent.
-inline fn resolveRows(t: *Tree, axis: Axis, from: u32, to: u32) void {
-    layout.resolveSpan(t, axis, from - 1, to);
+inline fn resolveRows(t: *Tree, fx: anytype, axis: Axis, from: u32, to: u32) void {
+    if (@TypeOf(fx) == void) layout.resolveSpan(t, axis, from - 1, to) else layout.resolveSpanFlex(t, fx, axis, from - 1, to);
+}
+
+inline fn fitRows(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
+    if (@TypeOf(fx) == void) layout.fitSpan(t, axis, first, last) else layout.fitSpanFlex(t, fx, axis, first, last);
 }
 
 /// Every pass in order, as `layout.run`, with `fit` and `resolve` taken from this file.

@@ -1427,6 +1427,7 @@ pub const Emit = struct {
             \\
         );
         const regions = e.hasRegions();
+        const sides = e.hasSides();
         if (regions) e.print(
             \\    /// Tree rows of the page's regions as this frame built them (none for one it did not
             \\    /// build): `end` rounds each one's content from the region's corner, as the comptime
@@ -1440,7 +1441,7 @@ pub const Emit = struct {
         // font when there is one.
         const opts_font = e.fontExpr(paragraphs);
         const opts_args = std.fmt.allocPrint(e.arena, "{s}, &ui.flex.?, .{{ .line_baseline = true }}", .{opts_font}) catch unreachable;
-        if (flex and e.lineBaseline()) {
+        if (!sides and flex and e.lineBaseline()) {
             if (regions) e.print(
                 \\    /// Lays the frame out (with this page's flex rules, per-line baselines compiled in),
                 \\    /// puts each region's content on the grid from the region's snapped corner, and paints.
@@ -1460,7 +1461,7 @@ pub const Emit = struct {
                 \\
                 \\
             , .{opts_args});
-        } else if (regions) e.print(
+        } else if (!sides and regions) e.print(
             \\    /// Lays the frame out (with this page's {s}), puts each region's content on the
             \\    /// grid from the region's snapped corner, and paints.
             \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
@@ -1476,7 +1477,7 @@ pub const Emit = struct {
             e.fontExpr(paragraphs),
             if (flex) ", &ui.flex.?" else "",
             if (paragraphs) std.fmt.allocPrint(e.arena, "finishParagraphs({s})", .{e.fontExpr(true)}) catch unreachable else "finish()",
-        }) else if (flex or paragraphs) e.print(
+        }) else if (!sides and (flex or paragraphs)) e.print(
             \\    /// Ends the frame with this page's {s} (`Frame.{s}`).
             \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
             \\        return f.{s}({s}{s});
@@ -1491,7 +1492,6 @@ pub const Emit = struct {
             if (flex) ", &ui.flex.?" else "",
         });
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
-        const sides = e.hasSides();
         if (sides) e.write(
             \\    /// The side tables (grids, anchors, sticky nodes, layers) the page writes while it
             \\    /// builds, used by `end`. They point into `side_buf`: a Ui does not move once built.
@@ -1501,18 +1501,23 @@ pub const Emit = struct {
         );
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         if (sides) {
+            // Lays out with the side tables (and flex rules), rounds each region's content from
+            // its corner, and paints (in layer order, with the paragraph decorations).
             e.write(
-                \\    /// Ends the frame with this page's side tables (`Frame.endSides`).
+                \\    /// Ends the frame with this page's side tables (`Frame.layoutSides`, `finishSides`).
                 \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
                 \\        const sd = &ui.sides.?;
-                \\        return f.endSides(font, .{
+                \\        const sides: lcgf.frame.Frame.Sides = .{
             );
             const pos = e.positionedRows();
             if (e.hasGrid()) e.write(" .grids = &sd.gs,");
             if (pos[0] > 0) e.write(" .anchors = &sd.an,");
             if (pos[1] > 0) e.write(" .sticky = &sd.st,");
             if (e.hasLayers()) e.write(" .layers = &sd.ly,");
-            e.write(" });\n    }\n\n");
+            if (flex) e.write(" .flex = &ui.flex.?,");
+            e.print(" }};\n        f.layoutSides({s}, sides);\n", .{e.fontExpr(paragraphs)});
+            if (regions) e.write("        for (ui.regions) |row| if (row != lcgf.types.none) lcgf.layout.snapSubtree(f.tree(), row);\n");
+            e.print("        return f.finishSides({s}, sides);\n    }}\n\n", .{e.fontExpr(paragraphs)});
         }
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         if (tokens.len > 0) e.write(
@@ -2022,10 +2027,10 @@ pub const Emit = struct {
         std.mem.swap(std.ArrayList(u8), &statement, &e.out);
         // lower.checkRuntime admits these only on nodes whose statement is `_ = call;`.
         e.print("const n{d}: u32 = @backingInt({s});", .{ i, statement.items[4 .. statement.items.len - 1] });
-        if (n.margin) |m| {
-            e.print(" fx.set(n{d}, &.{{ .margin = ", .{i});
-            e.value(m);
-            e.write(" });");
+        if (flexOf(n)) |fs| {
+            e.print(" fx.set(n{d}, &", .{i});
+            e.structure(fs, FlexStyle{});
+            e.write(");");
         }
         if (n.placed.grid) |d| {
             e.print(" const k{d} = gs.declare(n{d}, ", .{ i, i });
@@ -2142,6 +2147,7 @@ pub const Emit = struct {
                 \\}
                 \\
                 \\const side_bytes = blk: {
+                \\    @setEvalBranchQuota(20_000);
                 \\    var carver: lcgf.mem.Carver = .{ .buf = null };
                 \\    _ = carveSides(&carver);
                 \\    break :blk carver.off;
