@@ -9,6 +9,7 @@ const lcgf = @import("lcgf");
 const ir = @import("ir.zig");
 const diag = @import("diag.zig");
 const types = lcgf.types;
+const FlexStyle = lcgf.flex.Flex.Style;
 
 const none = diag.none;
 
@@ -230,15 +231,15 @@ pub const Emit = struct {
             buf.appendSlice(e.arena, " })") catch unreachable;
             tokens_close = buf.items;
         }
-        // Flex item margins: engine spec F2, `spec.flexed(s, Flex.Style)`.
+        // Flex rules (margins, align-self, wrap, …): engine spec F2, `spec.flexed(s, Flex.Style)`.
         var margin_close: []const u8 = "";
-        if (n.margin) |m| {
+        if (flexOf(n)) |fs| {
             e.write("s.flexed(");
             var buf: std.ArrayList(u8) = .empty;
             std.mem.swap(std.ArrayList(u8), &buf, &e.out);
-            e.write(", .{ .margin = ");
-            e.value(m);
-            e.write(" })");
+            e.write(", ");
+            e.structure(fs, FlexStyle{});
+            e.write(")");
             std.mem.swap(std.ArrayList(u8), &buf, &e.out);
             margin_close = buf.items;
         }
@@ -1095,24 +1096,24 @@ pub const Emit = struct {
         return out.items;
     }
 
-    /// Whether a node has flex rules (CSS margins, engine spec F2).
+    /// Whether a node has flex rules (CSS margins, align-self, wrap, …; engine spec F2).
     fn hasFlex(e: *Emit) bool {
-        for (e.page.nodes.items(.margin)) |m| if (m != null) return true;
+        for (0..e.page.nodes.len) |i| if (flexOf(e.page.nodes.get(i)) != null) return true;
         return false;
     }
 
     /// `rtOpen`, with the node's flex rules written for the node its statement makes.
     fn rtOpenFlex(e: *Emit, i: u32, list_depth: u32) []const u8 {
-        const m = e.page.nodes.items(.margin)[i] orelse return e.rtOpen(i, list_depth);
+        const fs = flexOf(e.page.nodes.get(i)) orelse return e.rtOpen(i, list_depth);
         var statement: std.ArrayList(u8) = .empty;
         std.mem.swap(std.ArrayList(u8), &statement, &e.out);
         const close = e.rtOpen(i, list_depth);
         std.mem.swap(std.ArrayList(u8), &statement, &e.out);
         // lower.checkRuntime admits margins only on nodes whose statement is `_ = call;`.
         const call = statement.items[4 .. statement.items.len - 1];
-        e.print("fx.set(@backingInt({s}), &.{{ .margin = ", .{call});
-        e.value(m);
-        e.write(" });");
+        e.print("fx.set(@backingInt({s}), &", .{call});
+        e.structure(fs, FlexStyle{});
+        e.write(");");
         return close;
     }
 
@@ -1406,3 +1407,10 @@ pub const Emit = struct {
         e.write("}\n");
     }
 };
+
+/// Node `n`'s flex rules, its margins included, or null when it has none.
+fn flexOf(n: ir.Node) ?FlexStyle {
+    var fs = n.flex;
+    if (n.margin) |m| fs.margin = m;
+    return if (std.meta.eql(fs, FlexStyle{})) null else fs;
+}

@@ -46,6 +46,8 @@ pub const Lowerer = struct {
     text_tokens: []ir.TextTokens = &.{},
     /// The document node whose IR node comes next, for its text tokens.
     current: u32 = none,
+    /// Flex rules of the box being lowered other than its margins, attached by `addNode`.
+    flex: lcgf.flex.Flex.Style = .{},
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -734,6 +736,8 @@ pub const Lowerer = struct {
             l.uses.clearRetainingCapacity();
         }
         if (l.current != none) node.text_uses = l.text_tokens[l.current];
+        node.flex = l.flex;
+        l.flex = .{};
         ok(l.page.nodes.append(l.arena, node));
         return @intCast(l.page.nodes.len - 1);
     }
@@ -846,6 +850,7 @@ pub const Lowerer = struct {
     fn boxStyle(l: *Lowerer, n: u32, base: Style, axis: types.Axis, params: *[]const u8, margin: *?[4]f32) Style {
         var s = base;
         l.uses.clearRetainingCapacity();
+        l.flex = .{};
         const main: u1 = @backingInt(axis);
         const cross: u1 = 1 - main;
         inline for (.{ .{ Prop.width, 0, ir.Target.width }, .{ Prop.height, 1, ir.Target.height } }) |pa| if (l.length(n, pa[0])) |len| {
@@ -877,7 +882,9 @@ pub const Lowerer = struct {
             .auto => {},
         };
         if (l.keyword(n, .@"align-self")) |kw| {
-            if (css.eq(kw, "stretch")) s.size[cross] = .fill else if (!css.eq(kw, "auto")) _ = l.refused("value", kw, "align-self", l.declared(n, .@"align-self").?.loc);
+            if (css.eq(kw, "stretch")) s.size[cross] = .fill else if (alignOf(kw)) |a| {
+                l.flex.cross = a;
+            } else if (!css.eq(kw, "auto")) l.badValue(l.declared(n, .@"align-self").?.first, .@"align-self", l.declared(n, .@"align-self").?.end);
         }
         // Margins are flex item margins (engine spec F2).
         var m: [4]f32 = .{ 0, 0, 0, 0 };
@@ -1300,7 +1307,7 @@ pub const Lowerer = struct {
                 },
                 else => {},
             }
-            if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
+            if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.flex)[i], lcgf.flex.Flex.Style{}) or !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
                 l.ds.err(nodes.items(.loc)[i], "{s}", .{manifest.refusal("feature", "runtime-widget-style", "").?});
         }
     }

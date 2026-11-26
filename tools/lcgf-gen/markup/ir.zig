@@ -93,6 +93,9 @@ pub const Node = struct {
     max: u32 = 0,
     /// Engine API from docs/plans/markup-engine-api.md: flex item margins (F2), or null.
     margin: ?[4]f32 = null,
+    /// The node's other flex rules (align-self, wrap, baseline, lines, aspect): `spec.flexed`
+    /// with `margin` when either differs from the default.
+    flex: lcgf.flex.Flex.Style = .{},
     /// Inside an lcgf-each: the control shows the item's field (`checked="{row.done}"`) and
     /// reports changes (on:change) without writing it.
     one_way: bool = false,

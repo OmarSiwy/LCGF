@@ -1,4 +1,4 @@
-//! flexitems, written by hand: CSS margins as flex item margins (`spec.flexed`).
+//! flexitems, written by hand: CSS margins and the other flex item rules (`spec.flexed`).
 
 const lcgf = @import("lcgf");
 const s = lcgf.spec;
@@ -12,5 +12,10 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         // CSS top-right-bottom-left; Flex.Style.margin is left, top, right, bottom.
         s.flexed(label.ct.label(theme, "A"), .{ .margin = .{ 6, 2, 6, 2 } }),
         s.flexed(label.ct.label(theme, "B"), .{ .margin = .{ 0, 2, 6, 2 } }),
+    }),
+    // align-self: Flex.Style.cross.
+    s.row(.{ .size = .{ .fit, .px(40) } }, .{
+        label.ct.label(theme, "top"),
+        s.flexed(label.ct.label(theme, "C"), .{ .cross = .center }),
     }),
 });
