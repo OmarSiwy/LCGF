@@ -1,4 +1,5 @@
-//! content, written by hand: the document elements over widgets and roles: a link, lists, a
+//! content, written by hand: the document elements over widgets and roles: a link, lists
+//! with markers, a
 //! details section, the accent colour,
 //! text-transform, box-shadow, outline.
 
@@ -19,12 +20,20 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     link.ct.link(theme, .docs, "Read the docs"),
     // text-transform: Unicode casing of the literal text at build time, inherited; lang=tr.
     s.col(.{}, .{ label.ct.label(theme, "SHOUT"), label.ct.label(theme, "Two Words"), label.ct.label(theme, "STRASSE"), label.ct.label(theme, "İSTANBUL") }),
-    // <ul>, <ol>: role list; <li>: role list_item, on the label of text-only content.
+    // <ul>, <ol>: role list; <li>: a list_item row of its marker (disc, decimal from the
+    // UA sheet; list-style-type) and its content, which fills the rest.
     s.col(.{ .role = .list }, .{
-        s.styled(label.ct.label(theme, "Plain"), .{ .role = .list_item }),
-        s.col(.{ .role = .list_item }, .{ label.ct.label(theme, "Inside"), label.ct.label(theme, "a box") }),
+        s.row(.{ .role = .list_item }, .{ label.ct.label(theme, "\u{2022} "), s.styled(label.ct.label(theme, "Plain"), .{ .size = .{ .fill, .fit }, .role = .label }) }),
+        s.row(.{ .role = .list_item }, .{
+            label.ct.label(theme, "\u{2022} "),
+            s.col(.{ .size = .{ .fill, .fit } }, .{ label.ct.label(theme, "Inside"), label.ct.label(theme, "a box") }),
+        }),
     }),
-    s.col(.{ .role = .list }, .{s.styled(label.ct.label(theme, "First"), .{ .role = .list_item })}),
+    s.col(.{ .role = .list }, .{
+        s.row(.{ .role = .list_item }, .{ label.ct.label(theme, "3. "), s.styled(label.ct.label(theme, "First"), .{ .size = .{ .fill, .fit }, .role = .label }) }),
+        s.row(.{ .role = .list_item }, .{ label.ct.label(theme, "\u{25AA} "), s.styled(label.ct.label(theme, "Square"), .{ .size = .{ .fill, .fit }, .role = .label }) }),
+    }),
+    s.col(.{ .role = .list }, .{s.styled(label.ct.label(theme, "Bare"), .{ .role = .list_item })}),
     // box-shadow: a column in the box's place, a floating shadow node of its size first.
     s.flexed(s.col(.{ .size = .{ .px(120), .fit } }, .{
         s.col(.{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = .rgba(0, 0, 0, 128), .radius = 5, .params = lcgf.features.shadow(3), .paint_outset = .{ 1, -1, 1, 3 } }, .{}),

@@ -28,3 +28,6 @@ i, em, cite, var, dfn { font-style: italic; }
 code, kbd, samp, pre { font-family: monospace; }
 u, ins { text-decoration: underline; }
 s, del { text-decoration: line-through; }
+
+ul, menu { list-style-type: disc; }
+ol { list-style-type: decimal; }

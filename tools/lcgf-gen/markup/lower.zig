@@ -68,6 +68,9 @@ pub const Lowerer = struct {
     inline_of: []u32 = &.{},
     /// The paragraphs of inline runs, as their text is gathered: bytes and each byte's style.
     inlines: std.ArrayList(Inline) = .empty,
+    /// The marker text of the list item being lowered (`• `, `3. `), which `addNode` puts
+    /// in a row before the item's content.
+    marker: []const u8 = "",
 
     const Shadow = struct { x: f32, y: f32, blur: f32, spread: f32, color: types.Color };
     const Outline = struct { width: f32, offset: f32, color: types.Color };
@@ -1005,9 +1008,71 @@ pub const Lowerer = struct {
         if (l.current != none) node.text_uses = l.text_tokens[l.current];
         node.flex = l.flex;
         l.flex = .{};
+        if (l.marker.len > 0) l.markItem(&node);
         if (l.shadow != null or l.outline != null) l.decorate(&node);
         ok(l.page.nodes.append(l.arena, node));
         return @intCast(l.page.nodes.len - 1);
+    }
+
+    /// A list item with a marker: the item's box becomes a row (its style, margins, role and
+    /// decorations) holding a label of the marker, in the item's text style, then the item's
+    /// content, which keeps the item's own layout of its children and fills the rest of the
+    /// row. `node` becomes that content node.
+    fn markItem(l: *Lowerer, node: *ir.Node) void {
+        const marker = l.marker;
+        l.marker = "";
+        var item: ir.Node = .{ .kind = .container, .parent = node.parent, .loc = node.loc, .dir = .x, .style = node.style, .params_expr = node.params_expr, .margin = node.margin, .uses = node.uses, .name = node.name };
+        item.style.dir = .x;
+        item.style.gap = 0;
+        item.style.main = .start;
+        item.style.cross = .start;
+        item.style.role = .list_item;
+        item.flex = .{ .cross = node.flex.cross, .aspect = node.flex.aspect };
+        if (l.shadow != null or l.outline != null) l.decorate(&item);
+        ok(l.page.nodes.append(l.arena, item));
+        const row_: u32 = @intCast(l.page.nodes.len - 1);
+        const th = &l.page.theme;
+        const ls = lcgf.widgets_label.labelStyle(th);
+        ok(l.page.nodes.append(l.arena, .{ .kind = .label, .parent = row_, .loc = node.loc, .style = ls, .base_style = ls, .text_style = l.text[l.current], .base_text = lcgf.widgets_label.labelText(th), .text_kind = .literal, .text = marker, .text_uses = l.text_tokens[l.current] }));
+        // The content: the item's flow of its children, or its text, filling the row.
+        const box = node.style;
+        node.parent = row_;
+        node.style = if (node.kind == .container) .{ .dir = box.dir, .gap = box.gap, .main = box.main, .cross = box.cross } else node.base_style;
+        node.style.size[0] = .fill;
+        node.params_expr = "";
+        node.margin = null;
+        node.uses = &.{};
+        node.name = "";
+        node.flex.cross = null;
+        node.flex.aspect = 0;
+    }
+
+    /// The marker of list item `n` by its inherited `list-style-type`, or "" for none:
+    /// disc, circle, square, or decimal (its place among the item siblings, from the list's
+    /// `start`).
+    fn markerOf(l: *Lowerer, n: u32) []const u8 {
+        var i = n;
+        const kw = while (i != none) : (i = l.doc.nodes.items(.parent)[i]) {
+            if (l.k.get(i, .@"list-style-type").decl != none) break l.keyword(i, .@"list-style-type") orelse return "";
+        } else return "";
+        const at = l.declared(i, .@"list-style-type").?;
+        for ([_][2][]const u8{ .{ "disc", "\u{2022} " }, .{ "circle", "\u{25E6} " }, .{ "square", "\u{25AA} " } }) |m| if (css.eq(kw, m[0])) return m[1];
+        if (css.eq(kw, "none")) return "";
+        if (!css.eq(kw, "decimal")) {
+            l.ds.err(at.loc, "list-style-type: {s} is not lowered; use disc, circle, square, decimal or none", .{kw});
+            return "";
+        }
+        const p = l.doc.nodes.items(.parent)[n];
+        if (l.doc.nodes.items(.in_template)[n] or (p != none and l.doc.isElement(p, "template"))) {
+            l.ds.err(l.loc(n), "a decimal marker inside a template needs the item's index; use disc or none there", .{});
+            return "";
+        }
+        if (p != none and l.attr(p, "reversed") != null) l.ds.err(l.attrLoc(p, "reversed"), "a reversed list is not lowered; number it in the markup's order", .{});
+        var ordinal: i64 = if (p != none) (if (l.attr(p, "start")) |st| std.fmt.parseInt(i64, std.mem.trim(u8, st, " "), 10) catch 1 else 1) else 1;
+        if (p != none) for (p + 1..n) |k| {
+            if (l.doc.nodes.items(.parent)[k] == p and l.doc.isElement(@intCast(k), "li")) ordinal += 1;
+        };
+        return ok(std.fmt.allocPrint(l.arena, "{d}. ", .{ordinal}));
     }
 
     /// A box with a shadow or an outline: a column in its place takes what places and sizes
@@ -1209,6 +1274,7 @@ pub const Lowerer = struct {
         l.flex = .{};
         l.shadow = null;
         l.outline = null;
+        l.marker = "";
         l.boxShadow(n);
         l.outlineOf(n);
         const main: u1 = @backingInt(axis);
@@ -1652,6 +1718,7 @@ pub const Lowerer = struct {
             node.landmark = lm;
         }
         if (listRole(t)) |r| node.style.role = r;
+        if (std.mem.eql(u8, t, "li")) l.marker = l.markerOf(n);
         node.name = l.accessibleName(n);
         l.ir_of[n] = l.addNode(node);
     }
@@ -1693,6 +1760,7 @@ pub const Lowerer = struct {
         var margin: ?[4]f32 = null;
         var s = l.boxStyle(n, base_style, l.parentDir(parent), &params, &margin);
         if (listRole(l.tag(n))) |r| s.role = r;
+        if (std.mem.eql(u8, l.tag(n), "li")) l.marker = l.markerOf(n);
         var node: ir.Node = .{
             .kind = if (heading != 0) .heading else .label,
             .parent = parent,
@@ -2979,7 +3047,7 @@ fn isComponent(t: []const u8) bool {
 }
 
 /// The list role of element `t` (engine spec F1): `<ul>`, `<ol>` and `<menu>` are lists, `<li>`
-/// their items. No marker is drawn, as under `list-style: none`.
+/// their items.
 fn listRole(t: []const u8) ?types.Role {
     if (std.mem.eql(u8, t, "ul") or std.mem.eql(u8, t, "ol") or std.mem.eql(u8, t, "menu")) return .list;
     if (std.mem.eql(u8, t, "li")) return .list_item;

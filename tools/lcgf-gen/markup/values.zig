@@ -65,6 +65,7 @@ pub const Prop = enum(u8) {
     @"outline-style",
     @"outline-color",
     @"outline-offset",
+    @"list-style-type",
     color,
     @"font-size",
     @"font-family",
@@ -95,7 +96,7 @@ pub const Prop = enum(u8) {
     /// Inherited properties take the parent's computed value when nothing is declared.
     pub fn inherited(p: Prop) bool {
         return switch (p) {
-            .color, .@"font-size", .@"font-family", .@"font-weight", .@"font-style", .@"line-height", .@"text-align", .@"white-space", .@"letter-spacing", .@"word-spacing", .@"text-transform", .visibility, .cursor, .@"pointer-events", .direction, .@"accent-color" => true,
+            .color, .@"font-size", .@"font-family", .@"font-weight", .@"font-style", .@"line-height", .@"text-align", .@"white-space", .@"letter-spacing", .@"word-spacing", .@"text-transform", .@"list-style-type", .visibility, .cursor, .@"pointer-events", .direction, .@"accent-color" => true,
             else => false,
         };
     }
@@ -123,6 +124,7 @@ pub const shorthands = [_]Shorthand{
     .{ .name = "margin-inline", .longhands = &.{ .@"margin-left", .@"margin-right" } },
     .{ .name = "margin-block", .longhands = &.{ .@"margin-top", .@"margin-bottom" } },
     .{ .name = "flex-flow", .longhands = &.{ .@"flex-direction", .@"flex-wrap" } },
+    .{ .name = "list-style", .longhands = &.{.@"list-style-type"} },
     .{ .name = "outline", .longhands = &.{ .@"outline-width", .@"outline-style", .@"outline-color" } },
     .{ .name = "padding-inline-start", .longhands = &.{.@"padding-left"} },
     .{ .name = "padding-inline-end", .longhands = &.{.@"padding-right"} },
