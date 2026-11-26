@@ -239,8 +239,14 @@ pub fn Renderer(comptime gpu: type) type {
 
         /// One instanced draw call for a text run's glyphs.
         pub fn drawText(self: *const Self, pass: gpu.RenderPass, run: u32) void {
+            self.drawGlyphSpan(pass, self.glyphs.span(run));
+        }
+
+        /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
+        /// draw (`iface.drawUntilCustom`).
+        pub fn drawGlyphSpan(self: *const Self, pass: gpu.RenderPass, span: [2]u32) void {
             self.bind(pass, .solid, self.glyphs.texture, self.glyph_quads, @as(u64, self.desc.max_glyphs) * quad_stride);
-            gpu.draw(pass, 4, self.glyphs.span(run)[1], 0, self.glyphs.span(run)[0]);
+            gpu.draw(pass, 4, span[1], 0, span[0]);
         }
 
         /// Diagonal: the whole list, skipping custom draws. With custom draws, loop with
@@ -362,10 +368,11 @@ test "renderer: one upload per buffer, one draw per command, state rebound every
     try testing.expectEqual(@as(usize, 8 * @sizeOf(Quad)), log.calls[1].write.bytes);
     try testing.expectEqual(@as(usize, @sizeOf(Globals)), log.calls[2].write.bytes);
 
-    // 4 draws, 5 calls each: pipeline, group 0, group 1, vertex buffer, draw.
+    // 3 draws (the two text runs are adjacent: one), 5 calls each: pipeline, group 0, group 1,
+    // vertex buffer, draw.
     log.len = 0;
     gfx.render(&log, &st.draw);
-    try testing.expectEqual(@as(usize, 4 * 5), log.len);
+    try testing.expectEqual(@as(usize, 3 * 5), log.len);
     var draws: [8]Mock.Call = undefined;
     var draw_count: usize = 0;
     for (log.calls[0..log.len]) |call| switch (call) {
@@ -375,17 +382,17 @@ test "renderer: one upload per buffer, one draw per command, state rebound every
         },
         else => {},
     };
-    try testing.expectEqual(@as(usize, 4), draw_count);
-    for (draws[0..4]) |d| try testing.expectEqual(@as(u32, 4), d.draw.vertices);
+    try testing.expectEqual(@as(usize, 3), draw_count);
+    for (draws[0..3]) |d| try testing.expectEqual(@as(u32, 4), d.draw.vertices);
     try testing.expectEqual(@as(u32, 1), draws[0].draw.instances); // panel
-    try testing.expectEqual(@as(u32, 3), draws[1].draw.instances); // "UI!"
-    try testing.expectEqual(@as(u32, 3), draws[2].draw.first_instance); // "Hello"
-    try testing.expectEqual(@as(u32, 1), draws[3].draw.first_instance); // the bar after the text
+    try testing.expectEqual(@as(u32, 8), draws[1].draw.instances); // "UI!" and "Hello"
+    try testing.expectEqual(@as(u32, 0), draws[1].draw.first_instance);
+    try testing.expectEqual(@as(u32, 1), draws[2].draw.first_instance); // the bar after the text
     // Text binds the atlas (group 1) and the glyph buffer; quads bind white and the quad buffer.
     try testing.expectEqual(gfx.textures[2], log.calls[5 + 2].group.group);
     try testing.expectEqual(gfx.glyph_quads, log.calls[5 + 3].vertex_buffer.buffer);
-    try testing.expectEqual(gfx.textures[0], log.calls[15 + 2].group.group);
-    try testing.expectEqual(gfx.quads, log.calls[15 + 3].vertex_buffer.buffer);
+    try testing.expectEqual(gfx.textures[0], log.calls[10 + 2].group.group);
+    try testing.expectEqual(gfx.quads, log.calls[10 + 3].vertex_buffer.buffer);
 
     // The host's loop stops at the custom draw and the renderer rebinds everything after it.
     const custom = &conformance.scenes[3];

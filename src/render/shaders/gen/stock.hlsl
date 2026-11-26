@@ -53,8 +53,8 @@ StructuredBuffer<uint> nagaGroup1SamplerIndexArray : register(t1, space255);
 static const SamplerState samp = nagaSamplerHeap[nagaGroup1SamplerIndexArray[1]];
 
 struct VertexOutput_vs {
-    float2 local_1 : LOC0;
-    float2 uv : LOC1;
+    float2 local_3 : LOC0;
+    float2 uv_1 : LOC1;
     float2 pixel : LOC2;
     nointerpolation float2 half_2 : LOC3;
     nointerpolation float4 radii_1 : LOC4;
@@ -72,8 +72,8 @@ struct VertexOutput_vs {
 };
 
 struct FragmentInput_fs {
-    float2 local_2 : LOC0;
-    float2 uv_1 : LOC1;
+    float2 local_4 : LOC0;
+    float2 uv_2 : LOC1;
     float2 pixel_1 : LOC2;
     nointerpolation float2 half_3 : LOC3;
     nointerpolation float4 radii_2 : LOC4;
@@ -143,7 +143,7 @@ float2 nearest_uv(Frag in_2)
 
 float4 gradient(Frag in_3)
 {
-    bool local = (bool)0;
+    bool local_1 = (bool)0;
 
     uint _e2 = in_3.params.y;
     float4 to = (float4(_e2 & 0xFF, _e2 >> 8 & 0xFF, _e2 >> 16 & 0xFF, _e2 >> 24) / 255.0);
@@ -156,11 +156,11 @@ float4 gradient(Frag in_3)
     float t_rad = (length((in_3.local - centre)) / max(asfloat(in_3.params.w), 1e-6));
     float t = clamp(((in_3.params.x == k_radial) ? t_rad : t_lin), 0.0, 1.0);
     if (!((in_3.params.x == k_linear))) {
-        local = (in_3.params.x == k_radial);
+        local_1 = (in_3.params.x == k_radial);
     } else {
-        local = true;
+        local_1 = true;
     }
-    bool graded = local;
+    bool graded = local_1;
     return (graded ? lerp(in_3.fill, to, t) : in_3.fill);
 }
 
@@ -216,12 +216,32 @@ float border_pattern(Frag in_5)
 
 float4 material(Frag in_6)
 {
-    const float2 _e1 = nearest_uv(in_6);
-    const float2 _e2 = nine_uv(in_6);
-    float2 uv_2 = ((in_6.params.x == k_nine) ? _e2 : _e1);
-    const float4 _e8 = gradient(in_6);
-    float4 _e11 = tex.Sample(samp, uv_2);
-    return (_e8 * _e11);
+    float2 uv = (float2)0;
+    float4 color = (float4)0;
+    bool local_2 = (bool)0;
+
+    if ((in_6.params.x == k_nine)) {
+        const float2 _e6 = nine_uv(in_6);
+        uv = _e6;
+    } else {
+        const float2 _e7 = nearest_uv(in_6);
+        uv = _e7;
+    }
+    color = in_6.fill;
+    if (!((in_6.params.x == k_linear))) {
+        local_2 = (in_6.params.x == k_radial);
+    } else {
+        local_2 = true;
+    }
+    bool _e22 = local_2;
+    if (_e22) {
+        const float4 _e23 = gradient(in_6);
+        color = _e23;
+    }
+    float4 _e24 = color;
+    float2 _e27 = uv;
+    float4 _e28 = tex.Sample(samp, _e27);
+    return (_e24 * _e28);
 }
 
 VertexOutput_vs vs(uint vi : SV_VertexID, Instance inst)
@@ -264,7 +284,12 @@ VertexOutput_vs vs(uint vi : SV_VertexID, Instance inst)
 
 float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
 {
-    Frag in_ = { fragmentinput_fs.position_1, fragmentinput_fs.local_2, fragmentinput_fs.uv_1, fragmentinput_fs.pixel_1, fragmentinput_fs.half_3, fragmentinput_fs.radii_2, fragmentinput_fs.fill_1, fragmentinput_fs.border_color_1, fragmentinput_fs.clip_1, fragmentinput_fs.params_1, fragmentinput_fs.uv_rect_1, fragmentinput_fs.border_1, fragmentinput_fs.opacity_1, fragmentinput_fs.clip_radii_1, fragmentinput_fs.to_rect_1, fragmentinput_fs.to_rect_off_1 };
+    Frag in_ = { fragmentinput_fs.position_1, fragmentinput_fs.local_4, fragmentinput_fs.uv_2, fragmentinput_fs.pixel_1, fragmentinput_fs.half_3, fragmentinput_fs.radii_2, fragmentinput_fs.fill_1, fragmentinput_fs.border_color_1, fragmentinput_fs.clip_1, fragmentinput_fs.params_1, fragmentinput_fs.uv_rect_1, fragmentinput_fs.border_1, fragmentinput_fs.opacity_1, fragmentinput_fs.clip_radii_1, fragmentinput_fs.to_rect_1, fragmentinput_fs.to_rect_off_1 };
+    float pattern = 1.0;
+    bool local = (bool)0;
+    float cover = (float)0;
+    float rounded = 1.0;
+
     const float _e4 = corner_radius(in_.local, in_.half_, in_.radii);
     const float _e7 = rounded_box(in_.local, in_.half_, _e4);
     float _e10 = globals.scale;
@@ -274,22 +299,39 @@ float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
     float inner = clamp((0.5 - (d_1 + (in_.border * _e20))), 0.0, 1.0);
     float has_border = step(0.001, in_.border);
     bool is_shadow = (in_.params.x == k_shadow);
-    const float _e39 = border_pattern(in_);
-    float on_border = ((1.0 - lerp(1.0, inner, has_border)) * _e39);
-    const float4 _e41 = material(in_);
-    float4 color = (is_shadow ? in_.fill : lerp(_e41, in_.border_color, on_border));
-    float _e48 = globals.scale;
-    const float _e53 = shadow_coverage((d_1 / _e48), asfloat(in_.params.y));
-    float cover = (is_shadow ? _e53 : shape);
+    if (!((in_.params.x == k_dashed))) {
+        local = (in_.params.x == k_dotted);
+    } else {
+        local = true;
+    }
+    bool _e49 = local;
+    if (_e49) {
+        const float _e50 = border_pattern(in_);
+        pattern = _e50;
+    }
+    float _e55 = pattern;
+    float on_border = ((1.0 - lerp(1.0, inner, has_border)) * _e55);
+    const float4 _e57 = material(in_);
+    float4 color_1 = (is_shadow ? in_.fill : lerp(_e57, in_.border_color, on_border));
+    cover = shape;
+    if (is_shadow) {
+        float _e65 = globals.scale;
+        const float _e70 = shadow_coverage((d_1 / _e65), asfloat(in_.params.y));
+        cover = _e70;
+    }
     float2 inside = (step(in_.clip_.xy, in_.pixel) * step(in_.pixel, in_.clip_.zw));
-    float2 clip_centre = ((in_.clip_.xy + in_.clip_.zw) * 0.5);
-    float2 clip_half = ((in_.clip_.zw - in_.clip_.xy) * 0.5);
-    float2 to_clip = (in_.pixel - clip_centre);
-    const float _e81 = corner_radius(to_clip, clip_half, in_.clip_radii);
-    const float _e82 = rounded_box(to_clip, clip_half, _e81);
-    float _e85 = globals.scale;
-    float clip_d = (_e82 * _e85);
-    float rounded = (any((in_.clip_radii > (0.0).xxxx)) ? clamp((0.5 - clip_d), 0.0, 1.0) : 1.0);
-    float alpha = ((((cover * inside.x) * inside.y) * rounded) * in_.opacity);
-    return (float4((color.xyz * color.w), color.w) * alpha);
+    if (any((in_.clip_radii > (0.0).xxxx))) {
+        float2 clip_centre = ((in_.clip_.xy + in_.clip_.zw) * 0.5);
+        float2 clip_half = ((in_.clip_.zw - in_.clip_.xy) * 0.5);
+        float2 to_clip = (in_.pixel - clip_centre);
+        const float _e104 = corner_radius(to_clip, clip_half, in_.clip_radii);
+        const float _e105 = rounded_box(to_clip, clip_half, _e104);
+        float _e108 = globals.scale;
+        float clip_d = (_e105 * _e108);
+        rounded = clamp((0.5 - clip_d), 0.0, 1.0);
+    }
+    float _e115 = cover;
+    float _e120 = rounded;
+    float alpha = ((((_e115 * inside.x) * inside.y) * _e120) * in_.opacity);
+    return (float4((color_1.xyz * color_1.w), color_1.w) * alpha);
 }

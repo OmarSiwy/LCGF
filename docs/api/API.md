@@ -2350,6 +2350,7 @@ Damage state across frames: two generations of the per-node hash, written altern
 Fields: `cap`, `gen`, `cur`, `dirty`, `list`, `dirty_len`, `region`
 
 - `Gen = struct { len: u32 = 0, hash: []u32, vis: [4][]f32 }`: One frame: its row count, per-row hash and visible rect (`Tree.Columns.vis`).
+- `none: Damage = .{ .cap = 0, .gen = @splat(.{ .hash = &.{}, .vis = @splat(&.{}) }), .dirty = &.{}, .list = &.{} }`: No rows: for a context that does not track damage.
 - `fn init(carver: *mem.Carver, cap: u32) Damage`: Carves `simd.rows(cap)` rows per column.
 - `fn frame(dm: *Damage, t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8) u32`: Records this frame's paint inputs, marks in `dirty` the rows that differ from the last frame recorded and sets `region` to what they covered then and cover now.
 
@@ -2835,6 +2836,7 @@ The back-end contract: what every renderer (software, Vulkan, Metal, D3D12, GL E
 - `required = [_][]const u8{ "Queue", "Pass", "prepare", "drawBatch", "drawText" }`: The declarations `check` requires of a back end.
 - `fn check(comptime B: type) void`: Compile error unless `B` declares everything in `required`.
 - `fn drawUntilCustom(b: anytype, pass: @TypeOf(b.*).Pass, draw: *const DrawList, from: u32) u32`: Draws commands `from`, `from + 1`, ...
+- `fn glyphSpan(g: Glyphs, list: anytype, i: *u32, run: u32) [2]u32`: Text command `i.*`'s glyphs (run `run`) and those of the text commands after it, while each run's glyphs start where the last one's end; `i.*` is left at the last command taken.
 - `fn render(b: anytype, pass: @TypeOf(b.*).Pass, draw: *const DrawList) void`: Diagonal: the whole list, skipping custom draws.
 
 ### `Glyphs` (struct)
@@ -2933,6 +2935,7 @@ Fields: `glyphs`
 - `fn prepare(n: *Null, queue: Queue, draw: *const DrawList, glyphs: iface.Glyphs, viewport: [2]f32, scale: f32) void`
 - `fn drawBatch(_: *const Null, pass: Pass, batch: draw_list.Batch) void`
 - `fn drawText(n: *const Null, pass: Pass, run: u32) void`
+- `fn drawGlyphSpan(n: *const Null, pass: Pass, span: [2]u32) void`: The `span[1]` glyph quads from `span[0]`: consecutive text runs in one draw (`iface.drawUntilCustom`).
 
 ## `lcgf.gpu_desc` (src/render/gpu/desc.zig)
 
@@ -3187,7 +3190,7 @@ Context: the runtime front end's state that outlives a frame (tier 1).
 ### `Limits` (struct)
 Capacities.
 
-Fields: `nodes`, `texts`, `customs`, `strings`, `anims`, `tweens`, `flips`, `signals`, `depth`, `timers`, `memos`
+Fields: `nodes`, `texts`, `customs`, `strings`, `anims`, `tweens`, `flips`, `signals`, `depth`, `timers`, `memos`, `damage`
 
 
 ### `Status` (struct)
@@ -3212,9 +3215,11 @@ Fields: `draw`, `tree`, `texts`, `platform`, `status`, `wake`, `pace`
 ### `Context` (struct)
 Everything that outlives a frame.
 
-Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`
+Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`, `damage`, `damage_hook`, `redraw_all`, `last_view`
 
 - `needsFrame = scheduler.needsFrame`
+- `fn trackDamage(ctx: *Context) void`: From the next frame on, keeps in the draw list only the quads that reach what changed since the last frame, with `DrawList.damage` saying where: for a host that keeps last frame's pixels and redraws only that (`sw.Setup.draw`, the X11 and Wayland shells, the bare-metal flush).
+- `fn redrawAll(ctx: *Context) void`: With `trackDamage`: the next frame's draw list covers the whole window, as for a host that has lost last frame's pixels (a new buffer).
 - `fn requiredBytes(limits: Limits) usize`: Bytes `init` needs.
 - `fn init(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context`: The buffer is the only memory the library will ever use.
 - `fn initZeroed(buffer: []align(mem.column_align) u8, limits: Limits) error{BufferTooSmall}!Context`: `init` over a buffer that is all zero bytes (a static buffer never used before, fresh `mmap` memory): it is not cleared, so capacity the frames never reach stays untouched and costs no resident memory.
@@ -6312,6 +6317,7 @@ The software back end: draws a `DrawList` into a caller-owned framebuffer on the
 
 ### Top level
 
+- `bands = @import("bands.zig")`
 - `Format = enum(u8) { rgba8, bgra8 }`: Byte order of a pixel in memory.
 - `Software = SoftwareOf(all_kinds)`: The back end with every feature of the stock material compiled in.
 - `all_kinds: []const features.Kind = std.enums.values(features.Kind)`: Every `features.Kind`, in declaration order.
@@ -6336,7 +6342,7 @@ Fields: `pixels`, `width`, `height`, `stride`, `format`
 - `fn clear(fb: *Framebuffer, c: Color) void`
 
 ### `Image` (struct)
-Caller-owned nearest-sampled texture.
+A caller-owned texture: `width` x `height` texels, RGBA8 (`Color` bits) in `pixels` or coverage in `alpha8`, sampled nearest with clamped coordinates, as the GPU back ends' samplers do.
 
 Fields: `pixels`, `width`, `height`, `alpha8`
 
@@ -6363,9 +6369,9 @@ Software renderer for the features collected from a comptime UI.
 ### `Setup` (struct)
 What a shell that draws in software keeps, and its frame: clear the framebuffer and draw the whole list into it.
 
-Fields: `gfx`
+Fields: `gfx`, `pool`
 
-- `fn draw(s: *Setup, fb: *Framebuffer, list: *const DrawList, glyphs: iface.Glyphs, background: Color, scale: f32) void`
+- `fn draw(s: *Setup, fb: *Framebuffer, list: *const DrawList, glyphs: iface.Glyphs, background: Color, scale: f32) void`: Draws `list` over `fb`, which holds the last frame: only the rects of `list.damage` (all of `fb` unless the context tracks damage, `Context.trackDamage`), each cleared and drawn.
 
 ## `lcgf.render_sw_font` (src/render/sw/font.zig)
 
@@ -6375,7 +6381,7 @@ The bundled bitmap font for the software renderer: DejaVu Sans Mono at 14 px (th
 
 - `width = 16 * cell_w`
 - `height = 16 * cell_h`
-- `image: sw.Image = .{ .pixels = &pixels, .width = width, .height = height }`
+- `image: sw.Image = .{ .alpha8 = &alpha, .width = width, .height = height }`
 
 ## `lcgf.png` (src/assets/png.zig)
 
@@ -6500,6 +6506,7 @@ Fields: `desc`, `quads`, `glyph_quads`, `globals`, `globals_group`, `pipelines`,
 - `fn preparePatched(self: *Self, queue: gpu.Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32, dirty: anytype) void`: Upload the rows touched since the last frame on this buffer.
 - `fn drawBatch(self: *const Self, pass: gpu.RenderPass, batch: draw_list.Batch) void`: One instanced draw call for a run of quads.
 - `fn drawText(self: *const Self, pass: gpu.RenderPass, run: u32) void`: One instanced draw call for a text run's glyphs.
+- `fn drawGlyphSpan(self: *const Self, pass: gpu.RenderPass, span: [2]u32) void`: The `span[1]` glyph quads from `span[0]`: consecutive text runs in one draw (`iface.drawUntilCustom`).
 - `fn render(self: *const Self, pass: gpu.RenderPass, draw: *const DrawList) void`: Diagonal: the whole list, skipping custom draws.
 
 ### `Renderer(..).Desc` (struct)

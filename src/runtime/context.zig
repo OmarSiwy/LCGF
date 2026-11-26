@@ -22,6 +22,8 @@ const Tweens = @import("../anim/tweens.zig").Tweens;
 const Flips = @import("../anim/flip.zig").Flips;
 const Memos = @import("reuse.zig").Memos;
 const Levels = @import("../layout/levels.zig").Levels;
+const damage = @import("../draw/damage.zig");
+const Damage = damage.Damage;
 const Settings = @import("../a11y/settings_data.zig").Settings;
 
 /// Capacities. Every one is fixed at `init`; running out is reported, never fatal.
@@ -44,6 +46,9 @@ pub const Limits = struct {
     timers: u32 = 32,
     /// Subtrees remembered by `Frame.reuse`.
     memos: u32 = 128,
+    /// Room to track what each frame changed (`damage.Damage`, about 50 bytes a node); tracking
+    /// starts with `Context.trackDamage`.
+    damage: bool = false,
 };
 
 /// Capacity problems this frame. Nothing is written out of bounds when a limit is hit; the frame
@@ -161,6 +166,14 @@ pub const Context = struct {
     /// Level-order index of the tree, rebuilt by `Frame.end` when no subtree is kept, so resolve
     /// sweeps level by level (docs/perf/port-perf.md).
     levels: Levels,
+    /// What changed since the last frame, with `limits.damage` (no rows without).
+    damage: Damage,
+    /// Set by `trackDamage`: records each frame and culls its draw list.
+    damage_hook: ?*const fn (ctx: *Context, t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8) void = null,
+    /// The next frame repaints everything (`redrawAll`, or a new viewport or scale).
+    redraw_all: bool = false,
+    /// Viewport and scale of the last `begin`.
+    last_view: [3]f32 = @splat(0),
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -184,7 +197,32 @@ pub const Context = struct {
             .levels = Levels.init(carver, limits.nodes),
             .scopes = focus.Scopes.init(carver, limits.nodes),
             .previous_scope_kind = carver.slice(u8, simd.rows(limits.nodes)),
+            .damage = if (limits.damage) Damage.init(carver, limits.nodes) else Damage.none,
         };
+    }
+
+    /// From the next frame on, keeps in the draw list only the quads that reach what changed
+    /// since the last frame, with `DrawList.damage` saying where: for a host that keeps last
+    /// frame's pixels and redraws only that (`sw.Setup.draw`, the X11 and Wayland shells, the
+    /// bare-metal flush). The first frame is whole. Needs `Limits.damage`; a host that draws
+    /// every frame whole (a GPU back end clearing its target) must not call it. Its code is
+    /// linked only into programs that call it.
+    pub fn trackDamage(ctx: *Context) void {
+        std.debug.assert(ctx.limits.damage);
+        ctx.damage_hook = &recordDamage;
+        ctx.redraw_all = true;
+    }
+
+    fn recordDamage(ctx: *Context, t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8) void {
+        _ = ctx.damage.frame(t, tx, cu, strings);
+        damage.cull(&ctx.draw, if (ctx.redraw_all) &damage.Region.everything else &ctx.damage.region);
+        ctx.redraw_all = false;
+    }
+
+    /// With `trackDamage`: the next frame's draw list covers the whole window, as for a host
+    /// that has lost last frame's pixels (a new buffer).
+    pub fn redrawAll(ctx: *Context) void {
+        ctx.redraw_all = true;
     }
 
     /// Bytes `init` needs. Callable at comptime, so a static buffer can be declared as
@@ -292,6 +330,10 @@ pub const Context = struct {
         ctx.motion = @max(ctx.anims.step(in.dt), ctx.tweens.step(in.dt));
         ctx.flips.len = 0;
 
+        // Damage is in logical pixels: a new scale, or a new size, moves every physical pixel.
+        const view: [3]f32 = .{ in.viewport[0], in.viewport[1], in.scale };
+        ctx.redraw_all = ctx.redraw_all or !std.mem.eql(f32, &view, &ctx.last_view);
+        ctx.last_view = view;
         const root = t.push(0, root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
         ctx.stack[0] = root;
         ctx.depth = 1;

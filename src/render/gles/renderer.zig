@@ -71,7 +71,15 @@ pub const Renderer = struct {
         f3.glGenVertexArrays(1, @ptrCast(&r.vao));
         f.glGenBuffers(1, @ptrCast(&r.instances));
         f.glBindBuffer(gl.ARRAY_BUFFER, r.instances);
-        f.glBufferData(gl.ARRAY_BUFFER, @intCast((@as(usize, desc.max_quads) + desc.max_glyphs) * quad_shader.stride), null, gl.DYNAMIC_DRAW);
+        f.glBufferData(gl.ARRAY_BUFFER, @intCast(r.instanceBytes()), null, gl.STREAM_DRAW);
+        // The vertex array's own state, which no host call reaches unless it binds this array:
+        // every attribute on, one step per instance. Draws set only the pointers.
+        f3.glBindVertexArray(r.vao);
+        inline for (quad_shader.attrs) |a| {
+            f.glEnableVertexAttribArray(a.location);
+            f3.glVertexAttribDivisor(a.location, 1);
+        }
+        f3.glBindVertexArray(0);
         f.glGenBuffers(1, @ptrCast(&r.globals));
         f.glBindBuffer(gl.UNIFORM_BUFFER, r.globals);
         f.glBufferData(gl.UNIFORM_BUFFER, @sizeOf(Globals), null, gl.DYNAMIC_DRAW);
@@ -130,9 +138,12 @@ pub const Renderer = struct {
     pub fn prepare(r: *Renderer, _: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
         const f = r.f;
         const g: Globals = .{ .viewport = viewport, .scale = scale };
+        // Fresh storage for both buffers each frame (orphaning): a write into storage the last
+        // frame's draws may still read would wait for the GPU to finish them.
         f.glBindBuffer(gl.UNIFORM_BUFFER, r.globals);
-        f.glBufferSubData(gl.UNIFORM_BUFFER, 0, @sizeOf(Globals), &g);
+        f.glBufferData(gl.UNIFORM_BUFFER, @sizeOf(Globals), &g, gl.STREAM_DRAW);
         f.glBindBuffer(gl.ARRAY_BUFFER, r.instances);
+        f.glBufferData(gl.ARRAY_BUFFER, @intCast(r.instanceBytes()), null, gl.STREAM_DRAW);
         const quad_bytes = draw.quadBytes();
         const qn = @min(quad_bytes.len, @as(usize, r.desc.max_quads) * quad_shader.stride);
         if (qn > 0) f.glBufferSubData(gl.ARRAY_BUFFER, 0, @intCast(qn), quad_bytes.ptr);
@@ -144,13 +155,18 @@ pub const Renderer = struct {
         r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
     }
 
+    fn instanceBytes(r: *const Renderer) usize {
+        return (@as(usize, r.desc.max_quads) + r.desc.max_glyphs) * quad_shader.stride;
+    }
+
     fn glyphsAt(r: *const Renderer) usize {
         return @as(usize, r.desc.max_quads) * quad_shader.stride;
     }
 
     /// Full state, every draw (iface.zig, "Full state rebinding"): program, globals, texture,
-    /// vertex array and every attribute at `at` bytes, viewport, blending and the tests a host
-    /// may have turned on. Handles are clamped rather than checked: a stale handle draws with
+    /// vertex array and every attribute pointer at `at` bytes, viewport, blending and the tests a
+    /// host may have turned on. The attributes' enables and divisors live in the vertex array,
+    /// set once by `init`. Handles are clamped rather than checked: a stale handle draws with
     /// the last valid entry.
     fn bind(r: *const Renderer, material: types.Material, texture: types.Texture, at: usize) void {
         const f = r.f;
@@ -164,8 +180,6 @@ pub const Renderer = struct {
         f.glBindBuffer(gl.ARRAY_BUFFER, r.instances);
         inline for (quad_shader.attrs) |a| {
             const ptr: ?*const anyopaque = @ptrFromInt(at + a.offset);
-            f.glEnableVertexAttribArray(a.location);
-            f3.glVertexAttribDivisor(a.location, 1);
             switch (comptime gl.attrFormat(a.format)) {
                 .float => |n| f.glVertexAttribPointer(a.location, n, gl.FLOAT, 0, quad_shader.stride, ptr),
                 .uint => |n| f3.glVertexAttribIPointer(a.location, n, gl.UNSIGNED_INT, quad_shader.stride, ptr),
@@ -184,9 +198,15 @@ pub const Renderer = struct {
     }
 
     /// One instanced draw for a text run's glyphs.
-    pub fn drawText(r: *const Renderer, _: Pass, run: u32) void {
-        r.bind(.solid, r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.span(run)[0]) * quad_shader.stride);
-        r.f3.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(r.glyphs.span(run)[1]));
+    pub fn drawText(r: *const Renderer, pass: Pass, run: u32) void {
+        r.drawGlyphSpan(pass, r.glyphs.span(run));
+    }
+
+    /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
+    /// draw (`iface.drawUntilCustom`).
+    pub fn drawGlyphSpan(r: *const Renderer, _: Pass, span: [2]u32) void {
+        r.bind(.solid, r.glyphs.texture, r.glyphsAt() + @as(usize, span[0]) * quad_shader.stride);
+        r.f3.glDrawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, @intCast(span[1]));
         r.f3.glBindVertexArray(0);
     }
 

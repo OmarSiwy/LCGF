@@ -4,7 +4,6 @@
 //! draws real text with it when the image is bound as its glyph texture (`lcgf_app` does this
 //! for the software shells). Bytes outside printable ASCII show the question mark. Tier 0.
 
-const lcgf_types = @import("../../core/types.zig");
 const sw = @import("sw.zig");
 
 const cell_w = 9;
@@ -15,9 +14,10 @@ const source: *const [source_columns * cell_w * 6 * cell_h]u8 = @embedFile("../.
 pub const width = 16 * cell_w;
 pub const height = 16 * cell_h;
 
-const pixels: [width * height]u32 = blk: {
+/// Coverage, one byte a texel (`sw.Image.alpha8`): a quarter of the bytes of RGBA.
+const alpha: [width * height]u8 = blk: {
     @setEvalBranchQuota(20 * width * height);
-    var out: [width * height]u32 = undefined;
+    var out: [width * height]u8 = undefined;
     for (0..256) |b| {
         const index = (if (b >= 32 and b <= 126) b else '?') - 32;
         const sx = (index % source_columns) * cell_w;
@@ -25,11 +25,10 @@ const pixels: [width * height]u32 = blk: {
         const dx = (b % 16) * cell_w;
         const dy = (b / 16) * cell_h;
         for (0..cell_h) |y| for (0..cell_w) |x| {
-            const a = source[(sy + y) * source_columns * cell_w + sx + x];
-            out[(dy + y) * width + dx + x] = lcgf_types.Color.rgba(255, 255, 255, a).bitsOf();
+            out[(dy + y) * width + dx + x] = source[(sy + y) * source_columns * cell_w + sx + x];
         };
     }
     break :blk out;
 };
 
-pub const image: sw.Image = .{ .pixels = &pixels, .width = width, .height = height };
+pub const image: sw.Image = .{ .alpha8 = &alpha, .width = width, .height = height };

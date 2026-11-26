@@ -1134,7 +1134,16 @@ pub const Window = struct {
         const g = w.glyphs;
         const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
         w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count, .texture = w.text_texture }, w.background, w.scale);
-        w.presentPixels() catch {};
+        // What `draw` redrew: the damage rects (`Context.trackDamage`), else the whole frame.
+        // The pixmap keeps the rest from earlier frames.
+        var boxes: [lcgf.damage.max_rects][4]u32 = undefined;
+        var len: usize = 0;
+        for (0..lcgf.damage.max_rects) |k| {
+            const r = lcgf.damage.Region.scissor(out.draw.damage.rect(@intCast(k)), .{ width, rows }, w.scale);
+            boxes[len] = .{ r[0], r[1], r[0] + r[2], r[1] + r[3] };
+            len += @intFromBool(r[2] != 0 and r[3] != 0);
+        }
+        w.presentPixelsRegions(boxes[0..len]) catch {};
     }
 
     /// Upload a host-drawn framebuffer offscreen, then show the complete frame in one request.
@@ -1155,18 +1164,31 @@ pub const Window = struct {
             w.pixmap_width = width;
             w.pixmap_height = height;
         }
+        try w.uploadRows(0, height);
+        try w.showPixmap();
+        w.presents += 1;
+        w.presented_size = .{ w.width, w.height };
+        w.last_present = now();
+    }
+
+    /// Sends rows `from` to `to` of the frame buffer to the pixmap, padding included: whole rows
+    /// straight from the buffer, without the copy `uploadRegion` makes.
+    fn uploadRows(w: *Window, from: u32, to: u32) Error!void {
+        const c = w.conn;
+        const fb = &w.fb;
+        const width = fb.width;
         if (c.setup.max_request <= wire.put_image_head / 4) return error.MessageTooLarge;
         const max_pixels = @as(usize, c.setup.max_request) - wire.put_image_head / 4;
         if (fb.stride <= max_pixels and fb.stride <= std.math.maxInt(u16)) {
-            const rows: u32 = @intCast(@min(max_pixels / fb.stride, height));
-            var y: u32 = 0;
-            while (y < height) : (y += rows) {
-                const h = @min(rows, height - y);
+            const rows: u32 = @intCast(@min(max_pixels / fb.stride, fb.height));
+            var y: u32 = from;
+            while (y < to) : (y += rows) {
+                const h = @min(rows, to - y);
                 try w.uploadPixels(0, y, fb.stride, h, fb.pixels[y * fb.stride ..][0 .. h * fb.stride]);
             }
         } else {
             // Even one padded row can exceed a small server's request limit.
-            for (0..height) |y| {
+            for (from..to) |y| {
                 const row = fb.pixels[y * fb.stride ..][0..width];
                 var x: usize = 0;
                 while (x < width) {
@@ -1176,13 +1198,10 @@ pub const Window = struct {
                 }
             }
         }
-        try w.showPixmap();
-        w.presents += 1;
-        w.presented_size = .{ w.width, w.height };
-        w.last_present = now();
     }
 
-    /// Upload and show only these physical boxes (x0,y0,x1,y1), clipped to the framebuffer.
+    /// Upload and show only these physical boxes (x0,y0,x1,y1), clipped to the framebuffer:
+    /// `present` sends its damage rects this way, a host that tracks its own damage its boxes.
     /// The caller retains initialized pixels outside the boxes. A new/resized server pixmap
     /// needs the entire framebuffer once, even when the requested region is empty.
     /// Expose already restores the persistent pixmap in poll, without another pixel upload.
@@ -1203,7 +1222,9 @@ pub const Window = struct {
         for (boxes) |raw| {
             const box = clipPixels(raw, fb.width, fb.height);
             if (box[0] == box[2] or box[1] == box[3]) continue;
-            try w.uploadRegion(box);
+            // A box as wide as the frame goes as whole rows, uncopied (the whole frame, a
+            // band of a damaged frame); a narrower one packed row by row.
+            if (box[0] == 0 and box[2] == fb.width) try w.uploadRows(box[1], box[3]) else try w.uploadRegion(box);
             changed = true;
         }
         if (!changed) return;
@@ -1546,6 +1567,13 @@ test "x11: partial presentation updates only damaged pixels and initializes new 
     try testing.expectEqual(marker, try pixel(&w, 3, 5));
     try testing.expectEqual(marker, try pixel(&w, 20, 17));
     try testing.expectEqual(original, try pixel(&w, 21, 18));
+    try testing.expectEqual(original, try pixel(&w, 40, 30));
+    // A box as wide as the frame goes as whole rows, and still only those rows.
+    w.fb.fill(.{ 0, 50, 83, 53 }, marker);
+    try w.presentPixelsRegions(&.{.{ 0, 50, 83, 53 }});
+    try testing.expectEqual(marker, try pixel(&w, 0, 50));
+    try testing.expectEqual(marker, try pixel(&w, 82, 52));
+    try testing.expectEqual(original, try pixel(&w, 0, 53));
     try testing.expectEqual(original, try pixel(&w, 40, 30));
     try testing.expectEqual(@as(u32, 0), c.errors);
 }

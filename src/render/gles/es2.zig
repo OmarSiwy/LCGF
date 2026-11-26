@@ -208,8 +208,14 @@ pub const Renderer = struct {
         r.drawQuads(batch.texture, @as(usize, batch.first) * 4 * quad_shader.stride, batch.count);
     }
 
-    pub fn drawText(r: *const Renderer, _: Pass, run: u32) void {
-        r.drawQuads(r.glyphs.texture, r.glyphsAt() + @as(usize, r.glyphs.span(run)[0]) * 4 * quad_shader.stride, r.glyphs.span(run)[1]);
+    pub fn drawText(r: *const Renderer, pass: Pass, run: u32) void {
+        r.drawGlyphSpan(pass, r.glyphs.span(run));
+    }
+
+    /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
+    /// draw (`iface.drawUntilCustom`).
+    pub fn drawGlyphSpan(r: *const Renderer, _: Pass, span: [2]u32) void {
+        r.drawQuads(r.glyphs.texture, r.glyphsAt() + @as(usize, span[0]) * 4 * quad_shader.stride, span[1]);
     }
 
     pub fn customScissor(r: *const Renderer, custom: draw_list.CustomDraw) [4]i32 {
@@ -255,7 +261,7 @@ test "es2: the GLSL ES 1.00 program links on a real driver and draws past the ho
 
 /// Wyhash of quad.wgsl's stock shader (quad.wgsl + material.wgsl) that es2/quad.vert and
 /// es2/quad.frag were last ported from.
-const ported_from: u64 = 0x94a966e5a06ac89b;
+const ported_from: u64 = 0x7a75299c00b1d569;
 
 test "es2: the hand-written GLSL ES 1.00 shaders were ported from the current quad.wgsl" {
     // Fails when quad.wgsl or material.wgsl change: port the change into es2/quad.vert and
