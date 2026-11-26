@@ -268,3 +268,50 @@ test "a literal caption draws as a bound one, and a hover rule changes the face 
     output = try run.frame(&input);
     try std.testing.expectEqual(hot.bitsOf(), output.runtime.tree.c.look[go].fill);
 }
+
+test "a recipe box follows hover and the viewport in both front ends, its children inside" {
+    @setEvalBranchQuota(200_000);
+    const Boxes = struct {
+        const hot: types.Color = .rgb(200, 10, 10);
+        const narrow: types.Color = .rgb(10, 200, 10);
+        const card_rules = [_]style.Rule{.{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, hot)} }};
+        const card: model.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(10), .fill = .rgb(1, 2, 3) } } }}, .rules = &card_rules };
+        const bar_rules = [_]style.Rule{.{ .part = style.Parts.root, .when = .{ .width = .{ .max = 300 } }, .declarations = &.{ style.set(.fill, narrow), style.set(.padding_left, 30) } }};
+        const bar: model.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .dir = .x, .gap = 4 } } }}, .rules = &bar_rules };
+        const App = struct {
+            pub fn build(_: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.beginBox(f, .from("card"), true, .{ .recipe = card }) catch unreachable;
+                _ = f.textStyled("Card", .{ .px = 14, .color = .white }, .{});
+                controls.endBox(f);
+                _ = controls.beginBox(f, .none, false, .{ .recipe = bar }) catch unreachable;
+                _ = f.textStyled("Bar", .{ .px = 14, .color = .white }, .{});
+                controls.endBox(f);
+                f.close();
+            }
+        };
+        const label: spec.Spec = spec.textStyled(spec.label("Card"), .{ .px = 14, .color = .white });
+        const bar_label: spec.Spec = spec.textStyled(spec.label("Bar"), .{ .px = 14, .color = .white });
+        const BUi = base.ComptimeUi(struct {}, spec.col(panel, .{ ct.box(.card, .{ .recipe = card }, .{label}), ct.box(null, .{ .recipe = bar }, .{bar_label}) }), .default);
+        const BRun = base.Harness(App, BUi, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 });
+        var run: BRun = .{};
+    };
+    const run = &Boxes.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 } };
+    var output = try run.frame(&input);
+    const t = output.runtime.tree;
+    const card = t.find(.from("card"));
+    try std.testing.expect(t.c.look[card].fill != Boxes.hot.bitsOf());
+    const r = t.rect(card);
+    input.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Boxes.hot.bitsOf(), output.runtime.tree.c.look[card].fill);
+    try std.testing.expectEqual(Boxes.hot.bitsOf(), output.comptime_.tree.c.look[card].fill);
+    // The bar is the card's next sibling: its subtree ends where the bar starts.
+    const bar = output.runtime.tree.c.end[card];
+    try std.testing.expect(output.runtime.tree.c.look[bar].fill != Boxes.narrow.bitsOf());
+    input.viewport = .{ 280, 200 };
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Boxes.narrow.bitsOf(), output.runtime.tree.c.look[bar].fill);
+}

@@ -291,6 +291,23 @@ pub fn slider(f: *Frame, id: types.Id, value: *f32, lo: f32, hi: f32, options: O
     return response;
 }
 
+/// Opens a plain box whose style is the recipe's root resolved this frame, over the
+/// environment and, when `interactive`, over hover and press of `id` (CSS `.card:hover`,
+/// `@media` on a `<div>`). It takes no focus and has no role of its own; children go before
+/// `endBox`. A box that is not interactive takes `.none` or any id.
+pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) style.Error!types.Node {
+    const recipe = options.recipe orelse model.Recipe{};
+    const response = if (interactive) responseFor(f, id, options.states.disabled) else types.Response{};
+    const root = try recipe.resolve(Parts.root, useFor(f, options, statesFor(options.states, response, false)), null);
+    const node = f.open(id, root.box);
+    if (interactive) _ = f.interact(node, .{ .hover = true, .click = true });
+    return node;
+}
+
+pub fn endBox(f: *Frame) void {
+    f.close();
+}
+
 pub fn progress(f: *Frame, value: f32, options: Options) style.Error!types.Node {
     const control = try resolvedControl(f, options.recipe orelse model.progress, options, options.states);
     var fill = try control.part(Parts.fill, null);

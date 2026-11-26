@@ -41,6 +41,41 @@ pub const Config = struct {
     recipe_field: ?[]const u8 = null,
 };
 
+/// A plain box, `controls.beginBox` in the comptime front end: its root style is
+/// `config.recipe`'s, resolved each frame over the environment and, when `id` is an enum
+/// literal, over hover and press of the widget `id` (not focusable). `id` null makes a box that
+/// follows only the environment (`@media`) and is no widget. `children` as `spec.col` takes.
+pub fn box(comptime id: anytype, comptime config: Config, comptime children: anytype) Spec {
+    const name: ?[:0]const u8 = if (@TypeOf(id) == @TypeOf(null)) null else @tagName(id);
+    var s = spec_zig.col(.{}, children);
+    s.id = name;
+    s.widget = Box(name, config);
+    return s;
+}
+
+fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
+    return struct {
+        pub const holds_content = true;
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const row = next.*;
+            next.* += 1;
+            const response = if (name != null) ui.response(row, in) else types.Response{};
+            const environment = config.environment orelse model.Environment.fromInput(in).withSettings(&ui.frame_settings);
+            const use: model.Use = .{ .tokens = config.tokens, .scope = config.scope, .states = controls.statesFor(config.states, response, false), .environment = environment, .variants = config.variants, .local = config.local, .color_policy = config.color_policy };
+            const recipe = config.recipe orelse model.Recipe{};
+            const root = recipe.resolve(Parts.root, use, null) catch |err| blk: {
+                ui.fail(err);
+                break :blk recipe.baseFor(Parts.root);
+            };
+            const tb = &ui.tables;
+            const i = tb.t.push(parent, if (name) |x| .hash(x) else .none, &root.box);
+            inline for (n.children) |c| ui.push(c, i, next, in);
+            tb.t.seal(i);
+        }
+    };
+}
+
 const Kind = enum { button, checkbox, switch_control, slider, input };
 
 /// `text` is the caption: a `[]const u8` field of the State (`.save`) or a literal ("Save").
@@ -254,11 +289,11 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     th.text = content.text.color;
                     const shown = textfield_zig.shown(field, &th, @field(ui.signals.state, text));
                     for (shown.band) |band| {
-                        var box = selection.box;
-                        box.float = true;
-                        box.offset = .{ band[0], 0 };
-                        box.size = .{ .px(band[1] - band[0]), .px(textfield_zig.lineHeight(&th)) };
-                        _ = tb.t.push(row, .none, &box);
+                        var part = selection.box;
+                        part.float = true;
+                        part.offset = .{ band[0], 0 };
+                        part.size = .{ .px(band[1] - band[0]), .px(textfield_zig.lineHeight(&th)) };
+                        _ = tb.t.push(row, .none, &part);
                     }
                     const text_part = if (shown.hint) hint else content;
                     const selected = controls.selectionSections(text_part, selection, shown.band);
@@ -273,11 +308,11 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                         if (boxes.clip.participation.paint) pushText(ui, clip, shown.str, selected_text) else _ = tb.t.push(clip, .none, &boxes.text);
                         tb.t.seal(clip);
                     }
-                    var box = caret.box;
-                    box.float = true;
-                    box.offset = .{ shown.caret, 0 };
-                    box.size[1] = .px(textfield_zig.lineHeight(&th));
-                    _ = tb.t.push(row, .none, &box);
+                    var part = caret.box;
+                    part.float = true;
+                    part.offset = .{ shown.caret, 0 };
+                    part.size[1] = .px(textfield_zig.lineHeight(&th));
+                    _ = tb.t.push(row, .none, &part);
                     next.* += textfield_zig.bands + controls.selection_sections * 2 + 4;
                 },
             }
