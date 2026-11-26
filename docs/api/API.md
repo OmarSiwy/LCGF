@@ -6267,10 +6267,17 @@ Fields: `texture`, `uv`, `size`
 - `fn inAtlas(atlas: *const image_atlas.Atlas, r: image_atlas.Rect, texture: Texture) Image`: A picture packed in `atlas` at `r` (`Atlas.add`), the atlas uploaded as `texture`, shown at one logical pixel per texel.
 - `fn whole(e: embed.Image, texture: Texture) Image`: A decoded picture `e` uploaded whole as `texture`.
 
+### `Asset` (struct)
+A picture decoded at build time, and the texture it is drawn from.
+
+Fields: `texture`, `image`
+
+- `fn picture(a: Asset) Image`: The whole picture, at one logical pixel per texel.
+
 ### `Options` (struct)
 How it is shown.
 
-Fields: `box`, `fit`
+Fields: `box`, `fit`, `radius`
 
 
 ### `Fit` (enum)
