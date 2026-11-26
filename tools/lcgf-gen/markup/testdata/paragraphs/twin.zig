@@ -51,6 +51,6 @@ pub const App = struct {
     }
 
     pub fn end(app: *App, f: *Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
-        return f.endParagraphs(.{ .mono = font, .rows = &app.rows, .styles = &.{ 0, 1, 2, 3 }, .table = &table });
+        return f.endParagraphs(lcgf.protocol.MonoParagraphs{ .mono = font, .rows = &app.rows, .styles = &.{ 0, 1, 2, 3 }, .table = &table });
     }
 };

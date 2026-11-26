@@ -1334,7 +1334,7 @@ pub const Emit = struct {
         // A page with a baseline-aligned wrapping row compiles the flex passes with per-line
         // baselines (`FlexOptions.line_baseline`): the `...Opts` forms, over the paragraph
         // font when there is one.
-        const opts_font = if (paragraphs) std.fmt.allocPrint(e.arena, "@as(lcgf.protocol.MonoParagraphs, {s})", .{e.fontExpr(true)}) catch unreachable else "font";
+        const opts_font = e.fontExpr(paragraphs);
         const opts_args = std.fmt.allocPrint(e.arena, "{s}, &ui.flex.?, .{{ .line_baseline = true }}", .{opts_font}) catch unreachable;
         if (flex and e.lineBaseline()) {
             if (regions) e.print(
@@ -1748,13 +1748,28 @@ pub const Emit = struct {
         }) catch unreachable;
     }
 
-    /// The font `Ui.end` measures with: `font`, or the page's `MonoParagraphs` over it.
+    /// The `MonoParagraphsOf` this page needs: span and decoration code only when it has them.
+    fn fontType(e: *Emit) []const u8 {
+        return std.fmt.allocPrint(e.arena, "lcgf.protocol.MonoParagraphsOf(.{{ .spans = {}, .decorations = {} }})", .{ e.anySpans(), e.decorates() }) catch unreachable;
+    }
+
+    /// The font `Ui.end` measures with: `font`, or the page's `MonoParagraphsOf` over it.
     fn fontExpr(e: *Emit, paragraphs: bool) []const u8 {
         if (!paragraphs) return "font";
-        return std.fmt.allocPrint(e.arena, ".{{ .mono = font, .rows = ui.paragraphs.rows[0..ui.paragraphs.len], .styles = ui.paragraphs.styles[0..ui.paragraphs.len], .table = &paragraph_table{s}{s} }}", .{
+        return std.fmt.allocPrint(e.arena, "{s}{{ .mono = font, .rows = ui.paragraphs.rows[0..ui.paragraphs.len], .styles = ui.paragraphs.styles[0..ui.paragraphs.len], .table = &paragraph_table{s}{s} }}", .{
+            e.fontType(),
             if (e.anyDecoration()) ", .decorations = &decoration_table" else "",
             if (e.anySpans()) ", .spans = &span_table" else "",
         }) catch unreachable;
+    }
+
+    /// Whether the page draws any decoration: a label's own or a span's.
+    fn decorates(e: *Emit) bool {
+        if (e.anyDecoration()) return true;
+        for (e.page.nodes.items(.spans)) |list| for (list) |sp| {
+            if (sp.decoration.underline or sp.decoration.overline or sp.decoration.strike) return true;
+        };
+        return false;
     }
 
     fn anyDecoration(e: *Emit) bool {
@@ -2129,8 +2144,9 @@ pub const Emit = struct {
         if (region_styled) e.print("                {s}.len = 0;\n", .{para_var});
         e.write(body);
         // Styled labels end through the paragraph forms, flex rules through the flex ones.
-        const end = if (region_styled) std.fmt.allocPrint(e.arena, "f.{s}(.{{ .rows = {s}.rows[0..{s}.len], .styles = {s}.styles[0..{s}.len], .table = &paragraph_table{s}{s} }}{s})", .{
+        const end = if (region_styled) std.fmt.allocPrint(e.arena, "f.{s}({s}{{ .rows = {s}.rows[0..{s}.len], .styles = {s}.styles[0..{s}.len], .table = &paragraph_table{s}{s} }}{s})", .{
             if (flex) "endFlexParagraphs" else "endParagraphs",
+            e.fontType(),
             para_var,
             para_var,
             para_var,

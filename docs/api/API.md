@@ -1089,7 +1089,10 @@ The measure / wrap protocol: how text extents reach layout.
 ### Top level
 
 - `Span = struct { start: u32, style: types.TextStyle, decoration: Decoration = .{} }`: One style run of a paragraph: from byte `start` of its text on (to the next span's start), `style`'s size, colour and font instead of the run's.
+- `Features = struct { spans: bool = true, decorations: bool = true }`: Which inputs a `MonoParagraphsOf` reads.
+- `MonoParagraphs = MonoParagraphsOf(.{})`: `MonoParagraphsOf` with every input.
 - `fn insertAfter(d: *DrawList, j: u32, first: u32) u32`: Puts quads `first..d.quad_len` (just appended after `paint.emit`) right after op `j`, the text op of their run: their ops after it, and the quads themselves moved to where the next quad op's quads begin, so every run of consecutive quad ops still names consecutive quads (`paint.encode` merges them).
+- `fn MonoParagraphsOf(comptime with: Features) type`: `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
 - `fn StaticAtlas(comptime strings: []const []const u8) type`: Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
 
 ### `Mono` (struct)
@@ -1110,16 +1113,16 @@ Styled runs of a frame, for any font: run `rows[i]` of `Texts` takes `table[styl
 Fields: `rows`, `styles`, `table`, `decorations`, `spans`
 
 
-### `MonoParagraphs` (struct)
+### `MonoParagraphsOf(..)` (generic struct)
 `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
 
 Fields: `mono`, `rows`, `styles`, `table`, `decorations`, `spans`, `strings`
 
-- `fn measure(p: MonoParagraphs, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
-- `fn wrap(p: MonoParagraphs, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
-- `fn quads(p: MonoParagraphs, d: *const DrawList, tx: *const Texts, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them (from the frame's `tx`: each run's wrap flag and width), each glyph in its span's size and colour.
-- `fn decorate(p: MonoParagraphs, d: *DrawList, tx: *const Texts) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
-- `fn styled(p: MonoParagraphs) Styled`: The styled runs this font measures, for a real shaper (`text_stack.Stack.style`).
+- `fn measure(p: Self, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
+- `fn wrap(p: Self, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
+- `fn quads(p: Self, d: *const DrawList, tx: *const Texts, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them (from the frame's `tx`: each run's wrap flag and width), each glyph in its span's size and colour.
+- `fn decorate(p: Self, d: *DrawList, tx: *const Texts) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
+- `fn styled(p: Self) Styled`: The styled runs this font measures, for a real shaper (`text_stack.Stack.style`).
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -3579,11 +3582,11 @@ Fields: `ctx`, `in`
 - `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
 - `fn endFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) Output`: `endFlex` with the flex features of `opts` compiled in (`FlexOptions`), over `font` or a `paragraphs` font.
 - `fn layoutFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) void`: The layout half of `endFlexOpts`.
-- `fn endParagraphs(f: *Frame, font: MonoParagraphs) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (`protocol.MonoParagraphs`; its `strings` are set to this frame's).
-- `fn layoutParagraphs(f: *Frame, font: MonoParagraphs) void`: The layout half of `endParagraphs`.
-- `fn endFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
-- `fn layoutFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
-- `fn finishParagraphs(f: *Frame, font: MonoParagraphs) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
+- `fn endParagraphs(f: *Frame, font: anytype) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (a `protocol.MonoParagraphsOf`, such as `MonoParagraphs`; its `strings` are set to this frame's).
+- `fn layoutParagraphs(f: *Frame, font: anytype) void`: The layout half of `endParagraphs`.
+- `fn endFlexParagraphs(f: *Frame, font: anytype, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
+- `fn layoutFlexParagraphs(f: *Frame, font: anytype, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
+- `fn finishParagraphs(f: *Frame, font: anytype) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
 - `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
 - `fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.

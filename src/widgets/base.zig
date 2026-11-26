@@ -663,7 +663,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 @import("../layout/rtl.zig").direction(t, directions);
                 @import("../layout/rtl.zig").startEnd(t, directions);
             }
-            const font = if (comptime paragraph_slots > 0) @import("../text/protocol.zig").MonoParagraphs{
+            const font = if (comptime paragraph_slots > 0) @import("../text/protocol.zig").MonoParagraphsOf(.{ .spans = anySpans(spec), .decorations = decorates(spec) }){
                 .mono = ui.font,
                 .rows = ui.paragraphs.rows[0..ui.paragraphs.len],
                 .styles = ui.paragraphs.styles[0..ui.paragraphs.len],
@@ -924,6 +924,18 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
 /// A label `MonoParagraphs` measures: one with a paragraph style, a decoration or spans.
 fn styledLabel(comptime n: Spec) bool {
     return n.kind == .label and (n.paragraph != null or n.decoration != null or n.spans.len > 0);
+}
+
+/// Whether a label of `n` draws a decoration, its own or a span's: only then is
+/// `MonoParagraphsOf.decorate` compiled in.
+fn decorates(comptime n: Spec) bool {
+    return comptime anyDecoration(n) or spanDecoration(n);
+}
+
+fn spanDecoration(comptime n: Spec) bool {
+    if (n.kind == .label) for (n.spans) |sp| if (sp.decoration.underline or sp.decoration.overline or sp.decoration.strike) return true;
+    for (n.children) |c| if (spanDecoration(c)) return true;
+    return false;
 }
 
 fn anySpans(comptime n: Spec) bool {
@@ -1879,7 +1891,7 @@ test "paragraph: line height, spacing and an ellipsis lay out the same in both f
             f.close();
         }
         pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
-            return f.endParagraphs(.{ .mono = font, .rows = &app.rows, .styles = &.{ 0, 1, 0 }, .table = &table });
+            return f.endParagraphs(@import("../text/protocol.zig").MonoParagraphs{ .mono = font, .rows = &app.rows, .styles = &.{ 0, 1, 0 }, .table = &table });
         }
     };
     var h: Harness(App, Ui, .{ .nodes = 16, .texts = 8, .strings = 128, .depth = 8 }) = undefined;
@@ -1913,7 +1925,7 @@ test "decorated: one bar per line, painted right after its run, in both front en
             f.close();
         }
         pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
-            return f.endParagraphs(.{ .mono = font, .rows = &app.rows, .styles = &.{0}, .table = &.{.{}}, .decorations = &.{under} });
+            return f.endParagraphs(@import("../text/protocol.zig").MonoParagraphs{ .mono = font, .rows = &app.rows, .styles = &.{0}, .table = &.{.{}}, .decorations = &.{under} });
         }
     };
     var h: Harness(App, Ui, .{ .nodes = 8, .texts = 2, .strings = 64, .depth = 4 }) = undefined;
@@ -1959,7 +1971,7 @@ test "spans: one paragraph in two sizes and colours lays out the same in both fr
             f.close();
         }
         pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
-            return f.endParagraphs(.{ .mono = font, .rows = &app.rows, .styles = &.{0}, .table = &.{.{}}, .spans = &.{&runs} });
+            return f.endParagraphs(@import("../text/protocol.zig").MonoParagraphs{ .mono = font, .rows = &app.rows, .styles = &.{0}, .table = &.{.{}}, .spans = &.{&runs} });
         }
     };
     var h: Harness(App, Ui, .{ .nodes = 8, .texts = 2, .strings = 64, .depth = 4 }) = undefined;
