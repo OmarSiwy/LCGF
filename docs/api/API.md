@@ -2183,6 +2183,8 @@ canvas: many 2D primitives in caller-owned columns, drawn under a camera with a 
 - `fn dashCover(comptime V: type, at: V, sh: *const Shape) V`: How much of a dash is on at chain distance `at` (pixels): 1 for a solid line.
 - `fn rectDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The rounded box `sh` (the shader's `rounded_box` with one radius), outline at distance 0.
 - `fn arcDist(comptime V: type, px: V, py: V, sh: *const Shape) V`: The arc `sh`: a ring sector around its centre, `half` either side of `radius`, with caps.
+- `fn arcAlong(comptime V: type, px: V, py: V, sh: *const Shape) V`: How far along an arc's centre line p is, in pixels from the chain's start: its angle from the arc's middle (in (-pi, pi], toward the sweep positive) plus half the sweep, times the radius, plus the chain distance at its start.
+- `fn atan2(comptime V: type, y: V, x: V) V`: atan2(y, x) for a vector, within 2e-6 rad: a degree-11 odd polynomial on [0, 1], then the octant by selects.
 - `fn polygonDist(comptime V: type, px: V, py: V, v: View, verts: []const [2]i32) V`: The polygon of `verts` under `v`, nonzero rule: distance to its nearest edge, negative inside.
 - `fn glyphLocal(comptime V: type, px: V, py: V, sh: *const Shape) [2]V`: A point in a glyph's own frame: pixels from its anchor along its turned x and y axes.
 - `fn coverage(comptime V: type, d: V) V`: Antialiased coverage of a signed distance in pixels.
@@ -2231,7 +2233,7 @@ Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `
 
 - `Line = struct { layer: u8 = 0, weight: u8 = 1, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`: What every stroked builder takes.
 - `Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null }`
-- `Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, width: ?u32 = null }`
+- `Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`
 - `Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null }`
 - `Glyph = struct { layer: u8 = 0, turns: u2 = 0 }`
 - `Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{} }`
@@ -2246,7 +2248,7 @@ Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `
 - `fn polyline(s: *Instances, points: []const [2]i32, o: Line) Range`: One segment per edge of the open chain through `points`, each with the chain's caps and its distance from the chain's start, so a dash runs on across the joints.
 - `fn rect(s: *Instances, lo: [2]i32, hi: [2]i32, o: Box) u32`: The box from `lo` to `hi`, filled and its outline stroked as `o` says; corners rounded by `radius` (capped at half the shorter side).
 - `fn circle(s: *Instances, c: [2]i32, r: u32, o: Box) u32`: A disc of radius `r` around `c`: a rect rounded by its half side.
-- `fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32`: The circle of radius `r` around `c` from angle `start` through `sweep` (a negative sweep runs the other way).
+- `fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32`: The circle of radius `r` around `c` from angle `start` through `sweep` (a negative sweep runs the other way); a dash runs along its centre line from `start`.
 - `fn polygon(s: *Instances, points: []const [2]i32, o: Area) u32`: The closed polygon through `points`, any shape, filled by the nonzero rule, its outline stroked over the fill when `o.stroke`.
 - `fn glyph(s: *Instances, anchor: [2]i32, size: [2]u32, uv: [4]f32, o: Glyph) u32`: Atlas `uv` (u0, v0, u1, v1, 0..1) on the box `size` world units from `anchor`, turned about it by `o.turns` quarter turns; the atlas is the glyph atlas the renderer was given (`iface.Glyphs.texture`), tinted by the layer's stroke colour.
 - `fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range`: `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall and turned with it, with the metrics and 16 x 16 byte atlas of `protocol.Mono`.
@@ -2259,7 +2261,7 @@ Fields: `pos`, `look`
 ### `Shape` (struct)
 One instance in pixels: what the shaders read, decoded once per instance.
 
-Fields: `kind`, `p`, `half`, `radius`, `square`, `round`, `filled`, `stroked`, `chain`, `dash`, `period`, `mid`, `aperture`, `seam`, `box`
+Fields: `kind`, `p`, `half`, `radius`, `square`, `round`, `filled`, `stroked`, `chain`, `dash`, `period`, `mid`, `aperture`, `seam`, `half_sweep`, `box`
 
 - `fn of(v: View, pos: [4]i32, look: [4]u32, layer: Layer) Shape`: `layer` is the instance's palette row.
 

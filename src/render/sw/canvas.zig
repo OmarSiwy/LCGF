@@ -419,7 +419,7 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
                     const d = canvas.segmentDist(F, px, py, sh);
                     break :a canvas.coverage(F, d[0]) * canvas.dashCover(F, d[1], sh);
                 },
-                .arc => canvas.coverage(F, canvas.arcDist(F, px, py, sh)),
+                .arc => canvas.coverage(F, canvas.arcDist(F, px, py, sh)) * canvas.dashCover(F, canvas.arcAlong(F, px, py, sh), sh),
                 .rect, .polygon => a: {
                     // The stroke centred on the outline, mixed over the inside as the quad
                     // shader mixes its border over its fill.
@@ -601,6 +601,24 @@ test "sw canvas: a dashed chain runs on across its joints; a turned glyph sample
     try testing.expectEqual(Color.rgb(255, 0, 0), fb.at(38, 11));
     try testing.expectEqual(Color.black, fb.at(39, 12));
     try testing.expectEqual(Color.black, fb.at(40, 10));
+}
+
+test "sw canvas: a dashed arc runs its dash along its centre line from its start" {
+    var sc: Scene(2) = .{};
+    sc.init(.{ 0, 0, 64, 32 }, .{ 0, 0, 64, 32 });
+    // Radius 12 around (32, 16), 4 px wide, dash 2: 4 px on, 4 off, from angle 0.
+    _ = sc.shapes.arc(.{ 32, 16 }, 12, .{ .dash = 2 });
+    const fb = sc.frame(.{}, .{ 0, 0, 64, 32 }, sw.Image.white);
+    const at = struct {
+        fn px(f: *const sw.Framebuffer, along: f32) Color {
+            const a = along / 12;
+            return f.at(@intFromFloat(@floor(32 + 12 * @cos(a))), @intFromFloat(@floor(16 + 12 * @sin(a))));
+        }
+    }.px;
+    try testing.expectEqual(Color.rgb(255, 0, 0), at(&fb, 2));
+    try testing.expectEqual(Color.black, at(&fb, 6));
+    try testing.expectEqual(Color.rgb(255, 0, 0), at(&fb, 10));
+    try testing.expectEqual(Color.black, at(&fb, 14));
 }
 
 test "sw canvas: clipped to the node and the scissor, panned by the camera" {

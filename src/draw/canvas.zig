@@ -25,7 +25,8 @@
 //!   bit   7    stroked       (rect, polygon: stroke the outline; segments and arcs always are)
 //!   bit   8    world width   (the width is look[3] world units, not the palette's)
 //!   bit   9    dead          (drawn and hit as nothing)
-//!   bits 10-13 dash n        (0: solid; else 2n logical px on, 2n off, from the chain start)
+//!   bits 10-13 dash n        (0: solid; else 2n logical px on, 2n off, from the chain start;
+//!                            along an arc's centre line from its start)
 //!   bits 14-15 weight - 1    (weight 1..4)
 //!   bits 16-17 quarter turns (glyph rotation, clockwise on screen)
 //!   bits 24-31 layer         (row of the palette)
@@ -33,7 +34,7 @@
 //!   kind     pos                      look[1]              look[2]          look[3]
 //!   segment  a.x a.y b.x b.y          chain distance at a  0                world width
 //!   rect     x0 y0 x1 y1              corner radius        0                world width
-//!   arc      cx cy radius 0           0                    start | sweep    world width
+//!   arc      cx cy radius 0           chain distance       start | sweep    world width
 //!   polygon  bounding box             first vertex         vertex count     world width
 //!   glyph    anchor.x anchor.y w h    u0 | v0              u1 | v1          0
 //!
@@ -255,7 +256,7 @@ pub const Instances = struct {
     /// palette's width.
     pub const Line = struct { layer: u8 = 0, weight: u8 = 1, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null };
     pub const Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null };
-    pub const Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, width: ?u32 = null };
+    pub const Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null };
     pub const Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null };
     pub const Glyph = struct { layer: u8 = 0, turns: u2 = 0 };
     pub const Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{} };
@@ -299,14 +300,14 @@ pub const Instances = struct {
     }
 
     /// The circle of radius `r` around `c` from angle `start` through `sweep` (a negative sweep
-    /// runs the other way). ponytail: no dash on arcs.
+    /// runs the other way); a dash runs along its centre line from `start`.
     pub fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32 {
         const sweep = @min(@abs(o.sweep), std.math.tau);
         const start = o.start + @min(o.sweep, 0);
         const frac = @mod(start / std.math.tau, 1);
         const a = @as(u32, @intFromFloat(@round(frac * 65536))) & 0xffff;
         const b: u32 = @intFromFloat(@round(sweep / std.math.tau * 65535));
-        return s.push(.{ c[0], c[1], @intCast(r), 0 }, .{ head(.arc, o.layer, o.weight, o.cap, o.width != null, 0), 0, a | (b << 16), o.width orelse 0 });
+        return s.push(.{ c[0], c[1], @intCast(r), 0 }, .{ head(.arc, o.layer, o.weight, o.cap, o.width != null, 0) | (@as(u32, o.dash) << 10), 0, a | (b << 16), o.width orelse 0 });
     }
 
     /// The closed polygon through `points`, any shape, filled by the nonzero rule, its outline
@@ -428,6 +429,8 @@ pub const Shape = struct {
     /// Arc: added to how far past its ends a point is; -inf for a full turn, which has none
     /// (its two butt ends would otherwise meet in a half-covered seam).
     seam: f32 = 0,
+    /// Arc: half its sweep, radians.
+    half_sweep: f32 = 0,
     /// Pixel box the shape can touch, x0, y0, x1, y1: coverage `0.5 - d` is 0 past half a
     /// pixel from the outline, so that much antialiasing is included.
     box: [4]f32 = undefined,
@@ -467,6 +470,10 @@ pub const Shape = struct {
                 const sweep = @as(f32, @floatFromInt(look[2] >> 16)) / 65535 * std.math.tau;
                 const m = start / 65536 * std.math.tau + sweep / 2;
                 sh.radius = r;
+                sh.half_sweep = sweep / 2;
+                sh.chain = v.len(look[1]);
+                sh.dash = 2 * dash * v.px;
+                sh.period = 2 * sh.dash;
                 sh.mid = .{ @cos(m), @sin(m) };
                 // sin of a half aperture in [0, pi] is never negative; rounding at pi must not
                 // make the far side of a full ring "past its end".
@@ -589,6 +596,36 @@ pub inline fn arcDist(comptime V: type, px: V, py: V, sh: *const Shape) V {
     const disc = length(x - splat(V, sa * sh.radius), y - splat(V, ca * sh.radius)) - splat(V, sh.half);
     const flat = @max(ring, past - splat(V, sh.half * sh.square));
     return if (sh.round) sel(V, past > splat(V, 0), disc, ring) else flat;
+}
+
+/// How far along an arc's centre line p is, in pixels from the chain's start: its angle from
+/// the arc's middle (in (-pi, pi], toward the sweep positive) plus half the sweep, times the
+/// radius, plus the chain distance at its start. Points past its ends run on either way.
+/// canvas.wgsl uses `atan2`; this `atan2` approximation is within 2e-6 rad of it.
+pub inline fn arcAlong(comptime V: type, px: V, py: V, sh: *const Shape) V {
+    const lx = px - splat(V, sh.p[0]);
+    const ly = py - splat(V, sh.p[1]);
+    const cosine = lx * splat(V, sh.mid[0]) + ly * splat(V, sh.mid[1]);
+    const sine = ly * splat(V, sh.mid[0]) - lx * splat(V, sh.mid[1]);
+    return (atan2(V, sine, cosine) + splat(V, sh.half_sweep)) * splat(V, sh.radius) + splat(V, sh.chain);
+}
+
+/// atan2(y, x) for a vector, within 2e-6 rad: a degree-11 odd polynomial on [0, 1], then the
+/// octant by selects.
+pub inline fn atan2(comptime V: type, y: V, x: V) V {
+    const n = @typeInfo(V).vector.len;
+    const B = @Vector(n, bool);
+    const ax = @abs(x);
+    const ay = @abs(y);
+    const big = @max(ax, ay);
+    const t = @min(ax, ay) / @max(big, splat(V, 1e-30));
+    const s = t * t;
+    var r = splat(V, -0.01172120);
+    inline for (.{ 0.05265332, -0.11643287, 0.19354346, -0.33262347, 0.99997726 }) |k| r = r * s + splat(V, k);
+    r *= t;
+    const r1 = sel(V, ay > ax, splat(V, std.math.pi / 2.0) - r, r);
+    const r2 = sel(V, x < splat(V, 0), splat(V, std.math.pi) - r1, r1);
+    return sel(V, @as(B, y < splat(V, 0)), -r2, r2);
 }
 
 /// The polygon of `verts` under `v`, nonzero rule: distance to its nearest edge, negative inside.
@@ -841,6 +878,18 @@ test "distances: caps, a full turn with no seam, dashes and overrides" {
     const dashed = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.segment, 0, 1, .butt, false, 0) | (2 << 10), 6, 0, 0 }, pal.layers[0]);
     try testing.expectEqual(@as(f32, 1), dashCover(V1, segmentDist(V1, @splat(3.5), @splat(0), &dashed)[1], &dashed)[0]);
     try testing.expectEqual(@as(f32, 0), dashCover(V1, segmentDist(V1, @splat(0), @splat(0), &dashed)[1], &dashed)[0]);
+    // A dashed half ring of radius 100 from angle 0: dash 5 is 10 px on, 10 off along it.
+    const ring = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.arc, 0, 1, .butt, false, 0) | (5 << 10), 0, 32767 << 16, 0 }, pal.layers[0]);
+    for ([_]f32{ 0.05, 0.25, 1.0, 2.5 }) |angle| {
+        const along = arcAlong(V1, @splat(100 * @cos(angle)), @splat(100 * @sin(angle)), &ring)[0];
+        try testing.expectApproxEqAbs(angle * 100, along, 2e-3);
+    }
+    try testing.expectEqual(@as(f32, 1), dashCover(V1, @splat(5), &ring)[0]);
+    try testing.expectEqual(@as(f32, 0), dashCover(V1, @splat(15), &ring)[0]);
+    for (0..64) |k| {
+        const a = -std.math.pi + @as(f32, @floatFromInt(k)) * std.math.tau / 64.0 + 0.01;
+        try testing.expectApproxEqAbs(std.math.atan2(@sin(a), @cos(a)), atan2(V1, @splat(@sin(a)), @splat(@cos(a)))[0], 2e-5);
+    }
     const marks = [_]Override{ .{ .range = .{ .first = 0, .count = 10 }, .color = 1 }, .{ .range = .{ .first = 4, .count = 2 }, .color = 2 } };
     try testing.expectEqual(@as(?u32, 2), overrideOf(&marks, 5));
     try testing.expectEqual(@as(?u32, 1), overrideOf(&marks, 6));
