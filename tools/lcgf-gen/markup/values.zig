@@ -90,6 +90,10 @@ pub const Prop = enum(u8) {
     @"grid-area",
     @"grid-template-areas",
     @"grid-auto-flow",
+    @"grid-auto-columns",
+    @"grid-auto-rows",
+    @"justify-items",
+    @"justify-self",
     @"text-decoration",
     @"object-fit",
 

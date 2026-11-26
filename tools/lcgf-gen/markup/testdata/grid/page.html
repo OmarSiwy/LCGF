@@ -1,0 +1,48 @@
+<!doctype html>
+<html lcgf-page="grid">
+<head>
+  <title>Grid</title>
+  <style>
+    .layout {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      grid-template-rows: 40px auto 30px;
+      grid-template-areas: "head head" "side main" "foot foot";
+      gap: 6px 8px;
+      padding: 4px;
+    }
+    .head { grid-area: head; background-color: #203040; }
+    .side { grid-area: side; align-self: start; }
+    .main { grid-area: main; }
+    .foot { grid-area: foot; justify-self: end; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(40px, 1fr));
+      grid-auto-rows: 24px;
+      column-gap: 4px;
+      row-gap: 2px;
+      justify-items: center;
+    }
+    .wide { grid-column: span 2; }
+    .placed { grid-column: 3; grid-row: 2 / 4; }
+    .flow { display: grid; grid-template-rows: auto auto; grid-auto-flow: column dense; justify-content: space-between; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="head">Head</div>
+    <div class="side">Side</div>
+    <div class="main">
+      <div class="cards">
+        <span>A</span>
+        <span class="wide">B</span>
+        <span>C</span>
+        <span class="placed">D</span>
+        <span>E</span>
+      </div>
+    </div>
+    <div class="foot">Foot</div>
+  </div>
+  <div class="flow"><span>1</span><span>2</span><span>3</span></div>
+</body>
+</html>

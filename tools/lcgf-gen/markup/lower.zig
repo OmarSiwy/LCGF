@@ -80,6 +80,8 @@ pub const Lowerer = struct {
     /// The marker text of the list item being lowered (`• `, `3. `), which `addNode` puts
     /// in a row before the item's content.
     marker: []const u8 = "",
+    /// `grid-template-areas` of each grid container, by IR node (engine spec F7).
+    areas: std.AutoHashMapUnmanaged(u32, []const lcgf.grid_names.Area) = .empty,
 
     const Shadow = struct { x: f32, y: f32, blur: f32, spread: f32, color: types.Color };
     const Outline = struct { width: f32, offset: f32, color: types.Color };
@@ -549,6 +551,7 @@ pub const Lowerer = struct {
             l.element(i, l.irParent(i));
         }
         l.finishInlines();
+        l.gridItems();
         l.checkFields();
         l.checkRegions();
         l.checkProps();
@@ -1256,13 +1259,14 @@ pub const Lowerer = struct {
     }
 
     /// The display of `n`: what box, if any, it makes.
-    const Display = enum { none, contents, block, flex };
+    const Display = enum { none, contents, block, flex, grid };
 
     fn display(l: *Lowerer, n: u32) Display {
         const kw = l.keyword(n, .display) orelse return .block;
         if (css.eq(kw, "none")) return .none;
         if (css.eq(kw, "contents")) return .contents;
         if (css.eq(kw, "flex") or css.eq(kw, "inline-flex")) return .flex;
+        if (css.eq(kw, "grid") or css.eq(kw, "inline-grid")) return .grid;
         if (css.eq(kw, "block") or css.eq(kw, "inline") or css.eq(kw, "inline-block") or css.eq(kw, "flow-root") or css.eq(kw, "list-item")) return .block;
         if (!l.refused("value", kw, "display", l.declared(n, .display).?.loc)) l.badValue(l.declared(n, .display).?.first, .display, l.declared(n, .display).?.end);
         return .block;
@@ -1398,11 +1402,12 @@ pub const Lowerer = struct {
             .pct => |v| s.size[main] = .pct(v),
             .auto => {},
         };
-        if (l.keyword(n, .@"align-self")) |kw| {
+        // A grid item's align-self places it in its cell (`gridItems`).
+        if (!l.inGrid(n)) if (l.keyword(n, .@"align-self")) |kw| {
             if (css.eq(kw, "stretch")) s.size[cross] = .fill else if (alignOf(kw)) |a| {
                 l.flex.cross = a;
             } else if (!css.eq(kw, "auto")) l.badValue(l.declared(n, .@"align-self").?.first, .@"align-self", l.declared(n, .@"align-self").?.end);
-        }
+        };
         // Margins are flex item margins (engine spec F2).
         var m: [4]f32 = .{ 0, 0, 0, 0 };
         var has_margin = false;
@@ -1758,6 +1763,7 @@ pub const Lowerer = struct {
         var margin: ?[4]f32 = null;
         var s = l.boxStyle(n, .{}, pdir, &params, &margin);
         s.dir = dir;
+        if (disp == .grid) return l.gridContainer(n, parent, s, params, margin);
         if (disp == .flex) if (l.keyword(n, .@"flex-wrap")) |kw| {
             const at = l.declared(n, .@"flex-wrap").?.loc;
             // Flex.Style.wrap: a row's lines stack down it, one gap apart both ways.
@@ -1820,6 +1826,314 @@ pub const Lowerer = struct {
         if (std.mem.eql(u8, t, "li")) l.marker = l.markerOf(n);
         node.name = l.accessibleName(n);
         l.ir_of[n] = l.addNode(node);
+    }
+
+    // ---- grid (engine spec F7) -------------------------------------------------------------
+
+    /// Whether element `n`'s box is a child of a grid container.
+    fn inGrid(l: *const Lowerer, n: u32) bool {
+        const p = l.irParent(n);
+        return p != none and l.page.nodes.items(.grid)[p] != null;
+    }
+
+    /// A `display: grid` box: `spec.grid(style, decl, children)`.
+    fn gridContainer(l: *Lowerer, n: u32, parent: u32, style: Style, params: []const u8, margin: ?[4]f32) void {
+        const G = lcgf.grid;
+        var d: G.Decl = .{};
+        var columns = l.tracks(n, .@"grid-template-columns");
+        var rows = l.tracks(n, .@"grid-template-rows");
+        var areas: []const lcgf.grid_names.Area = &.{};
+        if (l.declared(n, .@"grid-template-areas")) |v| {
+            var cells: std.ArrayList([]const u8) = .empty;
+            var width: u32 = 0;
+            var height: u32 = 0;
+            var r: values.Reader = .init(l.c, v.first, v.end);
+            while (r.next()) |t| {
+                if (l.c.toks.items(.type)[t] != .string) {
+                    if (!values.isIdent(l.c, t, "none")) l.badValue(t, .@"grid-template-areas", v.end);
+                    continue;
+                }
+                var it = std.mem.tokenizeAny(u8, l.c.toks.items(.str)[t], " \t\n");
+                var count: u32 = 0;
+                while (it.next()) |name| : (count += 1) ok(cells.append(l.arena, name));
+                if (height > 0 and count != width) l.ds.err(l.c.tokLoc(t), "every row of grid-template-areas needs the same number of cells ({d}, not {d})", .{ width, count });
+                width = count;
+                height += 1;
+            }
+            if (width > 0 and cells.items.len == width * height) {
+                const out = ok(l.arena.alloc(lcgf.grid_names.Area, cells.items.len));
+                areas = lcgf.grid_names.template(cells.items, width, out) catch blk: {
+                    l.ds.err(v.loc, "each name in grid-template-areas must fill one rectangle", .{});
+                    break :blk &.{};
+                };
+                // The areas give the grid at least as many tracks as they cover.
+                columns = l.padTracks(columns, width);
+                rows = l.padTracks(rows, height);
+            }
+        }
+        d.columns = columns;
+        d.rows = rows;
+        inline for (.{ Prop.@"grid-auto-columns", Prop.@"grid-auto-rows" }, 0..) |p, a| {
+            const auto = l.tracks(n, p);
+            if (auto.len == 1) d.auto[a] = auto[0] else if (auto.len > 1) l.ds.err(l.declared(n, p).?.loc, "{s} takes one track size", .{@tagName(p)});
+        }
+        inline for (.{ Prop.@"column-gap", Prop.@"row-gap" }, 0..) |p, a| if (l.px(n, p)) |g| {
+            d.gap[a] = g;
+        };
+        if (l.declared(n, .@"grid-auto-flow")) |v| {
+            var column = false;
+            var dense = false;
+            var r: values.Reader = .init(l.c, v.first, v.end);
+            while (r.next()) |t| {
+                if (values.isIdent(l.c, t, "column")) column = true else if (values.isIdent(l.c, t, "dense")) dense = true else if (!values.isIdent(l.c, t, "row")) l.badValue(t, .@"grid-auto-flow", v.end);
+            }
+            d.flow = @fromBackingInt(@intCast(@as(u8, @intFromBool(column)) | @as(u8, if (dense) 2 else 0)));
+        }
+        inline for (.{ Prop.@"justify-content", Prop.@"align-content" }, 0..) |p, a| if (l.keyword(n, p)) |kw| {
+            d.distribution[a] = distributionOf(kw) orelse blk: {
+                l.badValue(l.declared(n, p).?.first, p, l.declared(n, p).?.end);
+                break :blk .start;
+            };
+        };
+        inline for (.{ Prop.@"justify-items", Prop.@"align-items" }, 0..) |p, a| if (l.keyword(n, p)) |kw| {
+            d.justify[a] = justifyOf(kw) orelse blk: {
+                l.badValue(l.declared(n, p).?.first, p, l.declared(n, p).?.end);
+                break :blk .stretch;
+            };
+        };
+        var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = style, .params_expr = params, .margin = margin, .grid = d };
+        node.style.dir = .y;
+        node.style.gap = 0;
+        if (parent == none) node.style.size = .{ .fill, .fill };
+        if (landmarkOf(l, n, l.tag(n))) |lm| {
+            node.kind = .landmark;
+            node.landmark = lm;
+        }
+        node.name = l.accessibleName(n);
+        l.ir_of[n] = l.addNode(node);
+        if (areas.len > 0) ok(l.areas.put(l.arena, l.ir_of[n], areas));
+    }
+
+    /// `list` with `fit` tracks after it, up to `count`.
+    fn padTracks(l: *Lowerer, list: []const lcgf.grid.Track, count: u32) []const lcgf.grid.Track {
+        if (list.len >= count) return list;
+        const out = ok(l.arena.alloc(lcgf.grid.Track, count));
+        @memcpy(out[0..list.len], list);
+        @memset(out[list.len..], .fit);
+        return out;
+    }
+
+    /// The track list of `p` on `n`: lengths, `fr`, `auto`, `minmax()`, `fit-content()` and
+    /// `repeat(n, …)`, expanded.
+    fn tracks(l: *Lowerer, n: u32, p: Prop) []const lcgf.grid.Track {
+        const v = l.declared(n, p) orelse return &.{};
+        var out: std.ArrayList(lcgf.grid.Track) = .empty;
+        l.trackList(n, v.first, v.end, p, &out);
+        return out.items;
+    }
+
+    fn trackList(l: *Lowerer, n: u32, first: u32, end: u32, p: Prop, out: *std.ArrayList(lcgf.grid.Track)) void {
+        var r: values.Reader = .init(l.c, first, end);
+        while (r.next()) |t| {
+            const ty = l.c.toks.items(.type)[t];
+            if (ty == .ident and values.isIdent(l.c, t, "none")) continue;
+            if (ty == .ls_bracket) {
+                l.ds.err(l.c.tokLoc(t), "named grid lines are not supported yet; use grid-template-areas", .{});
+                continue;
+            }
+            if (ty == .function and css.eq(l.c.toks.items(.str)[t], "repeat")) {
+                var inner: values.Reader = .init(l.c, t + 1, r.i - 1);
+                const comma = inner.untilComma();
+                const count_t = inner.next() orelse continue;
+                if (values.isIdent(l.c, count_t, "auto-fill") or values.isIdent(l.c, count_t, "auto-fit")) {
+                    l.ds.err(l.c.tokLoc(count_t), "repeat(auto-fill/auto-fit) needs the grid's width at run time; give a count", .{});
+                    continue;
+                }
+                const count = l.c.toks.items(.num)[count_t];
+                if (l.c.toks.items(.type)[count_t] != .number or count < 1 or count > 1024 or count != @floor(count)) {
+                    l.badValue(count_t, p, comma);
+                    continue;
+                }
+                const from = out.items.len;
+                l.trackList(n, comma + 1, r.i - 1, p, out);
+                const one = out.items[from..];
+                const copy = ok(l.arena.dupe(lcgf.grid.Track, one));
+                for (1..@intFromFloat(count)) |_| ok(out.appendSlice(l.arena, copy));
+                continue;
+            }
+            if (l.track(n, t, r.i, p)) |tk| ok(out.append(l.arena, tk));
+        }
+    }
+
+    fn track(l: *Lowerer, n: u32, t: u32, end: u32, p: Prop) ?lcgf.grid.Track {
+        const T = lcgf.grid.Track;
+        const ty = l.c.toks.items(.type)[t];
+        const num: f32 = @floatCast(l.c.toks.items(.num)[t]);
+        if (ty == .dimension and css.eq(l.c.toks.items(.str)[t], "fr")) return T.fr(num);
+        if (values.isIdent(l.c, t, "auto") or values.isIdent(l.c, t, "max-content") or values.isIdent(l.c, t, "min-content")) return T.fit;
+        if (ty == .function) {
+            const name = l.c.toks.items(.str)[t];
+            var inner: values.Reader = .init(l.c, t + 1, end - 1);
+            if (css.eq(name, "fit-content")) {
+                const a = inner.next() orelse return null;
+                const max = l.trackPx(n, a, inner.i, p) orelse return null;
+                return T.fitContent(max);
+            }
+            if (css.eq(name, "minmax")) {
+                const comma = inner.untilComma();
+                const a = inner.next() orelse return null;
+                const min: f32 = if (values.isIdent(l.c, a, "auto") or values.isIdent(l.c, a, "min-content") or values.isIdent(l.c, a, "max-content")) 0 else l.trackPx(n, a, comma, p) orelse return null;
+                inner.i = comma + 1;
+                const b = inner.next() orelse return null;
+                if (l.c.toks.items(.type)[b] == .dimension and css.eq(l.c.toks.items(.str)[b], "fr"))
+                    return T.minmaxFr(min, @floatCast(l.c.toks.items(.num)[b]), types.inf);
+                if (values.isIdent(l.c, b, "auto") or values.isIdent(l.c, b, "max-content")) return T.minmax(min, types.inf);
+                return T.minmax(min, l.trackPx(n, b, inner.i, p) orelse return null);
+            }
+        }
+        return T.px(l.trackPx(n, t, end, p) orelse return null);
+    }
+
+    fn trackPx(l: *Lowerer, n: u32, t: u32, end: u32, p: Prop) ?f32 {
+        const len = l.lengthAt(n, t, end, p) orelse return null;
+        return switch (len) {
+            .px => |v| v,
+            else => {
+                l.ds.err(l.c.tokLoc(t), "{s}: give a track in px, em, rem or fr", .{@tagName(p)});
+                return null;
+            },
+        };
+    }
+
+    /// The cells of the grid containers' children (`grid-column`, `grid-row`, `grid-area`,
+    /// `justify-self`, `align-self`), once every container has its tracks.
+    fn gridItems(l: *Lowerer) void {
+        const nodes = l.page.nodes.slice();
+        for (0..l.doc.nodes.len) |n_| {
+            const n: u32 = @intCast(n_);
+            const i = l.ir_of[n];
+            if (i == none or l.doc.nodes.items(.kind)[n] != .element) continue;
+            const p = nodes.items(.parent)[i];
+            if (p != none and nodes.items(.grid)[p] != null) {
+                if (l.gridItem(n, p)) |it| nodes.items(.cell)[i] = it;
+            } else inline for (.{ Prop.@"grid-column", Prop.@"grid-row", Prop.@"grid-area", Prop.@"justify-self" }) |q| if (l.declared(n, q)) |v|
+                l.ds.err(v.loc, "{s} applies to a child of a display: grid box", .{@tagName(q)});
+        }
+        var grids = false;
+        var margins = false;
+        for (nodes.items(.grid), nodes.items(.margin)) |g, m| {
+            grids = grids or g != null;
+            margins = margins or m != null;
+        }
+        if (grids and margins) for (nodes.items(.margin), nodes.items(.loc)) |m, at| if (m != null)
+            l.ds.err(at, "margins on a page with a grid are not supported yet (engine spec F2 with F7)", .{});
+    }
+
+    fn gridItem(l: *Lowerer, n: u32, grid_node: u32) ?lcgf.grid.Item {
+        const d = l.page.nodes.items(.grid)[grid_node].?;
+        const counts: [2]u32 = .{ @intCast(d.columns.len), @intCast(d.rows.len) };
+        var start: [2]?u32 = .{ null, null };
+        var span: [2]u32 = .{ 1, 1 };
+        var any = false;
+        if (l.declared(n, .@"grid-area")) |v| {
+            any = true;
+            var r: values.Reader = .init(l.c, v.first, v.end);
+            const t = r.next().?;
+            const name = values.ident(l.c, t) orelse {
+                l.ds.err(v.loc, "grid-area takes an area name of grid-template-areas; use grid-column and grid-row for lines", .{});
+                return null;
+            };
+            const areas = l.areas.get(grid_node) orelse &.{};
+            const cell = lcgf.grid_names.area(.{ .areas = areas }, name) catch {
+                l.ds.err(v.loc, "grid-area: no area '{s}' in the grid's grid-template-areas", .{name});
+                return null;
+            };
+            start = .{ cell.first[0], cell.first[1] };
+            span = cell.span;
+        }
+        inline for (.{ Prop.@"grid-column", Prop.@"grid-row" }, 0..) |p, a| if (l.declared(n, p)) |v| {
+            any = true;
+            const line = l.gridLine(v, counts[a]) orelse return null;
+            start[a] = line.start;
+            span[a] = line.span;
+        };
+        if ((start[0] == null) != (start[1] == null)) {
+            l.ds.err(l.loc(n), "a grid item with a line on one axis needs one on the other too (grid-column and grid-row); auto-placement on one axis is not supported", .{});
+            return null;
+        }
+        var item: lcgf.grid.Item = .{ .span = span };
+        if (start[0]) |x| item.cell = .{ x, start[1].? };
+        var j = d.justify;
+        var own = false;
+        inline for (.{ Prop.@"justify-self", Prop.@"align-self" }, 0..) |p, a| if (l.keyword(n, p)) |kw| {
+            if (!css.eq(kw, "auto")) {
+                j[a] = justifyOf(kw) orelse blk: {
+                    l.badValue(l.declared(n, p).?.first, p, l.declared(n, p).?.end);
+                    break :blk .stretch;
+                };
+                own = true;
+            }
+        };
+        if (own) item.justify = j;
+        return if (any or own) item else null;
+    }
+
+    /// `auto`, `N`, `N / M`, `span K`, `N / span K` of `grid-column`/`grid-row`, against an
+    /// axis of `count` explicit tracks (negative lines count from its end).
+    fn gridLine(l: *Lowerer, v: Value, count: u32) ?struct { start: ?u32, span: u32 } {
+        var parts: [4]u32 = undefined;
+        var k: usize = 0;
+        var slash: ?usize = null;
+        var r: values.Reader = .init(l.c, v.first, v.end);
+        while (r.next()) |t| {
+            if (l.c.toks.items(.type)[t] == .delim and l.c.toks.items(.delim)[t] == '/') {
+                slash = k;
+                continue;
+            }
+            if (k == parts.len) break;
+            parts[k] = t;
+            k += 1;
+        }
+        const ends: [2][]const u32 = if (slash) |s_| .{ parts[0..s_], parts[s_..k] } else .{ parts[0..k], &.{} };
+        var line: [2]?i64 = .{ null, null };
+        var spans: [2]?u32 = .{ null, null };
+        for (ends, 0..) |side, e| {
+            if (side.len == 0) continue;
+            if (side.len == 1 and values.isIdent(l.c, side[0], "auto")) continue;
+            const is_span = values.isIdent(l.c, side[0], "span");
+            const num_t = side[side.len - 1];
+            if (l.c.toks.items(.type)[num_t] != .number or side.len != @as(usize, if (is_span) 2 else 1)) {
+                l.ds.err(v.loc, "{s}: lines are numbers, 'span N' or auto; named lines are not supported yet", .{@tagName(v.prop)});
+                return null;
+            }
+            const x: i64 = @intFromFloat(l.c.toks.items(.num)[num_t]);
+            if (is_span) spans[e] = @intCast(@max(x, 1)) else {
+                if (x == 0) {
+                    l.ds.err(v.loc, "{s}: there is no grid line 0; lines count from 1", .{@tagName(v.prop)});
+                    return null;
+                }
+                line[e] = if (x > 0) x - 1 else @as(i64, count) + 1 + x;
+                if (line[e].? < 0) {
+                    l.ds.err(v.loc, "{s}: line {d} is before the grid's first line", .{ @tagName(v.prop), x });
+                    return null;
+                }
+            }
+        }
+        if (line[0]) |a| {
+            if (line[1]) |b| {
+                if (b <= a) {
+                    l.ds.err(v.loc, "{s}: the end line must come after the start line", .{@tagName(v.prop)});
+                    return null;
+                }
+                return .{ .start = @intCast(a), .span = @intCast(b - a) };
+            }
+            return .{ .start = @intCast(a), .span = spans[1] orelse 1 };
+        }
+        if (line[1] != null) {
+            l.ds.err(v.loc, "{s}: give the start line, or only a span", .{@tagName(v.prop)});
+            return null;
+        }
+        return .{ .start = null, .span = spans[0] orelse spans[1] orelse 1 };
     }
 
     fn parentDir(l: *const Lowerer, parent: u32) types.Axis {
@@ -3527,6 +3841,27 @@ fn landmarkOf(l: *const Lowerer, n: u32, t: []const u8) ?[]const u8 {
         }
         return if (t[0] == 'h') "banner" else "content_info";
     }
+    return null;
+}
+
+fn distributionOf(kw: []const u8) ?lcgf.grid.Distribution {
+    if (css.eq(kw, "normal") or css.eq(kw, "stretch")) return .start;
+    if (justifyOf(kw)) |j| return switch (j) {
+        .center => .center,
+        .end => .end,
+        else => .start,
+    };
+    if (css.eq(kw, "space-between")) return .space_between;
+    if (css.eq(kw, "space-around")) return .space_around;
+    if (css.eq(kw, "space-evenly")) return .space_evenly;
+    return null;
+}
+
+fn justifyOf(kw: []const u8) ?lcgf.grid.Justify {
+    if (css.eq(kw, "stretch") or css.eq(kw, "normal")) return .stretch;
+    if (css.eq(kw, "start") or css.eq(kw, "flex-start") or css.eq(kw, "self-start") or css.eq(kw, "left")) return .start;
+    if (css.eq(kw, "center")) return .center;
+    if (css.eq(kw, "end") or css.eq(kw, "flex-end") or css.eq(kw, "self-end") or css.eq(kw, "right")) return .end;
     return null;
 }
 

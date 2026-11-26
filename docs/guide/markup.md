@@ -295,6 +295,13 @@ more colours, or with stops away from the ends, becomes a 256-texel ramp row in 
 table (`features.rampPixels`, uploaded with the images) drawn by `features.linearRamp` or
 `features.radialRamp`. Stop positions are percentages; a radial gradient without a radius
 takes the farthest corner of a box with a px size. Ellipses and conic gradients are errors.
+`display: grid` is `spec.grid` over the grid passes (layout/grid.zig). Tracks take px, em, rem,
+`fr`, `auto`, `minmax()`, `fit-content()` and `repeat(n, …)`; `grid-template-areas`,
+`grid-area: name`, `grid-column`/`grid-row` (`N`, `N / M`, `span K`), `grid-auto-rows`,
+`grid-auto-flow`, both gaps and the `justify-`/`align-` items, self and content keywords are
+lowered. Rows past the template are added for the children that need them. Not yet:
+`repeat(auto-fill)`, named lines, `%` tracks, a line on one axis only, and margins on a page
+with a grid. A control directly in a cell needs a `<div>` around it on runtime pages.
 
 Lengths are folded to px: `em` and `rem` from the resolved font size, `in`, `cm`, `mm`, `pt` and
 `pc` at 96 px per inch.
@@ -357,7 +364,7 @@ its own): the error names the element. The flex container properties (`flex-dire
 - **mapped**: lowered today.
 - **pending**: lowered onto engine API that docs/plans/markup-engine-api.md specifies and the
   engine has not landed yet. Margins are one.
-- **planned**: not lowered yet, for example `:hover`, `@media` and grid.
+- **planned**: not lowered yet, for example `:hover`, `@media` and `<select>`.
 - **rejected**: not modelled by design:
   - scripts and `on*` attributes, where you write `on:click="name"` instead;
   - remote stylesheets;

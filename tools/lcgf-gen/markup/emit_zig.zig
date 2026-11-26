@@ -102,6 +102,59 @@ pub const Emit = struct {
         }
     }
 
+    /// A `grid.Track` as its constructor (`.px(80)`, `.fr(1)`, `.fit`, `.minmax(…)`).
+    fn track(e: *Emit, t: lcgf.grid.Track) void {
+        const T = lcgf.grid.Track;
+        if (std.meta.eql(t, T.fit)) return e.write(".fit");
+        if (std.meta.eql(t, T.px(t.k_px))) return e.print(".px({d})", .{t.k_px});
+        if (std.meta.eql(t, T.fr(t.k_fr))) return e.print(".fr({d})", .{t.k_fr});
+        if (std.meta.eql(t, T.minmaxFr(t.min, t.k_fr, t.max))) {
+            e.print(".minmaxFr({d}, {d}, ", .{ t.min, t.k_fr });
+            e.value(t.max);
+            return e.write(")");
+        }
+        if (std.meta.eql(t, T.fitContent(t.max))) return e.print(".fitContent({d})", .{t.max});
+        e.print(".minmax({d}, ", .{t.min});
+        e.value(t.max);
+        e.write(")");
+    }
+
+    fn tracks(e: *Emit, list: []const lcgf.grid.Track) void {
+        e.write("&.{");
+        for (list, 0..) |t, i| {
+            e.write(if (i == 0) " " else ", ");
+            e.track(t);
+        }
+        e.write(if (list.len > 0) " }" else "}");
+    }
+
+    /// A `grid.Decl` literal, with the fields that differ from the defaults.
+    fn gridDecl(e: *Emit, d: lcgf.grid.Decl) void {
+        const D = lcgf.grid.Decl;
+        var any = false;
+        e.write(".{");
+        inline for (comptime @typeInfo(D).@"struct".field_names) |name| {
+            const v = @field(d, name);
+            const differs = if (comptime std.mem.eql(u8, name, "columns") or std.mem.eql(u8, name, "rows")) v.len > 0 else !std.meta.eql(v, @field(D{}, name));
+            if (differs) {
+                e.write(if (any) ", ." ++ name ++ " = " else " ." ++ name ++ " = ");
+                if (comptime std.mem.eql(u8, name, "columns") or std.mem.eql(u8, name, "rows")) e.tracks(v) else if (comptime std.mem.eql(u8, name, "auto")) {
+                    e.write(".{ ");
+                    e.track(v[0]);
+                    e.write(", ");
+                    e.track(v[1]);
+                    e.write(" }");
+                } else e.value(v);
+                any = true;
+            }
+        }
+        e.write(if (any) " }" else "}");
+    }
+
+    fn gridItem(e: *Emit, it: lcgf.grid.Item) void {
+        e.structure(it, .{});
+    }
+
     fn color(e: *Emit, c: types.Color) void {
         if (std.meta.eql(c, types.Color.transparent)) return e.write(".transparent");
         if (c.a == 255) return e.print(".rgb({d}, {d}, {d})", .{ c.r, c.g, c.b });
@@ -257,6 +310,18 @@ pub const Emit = struct {
             std.mem.swap(std.ArrayList(u8), &buf, &e.out);
             margin_close = buf.items;
         }
+        // A grid child's cell: engine spec F7, `spec.cell(s, grid.Item)`.
+        var cell_close: []const u8 = "";
+        if (n.cell) |c| {
+            e.write("s.cell(");
+            var buf: std.ArrayList(u8) = .empty;
+            std.mem.swap(std.ArrayList(u8), &buf, &e.out);
+            e.write(", ");
+            e.gridItem(c);
+            e.write(")");
+            std.mem.swap(std.ArrayList(u8), &buf, &e.out);
+            cell_close = buf.items;
+        }
         const restyle = !std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0;
         const has_children = switch (n.kind) {
             .container, .landmark, .when, .choice, .list, .dialog, .section, .popover => true,
@@ -273,7 +338,17 @@ pub const Emit = struct {
         if (n.paragraph != null) e.write("s.paragraph(");
         if (text_styled) e.write("s.textStyled(");
         if (restyle and !has_children) e.write("s.styled(");
-        switch (n.kind) {
+        if (n.grid) |d| {
+            // A grid container, landmark or not: `spec.grid(style, decl, children)`.
+            var st = n.style;
+            if (n.kind == .landmark) st.role = std.meta.stringToEnum(types.Role, n.landmark).?;
+            e.write("s.grid(");
+            e.fields(st, types.Style{}, &.{"dir"}, n.params_expr);
+            e.write(", ");
+            e.gridDecl(d);
+            e.write(", .{");
+            inner_close.appendSlice(e.arena, "})") catch unreachable;
+        } else switch (n.kind) {
             .container => {
                 e.write(if (n.dir == .x) "s.row(" else "s.col(");
                 e.fields(n.style, types.Style{}, &.{"dir"}, n.params_expr);
@@ -469,6 +544,7 @@ pub const Emit = struct {
         }
         var all: std.ArrayList(u8) = .empty;
         all.appendSlice(e.arena, inner_close.items) catch unreachable;
+        all.appendSlice(e.arena, cell_close) catch unreachable;
         all.appendSlice(e.arena, margin_close) catch unreachable;
         all.appendSlice(e.arena, tokens_close) catch unreachable;
         all.appendSlice(e.arena, close.items) catch unreachable;
@@ -764,7 +840,9 @@ pub const Emit = struct {
 
     /// Statements that build node `i` up to its children, and what closes it.
     fn rtOpen(e: *Emit, i: u32, list_depth: u32) []const u8 {
-        const n = e.page.nodes.get(i);
+        var n = e.page.nodes.get(i);
+        // A grid's children float: the grid places them (`Grids.place`).
+        if (n.parent != none and e.page.nodes.items(.grid)[n.parent] != null) n.style.float = true;
         e.uses = n.uses;
         e.text_uses = n.text_uses;
         switch (n.kind) {
@@ -1387,6 +1465,24 @@ pub const Emit = struct {
             if (flex) ", &ui.flex.?" else "",
         });
         std.mem.swap(std.ArrayList(u8), &decls, &e.out);
+        const grids = e.hasGrid();
+        if (grids) e.write(
+            \\    /// The grids (layout/grid.zig) the page declares while it builds, used by `end`.
+            \\    /// They point into `grid_buf`: a Ui does not move once built.
+            \\    grid_buf: [grid_bytes]u8 align(lcgf.mem.column_align) = undefined,
+            \\    grids: ?lcgf.grid.Grids = null,
+            \\
+        );
+        std.mem.swap(std.ArrayList(u8), &decls, &e.out);
+        if (grids) e.write(
+            \\    /// Ends the frame with this page's grids (`Frame.endGrid`).
+            \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
+            \\        return f.endGrid(font, &ui.grids.?);
+            \\    }
+            \\
+            \\
+        );
+        std.mem.swap(std.ArrayList(u8), &decls, &e.out);
         if (tokens.len > 0) e.write(
             \\    /// The caller's theme tokens; point it at your table.
             \\    tokens: *const ThemeTable = &default_tokens,
@@ -1434,6 +1530,14 @@ pub const Emit = struct {
             \\            ui.flex = lcgf.flex.Flex.init(&carver, limits.nodes);
             \\        }
             \\        const fx = &ui.flex.?;
+            \\
+        );
+        if (grids) e.write(
+            \\        if (ui.grids == null) {
+            \\            var carver: lcgf.mem.Carver = .{ .buf = &ui.grid_buf };
+            \\            ui.grids = lcgf.grid.Grids.init(&carver, grid_cap);
+            \\        }
+            \\        const gs = &ui.grids.?;
             \\
         );
         e.rtWalk(none, 0);
@@ -1535,7 +1639,7 @@ pub const Emit = struct {
             var close = if (nodes.items(.kind)[i] == .each) blk: {
                 e.rtRegion(i);
                 break :blk "";
-            } else e.rtOpenFlex(i, lists);
+            } else e.rtOpenGrid(i, lists);
             if (in_choice) close = std.fmt.allocPrint(e.arena, "{s}{s}}},", .{ close, if (close.len > 0) " " else "" }) catch unreachable;
             if (nodes.items(.kind)[i] == .list) lists += 1;
             e.print(" // {s}\n", .{e.where(nodes.items(.loc)[i])});
@@ -1841,6 +1945,58 @@ pub const Emit = struct {
         return e.rtOpen(i, list_depth);
     }
 
+    /// Whether a node is a grid container (engine spec F7).
+    fn hasGrid(e: *Emit) bool {
+        for (e.page.nodes.items(.grid)) |g| if (g != null) return true;
+        return false;
+    }
+
+    /// The items of grid container `i`: its children's cells.
+    fn gridItemsOf(e: *Emit, i: u32) []const lcgf.grid.Item {
+        var out: std.ArrayList(lcgf.grid.Item) = .empty;
+        for (e.page.nodes.items(.parent), e.page.nodes.items(.cell)) |p, c| if (p == i) out.append(e.arena, c orelse .{}) catch unreachable;
+        return out.items;
+    }
+
+    /// `rtOpenFlex`, with a grid child placed before its statement (`Grids.place`) and a grid
+    /// container declared after its `open` (`Grids.declare`).
+    fn rtOpenGrid(e: *Emit, i: u32, list_depth: u32) []const u8 {
+        const nodes = e.page.nodes.slice();
+        const parent = nodes.items(.parent)[i];
+        if (parent != none and nodes.items(.grid)[parent] != null) {
+            e.print("_ = gs.place(k{d}, @intCast(f.tree().len), ", .{parent});
+            e.gridItem(nodes.items(.cell)[i] orelse .{});
+            e.write("); ");
+        }
+        const d = nodes.items(.grid)[i] orelse return e.rtOpenFlex(i, list_depth);
+        var statement: std.ArrayList(u8) = .empty;
+        std.mem.swap(std.ArrayList(u8), &statement, &e.out);
+        const close = e.rtOpen(i, list_depth);
+        std.mem.swap(std.ArrayList(u8), &statement, &e.out);
+        // A container's statement is `_ = f.open(…);`.
+        e.print("const k{d} = gs.declare(@backingInt({s}), ", .{ i, statement.items[4 .. statement.items.len - 1] });
+        e.gridDecl(d);
+        e.print(", {d});", .{lcgf.grid.implicitTracks(d, e.gridItemsOf(i))});
+        return close;
+    }
+
+    /// The runtime page's grid capacity: its grids at their most implicit tracks.
+    fn gridCapacity(e: *Emit) lcgf.grid.Grids.Capacity {
+        var cap: lcgf.grid.Grids.Capacity = .{ .grids = 0, .tracks = 0, .items = 0, .cells = 1 };
+        for (e.page.nodes.items(.grid), 0..) |g, i| if (g) |d| {
+            const items = e.gridItemsOf(@intCast(i));
+            const extra = lcgf.grid.implicitTracks(d, items);
+            var count: [2]u32 = .{ @max(@as(u32, @intCast(d.columns.len)), 1), @max(@as(u32, @intCast(d.rows.len)), 1) };
+            const given: u32 = @intCast(if (d.growAxis() == 0) d.columns.len else d.rows.len);
+            count[d.growAxis()] = @max(count[d.growAxis()], given + extra);
+            cap.grids += 1;
+            cap.tracks += count[0] + count[1];
+            cap.items += @intCast(items.len);
+            cap.cells = @max(cap.cells, count[0] * count[1]);
+        };
+        return cap;
+    }
+
     fn runtimePage(e: *Emit) void {
         const n: u32 = @intCast(e.page.nodes.len);
         // Rows: widgets push up to a few rows each; texts and bytes as the literals need. A
@@ -1876,7 +2032,21 @@ pub const Emit = struct {
             \\}}
             \\
             \\
-        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex() or regions) "p.ui.end(&f, .{})" else "f.end(.{})" });
+        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex() or regions or e.hasGrid()) "p.ui.end(&f, .{})" else "f.end(.{})" });
+        if (e.hasGrid()) {
+            const cap = e.gridCapacity();
+            e.print(
+                \\/// The runtime page's grid rows, and their bytes.
+                \\const grid_cap: lcgf.grid.Grids.Capacity = .{{ .grids = {d}, .tracks = {d}, .items = {d}, .cells = {d} }};
+                \\const grid_bytes = blk: {{
+                \\    var carver: lcgf.mem.Carver = .{{ .buf = null }};
+                \\    _ = lcgf.grid.Grids.init(&carver, grid_cap);
+                \\    break :blk carver.off;
+                \\}};
+                \\
+                \\
+            , .{ cap.grids, cap.tracks, @max(cap.items, 1), cap.cells });
+        }
         if (e.hasFlex()) e.write(
             \\/// The bytes of the runtime page's flex columns.
             \\const flex_bytes = blk: {

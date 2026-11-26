@@ -134,6 +134,11 @@ pub const Node = struct {
     /// The node's other flex rules (align-self, wrap, baseline, lines, aspect): `spec.flexed`
     /// with `margin` when either differs from the default.
     flex: lcgf.flex.Flex.Style = .{},
+    /// Engine spec F7: the tracks of a `display: grid` container, or null.
+    grid: ?lcgf.grid.Decl = null,
+    /// F7: where a grid container's child sits (`grid-column`, `grid-row`, `grid-area`), or
+    /// null for the next free cell.
+    cell: ?lcgf.grid.Item = null,
     /// Inside an lcgf-each: the control shows the item's field (`checked="{row.done}"`) and
     /// reports changes (on:change) without writing it.
     one_way: bool = false,

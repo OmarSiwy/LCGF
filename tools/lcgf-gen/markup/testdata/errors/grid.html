@@ -1,0 +1,9 @@
+<!doctype html>
+<style>
+  .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) [a] 10% 1fr; grid-template-areas: "a b" "c"; }
+  .one { grid-column: 2; }
+  .bad { grid-row: 3 / 1; }
+  .loose { grid-area: nowhere; }
+  .out { justify-self: center; }
+</style>
+<body><div class="g"><span class="one">1</span><span class="bad">2</span><span class="loose">3</span></div><p class="out">x</p></body>
