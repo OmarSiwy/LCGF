@@ -124,11 +124,12 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
   UI costs what it costs in Zig; the other calls are one direct call each. Static UIs cross
   as well (src/abi/ct.zig): `lcgf-gen --static` makes the comptime pipeline's tables (fold,
   constant columns, paint templates) with the functions `ct_layout` and `ct_paint` call at
-  comptime (src/comptime/tables.zig) and writes them as compile-time constants, and the
-  tier-0 passes, the paint and the hit test are ported to C++ templates (lcgf/ct.hpp) and
-  Rust generics (lcgf::ct) compiled against them, so the compiler folds them as Zig's does.
-  Draw lists and events match Zig's byte for byte; Rust and clang run at Zig's speed or
-  faster. liblcgf runs the same tables through its own frame too (`SeamUi`). The GPU projection is written per language on Vulkan, GL ES 3, wgpu-native, Metal
+  comptime (src/comptime/tables.zig). liblcgf's static frame is the comptime pipeline's own
+  frame, generic over where its tables come from (folded constants in Zig, these words at run
+  time). Each C++ UI gets that frame specialized to its words: `zig build-obj` over
+  `lcgf-gen --static --lang zig` (or, without Zig, clang over `--lang c`, the engine made C by
+  Zig's C backend). Rust still compiles a port of the passes (lcgf::ct) against the tables as
+  compile-time constants. Draw lists and events match Zig's byte for byte. The GPU projection is written per language on Vulkan, GL ES 3, wgpu-native, Metal
   and Direct3D 12. docs/guide/bindings.md.
 - **One per build.** `-Drender=auto|sw|vk|metal|d3d12|gles|web|wgpu` picks the back end the
   `lcgf_render` module exposes (src/render/select.zig); `auto` is the target's own API (Metal on

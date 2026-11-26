@@ -115,8 +115,10 @@
             pkgs.clang-tools
             # The C++ bindings' check (ci/jobs/bindings.sh) builds with CMake.
             pkgs.cmake
-            # ...and translates its WGSL shaders with naga (lcgf_add_shader).
+            # ...and translates its WGSL shaders with naga (lcgf_add_shader); static UIs' frames
+            # built without Zig are checked with clang (specialized) as well as gcc.
             naga-cli
+            pkgs.clang
             pkgs.pkg-config
             pkgs.libx11
             pkgs.cairo

@@ -41,16 +41,38 @@ if(NOT TARGET lcgf::lcgf)
     IMPORTED_LOCATION "${_lcgf_archive}"
     INTERFACE_INCLUDE_DIRECTORIES "${_lcgf_prefix}/include"
     INTERFACE_COMPILE_DEFINITIONS "LCGF_LANES=${_lcgf_lanes_def}"
-    # lcgf/ct.hpp's passes must keep Zig's arithmetic: no a*b+c fused into an FMA.
-    INTERFACE_COMPILE_OPTIONS "$<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-ffp-contract=off>"
+    # A static UI's frame built from C (lcgf-gen --static --lang c) must keep Zig's arithmetic:
+    # no a*b+c fused into an FMA.
+    INTERFACE_COMPILE_OPTIONS "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-ffp-contract=off;-fno-strict-aliasing>"
     INTERFACE_COMPILE_FEATURES cxx_std_20)
+endif()
+
+# A static UI's frame is liblcgf's, specialized to the UI's tables: with a Zig compiler
+# (LCGF_ZIG, found on PATH unless set to OFF), `zig build-obj` builds it from lcgf-gen --static
+# --lang zig against the lcgf sources in share/lcgf/zig, as fast as Zig's own comptime UI.
+# Without one it is built from C (lcgf-gen --static --lang c): specialized by clang, else a call
+# into liblcgf's frame, slower (docs/guide/bindings.md). LCGF_ZIG_CPU is Zig's -mcpu for it.
+if(NOT DEFINED LCGF_ZIG)
+  find_program(LCGF_ZIG zig)
+endif()
+set(LCGF_ZIG_CPU "native" CACHE STRING "Zig's -mcpu for static UIs' frames")
+set(_lcgf_zig_frames OFF)
+if(LCGF_ZIG AND NOT LCGF_LANES STREQUAL "auto")
+  set(_lcgf_zig_frames ON)
+else()
+  enable_language(C)
+  if(NOT _lcgf_noted)
+    set(_lcgf_noted ON)
+    message(STATUS "lcgf: no Zig compiler for static UIs' frames (LCGF_ZIG, or zig on PATH; not with LCGF_LANES=auto): they are built from C, specialized only by clang and otherwise slower")
+  endif()
 endif()
 
 # Generates <name>.lcgf.hpp from `spec` (a .zon UI spec) into the build tree and makes it
 # includable by `target`, which also links liblcgf.
 # lcgf_add_ui(target spec.zon [STATIC]): STATIC makes a static UI, the comptime pipeline's
 # tables (lcgf::StaticUi: folded layout, paint templates) for a spec whose structure never
-# changes; without it the widgets' tables (lcgf::Ui: events, focus, springs).
+# changes, and builds its frame (above); without it the widgets' tables (lcgf::Ui: events,
+# focus, springs).
 function(lcgf_add_ui target spec)
   cmake_parse_arguments(_ui "STATIC" "" "" ${ARGN})
   get_filename_component(_spec "${spec}" ABSOLUTE)
@@ -71,6 +93,33 @@ function(lcgf_add_ui target spec)
     COMMENT "lcgf-gen ${_name}.zon ${_static}"
     VERBATIM)
   target_sources(${target} PRIVATE "${_out}")
+  if(_ui_STATIC)
+    set(_share "${_lcgf_prefix}/share/lcgf")
+    if(_lcgf_zig_frames)
+      set(_zig "${_dir}/${_name}.lcgf.zig")
+      set(_obj "${_dir}/${_name}.frame.o")
+      add_custom_command(OUTPUT "${_obj}"
+        COMMAND "${LCGF_GEN}" "${_spec}" --static --lang zig -o "${_zig}"
+        COMMAND "${LCGF_ZIG}" build-obj -OReleaseFast -mcpu "${LCGF_ZIG_CPU}" -fPIC --cache-dir "${_dir}/zig-cache"
+          --dep lcgf "-Mroot=${_zig}" --dep build_options --dep unicode_tables "-Mlcgf=${_share}/zig/src/lcgf.zig"
+          "-Mbuild_options=${_share}/zig/options_l${LCGF_LANES}.zig" "-Municode_tables=${_share}/zig/unicode_tables.zig"
+          --name "${_name}_frame" "-femit-bin=${_obj}"
+        DEPENDS "${_spec}" "${LCGF_GEN}"
+        COMMENT "zig build-obj ${_name}'s frame"
+        VERBATIM)
+      target_sources(${target} PRIVATE "${_obj}")
+      set_source_files_properties("${_obj}" PROPERTIES EXTERNAL_OBJECT ON GENERATED ON)
+    else()
+      set(_c "${_dir}/${_name}.lcgf.c")
+      add_custom_command(OUTPUT "${_c}"
+        COMMAND "${LCGF_GEN}" "${_spec}" --static --lang c -o "${_c}"
+        DEPENDS "${_spec}" "${LCGF_GEN}"
+        COMMENT "lcgf-gen ${_name}.zon --static --lang c"
+        VERBATIM)
+      target_sources(${target} PRIVATE "${_c}")
+      set_source_files_properties("${_c}" PROPERTIES INCLUDE_DIRECTORIES "${_share}")
+    endif()
+  endif()
   target_include_directories(${target} PRIVATE "${_dir}")
   target_link_libraries(${target} PRIVATE lcgf::lcgf)
 endfunction()

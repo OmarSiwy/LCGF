@@ -94,6 +94,16 @@ pub fn build(b: *std.Build) void {
         abi_step.dependOn(&b.addInstallFile(fixed, b.fmt("share/lcgf/lcgf_ct_l{d}.c", .{abi_lanes})).step);
     }
     abi_step.dependOn(&b.addInstallFile(.{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe).?, "..", "lib", "zig.h" }) }, "share/lcgf/zig.h").step);
+    // lcgf's Zig sources, the Unicode tables and one build_options per lane count, for
+    // lcgf-gen --static --lang zig's per-UI frame: `zig build-obj` against them specializes
+    // liblcgf's static-UI frame to the UI's tables (CMake's lcgf_add_ui, lcgf-build for Rust).
+    abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src"), .install_dir = .prefix, .install_subdir = "share/lcgf/zig/src", .include_extensions = &.{ ".zig", ".h" } }).step);
+    abi_step.dependOn(&b.addInstallFile(ucd_tables, "share/lcgf/zig/unicode_tables.zig").step);
+    for ([_]u32{ 4, 8, 16 }) |abi_lanes| {
+        const wf = b.addWriteFiles();
+        const f = wf.add("options.zig", b.fmt("pub const lanes: ?u32 = {d};\npub const fixed_point: bool = false;\n", .{abi_lanes}));
+        abi_step.dependOn(&b.addInstallFile(f, b.fmt("share/lcgf/zig/options_l{d}.zig", .{abi_lanes})).step);
+    }
     // liblcgf_auto.a (x86-64 ELF): the three widths again, each built for the CPU level it suits
     // and its C names suffixed, under the dispatcher of src/abi/auto.zig, which picks one at the
     // first call. CMake's LCGF_LANES=auto and the crate's `lanes-auto` feature link it.
@@ -1557,7 +1567,8 @@ pub fn build(b: *std.Build) void {
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.
     // bench/vs/capy/main.zig is Zig 0.14 source, built inside a Capy checkout (its build.sh).
-    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig"), b.path("bench/vs/capy/main.zig") }, .check = true });
+    // zig-out holds generated Zig (the installed lcgf sources, the bindings check's per-UI frames).
+    const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig"), b.path("bench/vs/capy/main.zig"), b.path("zig-out") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
 }
 

@@ -308,7 +308,7 @@ Fields: `buf`, `len`, `overflow`
 
 ## `lcgf.text_format` (src/core/fmt.zig)
 
-fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`, a `.zon` `.text`), one meaning in every engine: Zig's front ends and seam, and the C++ and Rust native engines (bindings/cpp/include/lcgf/ct.hpp, bindings/rust/lcgf/src/ct.rs), which port the writers below and must give the same bytes.
+fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`, a `.zon` `.text`), one meaning in every engine: Zig's front ends and seam, and Rust's native engine (bindings/rust/lcgf/src/ct.rs), which ports the writers below and must give the same bytes.
 
 ### Top level
 
@@ -8502,6 +8502,7 @@ Static UIs across the seam: the comptime pipeline (ct_layout, ct_paint) for prog
 - `fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u32`: The words of the static UI of `nodes`, in `arena`.
 - `fn exportAll() void`
 - `fn cFrameWords(words: [*]const u32, len: usize, cols: ?[*]const [*]const u8, buf: [*]align(mem.column_align) u8, buf_len: usize, state: [*]const u8, width: f…`: `cFrame` with the words passed in and every table read from them: what a frame specialized to constant words calls (exported by src/abi/ct_c.zig only).
+- `fn frameInto(words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32, out: *anyopaque) void`: One frame of the UI `init` placed in `buf`, specialized to `words` and `cols` when they are constants (`Ui.frameWith`), its draw list kept for the other C functions and written to `out` (an `lcgf_draw`).
 - `fn bindingsOf(comptime name: []const u8) []const Bind`: The bindings of a static example.
 - `fn Patched(comptime e: anytype) type`: ct_paint.Patches over `e`'s bindings (`bindingsOf`): what the static UI's frame paints through.
 - `fn gatherText(comptime State: type, comptime nodes: []const Node, state: *const State, buf: []u8, spans: []Span) u32`: The labels' text of `state`, as the static UI's frame gathers it: each label's string field, or its format written (src/core/fmt.zig), in label order into `buf`, cut where `buf` ends.

@@ -1472,10 +1472,19 @@ fn cShortcut(list: [*]const CShortcut, len: usize, code: u8, mods: u8) callconv(
 /// `cFrame` with the words passed in and every table read from them: what a frame specialized
 /// to constant words calls (exported by src/abi/ct_c.zig only).
 pub fn cFrameWords(words: [*]const u32, len: usize, cols: ?[*]const [*]const u8, buf: [*]align(mem.column_align) u8, buf_len: usize, state: [*]const u8, width: f32, height: f32, out: *seam.CDraw) callconv(.c) void {
-    const d = Ui.frameWith(words[0..len], cols, buf[0..buf_len], state, .{ width, height });
-    const ui: *Ui = @ptrCast(buf);
-    ui.d = d;
-    out.* = seam.cDraw(&ui.d);
+    frameInto(words[0..len], cols, buf[0..buf_len], state, .{ width, height }, out);
+}
+
+/// One frame of the UI `init` placed in `buf`, specialized to `words` and `cols` when they are
+/// constants (`Ui.frameWith`), its draw list kept for the other C functions and written to
+/// `out` (an `lcgf_draw`). What lcgf-gen --static --lang zig's frame calls.
+pub inline fn frameInto(words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32, out: *anyopaque) void {
+    const d = Ui.frameWith(words, cols, buf, state, viewport);
+    // The draw list's columns are where `init` carved them; only the counts and strings move.
+    const ui: *Ui = @ptrCast(buf.ptr);
+    inline for (.{ "quad_len", "run_len", "custom_len", "cmd_len", "op_len", "strings" }) |f| @field(ui.d, f) = @field(d, f);
+    const o: *seam.CDraw = @ptrCast(@alignCast(out));
+    o.* = seam.cDraw(&d);
 }
 
 // ---- tests -------------------------------------------------------------------------------------

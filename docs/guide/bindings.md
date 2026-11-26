@@ -212,23 +212,32 @@ buttons or custom draws) can use Zig's comptime pipeline instead of the widgets'
 paints from one quad template per node, and `ct_events` hit-tests the widgets.
 
 `lcgf-gen --static` makes those tables (src/abi/ct.zig, `make`) with the same functions
-`ct_layout.Layout` and `ct_paint.Paint` call while compiling (src/comptime/tables.zig), and
-writes them as compile-time constants: `constexpr` members of a `Tables` struct in C++, the
-associated consts of a `Tables` impl in Rust. The passes are compiled in your language against
-them (`lcgf/ct.hpp`, `lcgf::ct`), as Zig compiles them against its comptime tables, so the
-compiler folds the constant columns in. The UI is a plain value: no buffer, no library call.
+`ct_layout.Layout` and `ct_paint.Paint` call while compiling (src/comptime/tables.zig).
+liblcgf's static frame is the comptime pipeline's own frame over them (src/abi/ct.zig, `Ui`),
+and so are its relayout, patches, hit test, pointer and focus.
+
+In C++ every UI gets that frame specialized to its tables, as Zig's compiler specializes a
+comptime UI: `lcgf_add_ui(... STATIC)` runs `lcgf-gen --static --lang zig`, the UI's words and
+constant columns as Zig constants, and builds it with `zig build-obj` against the lcgf sources
+`zig build abi` installs in `share/lcgf/zig`. A Zig compiler is optional: CMake uses
+`LCGF_ZIG`, else `zig` on `PATH`. Without one it builds `lcgf-gen --static --lang c`
+instead. Clang specializes that file, the engine made C by Zig's C backend
+(`share/lcgf/lcgf_ct_l*.c`), to the UI's words, somewhat slower than Zig does; any other C
+compiler compiles a call into liblcgf's frame, which reads the tables as data. CMake says
+which at configure time. Rust compiles a port of the passes (`lcgf::ct`) against the tables,
+written as the associated consts of a `Tables` impl.
 
 ```cmake
-lcgf_add_ui(app controls.zon STATIC)   # controls.lcgf.hpp in lcgf_gen_static/
+lcgf_add_ui(app controls.zon STATIC)   # controls.lcgf.hpp and its frame, in lcgf_gen_static/
 ```
 
 ```cpp
 #include "controls.lcgf.hpp"
 
-controls::Ui ui;                       // lcgf::ct::Ui<controls::Tables, controls::State>
+controls::Ui ui;                       // lcgf::StaticUi<controls::State, controls::Widget, ...>
 ui.set_title("Volume");
 const lcgf::DrawList& draw = ui.frame(width, height);
-if (auto e = ui.pointer(input)) {      // lcgf::ct::Event<controls::Widget>
+if (auto e = ui.pointer(input)) {      // lcgf::Event<controls::Widget>
     if (e->clicked(controls::Widget::mute)) ui.state.muted = !ui.state.muted;
     if (auto v = e->slid(controls::Widget::volume)) ui.state.volume = *v;
 }
@@ -295,40 +304,36 @@ ui.state.accent = 0xff2828c8;
 ui.patch(palette::Field::Accent);
 ```
 
-The field is a template argument in C++, so the span and the bindings are constants there; in
-Rust `Field` is an enum and the span is read from a constant table. `SeamUi` applies the
-bindings on every frame as well, so its draw lists match the compiled UI's.
+In C++ these are calls into liblcgf (`lcgf_ct_relayout`, `lcgf_ct_patch`), which read the span
+and the bindings from the UI's tables; in Rust `Field` is an enum and the span is read from a
+constant table. Rust's `SeamUi` applies the bindings on every frame as well.
 
 ### Arithmetic and cost
 
-The passes keep Zig's arithmetic exactly: the same IEEE operations in the same order, min and
-max as the selects Zig's tier-0 passes now use (`simd.maxF`, `simd.minF`, the same on every
-target), and an exact `@round` without a libm call. The CMake package compiles with
-`-ffp-contract=off`, since an FMA would change results. `<name>::SeamUi` runs the same UI
-through liblcgf's prebuilt frame (`lcgf_ct_frame_*`) instead, for C or for code that must not
-be compiled per UI; its draw lists are the same.
+Every frame keeps Zig's arithmetic exactly: in C++ it is Zig's own code, and the Rust port does
+the same IEEE operations in the same order, min and max as the selects Zig's tier-0 passes use
+(`simd.maxF`, `simd.minF`) and an exact `@round` without a libm call. The CMake package compiles
+a UI's C frame with `-ffp-contract=off`, since an FMA would change results.
 
-What it costs, ns per frame (layout, finalize and paint, with the label text changing every
-frame), on a 2-core AVX-512 VM, everything built for that CPU, best of three runs of 240
-frames:
+What a frame costs, instructions and cycles per frame (layout, finalize, paint, the label text
+and selectors from the state each frame): a Ryzen 7 8700F pinned to one core, everything built
+for it (8 lanes, `-march=znver4`), Zig 0.18-dev (LLVM 23), clang and GCC from the `vs` shell
+(clang 21, GCC 16), rustc 1.99, medians of 5 interleaved rounds of 240 frames, the count at 100
+repetitions less the count at 0:
 
-| UI | Zig, comptime pipeline | Rust | C++, clang | C++, GCC |
-|---|---|---|---|---|
-| badge (3 nodes, fixed 96x64) | 96 | 43 | 75 | 34 |
-| card (5 nodes) | 60 | 85 | 96 | 73 |
-| mixer (8 nodes) | 137 | 82 | 176 | 141 |
-| dash (13 nodes, three clipped tiles) | 334 | 321 | 358 | 545 |
-| settings (32 nodes, fixed 320x240) | 774 | 693 | 722 | 1,226 |
-| todo (39 nodes: a list, a `when`, a `choice`) | 1,481 | 1,029 | 1,051 | 1,788 |
+| UI | Zig comptime | C++, `zig build-obj` | C++, clang (no Zig) | C++, GCC (no Zig) | Rust (`lcgf::ct`) |
+|---|---|---|---|---|---|
+| settings (32 nodes, fixed 320x240) | 8,489 / 4,439 | 8,942 / 4,437 | 9,052 / 4,078 | 13,578 / 5,545 | 8,707 / 3,969 |
+| todo (39 nodes: a list, a `when`, a `choice`) | 10,991 / 6,338 | 11,255 / 6,134 | 12,414 / 5,455 | 16,929 / 7,305 | 10,632 / 5,111 |
+| dash (13 nodes, three clipped tiles) | 3,487 / 2,087 | 3,708 / 2,048 | 3,898 / 1,876 | 5,544 / 2,381 | 3,479 / 1,693 |
+| mixer (8 nodes) | 985 / 661 | 1,122 / 718 | 1,476 / 831 | 3,214 / 1,198 | 1,123 / 542 |
 
-Rust and clang, which share Zig's LLVM back end, match it or run faster: the passes are
-compiled per UI with every row count known. GCC is fastest on the smallest UIs but 1.2 to 1.6
-times Zig's on the larger ones; prefer clang for static UIs. The same machine runs between 5
-and 25% apart from one run to the next (Zig's own mixer measured 137 to 216 ns), so
-differences under that are noise. `SeamUi` takes 1.1 to 1.6 times Zig's, since a prebuilt
-library reads the tables as data. For comparison, the runtime tree's push and layout alone,
-without paint, take 390, 570 and 1,460 ns for the mixer, dash and settings
-(`zig build ct-layout-bench`).
+Built by Zig, a C++ UI's frame runs within 2 to 14% of Zig's instructions, and at Zig's cycles
+but on the mixer, whose frame is short enough that the call and the draw list's hand-over show.
+Without Zig, clang comes within 7 to 50%, and GCC, which runs liblcgf's frame over the tables as
+data, takes 1.5 to 3.3 times. `<name>::SeamUi` in Rust is liblcgf's frame too, at GCC's figures.
+For comparison, the runtime tree's push and layout alone, without paint, take 390, 570 and 1,460
+ns for the mixer, dash and settings (`zig build ct-layout-bench`).
 
 ## The GPU
 
@@ -459,8 +464,9 @@ CMake and the Rust crates with cargo, against that prefix only. bindings/check/r
   equal word for word;
 - draws the comptime examples (mixer, card, settings, badge, dash, todo and feed with their
   regions, and sized controls) through Zig's comptime pipeline, and their `.zon`
-  (src/abi/testdata/static/) through `lcgf-gen --static` into C++ and Rust, both compiled
-  (`lcgf/ct.hpp`, `lcgf::ct`) and through liblcgf: 240 frames of changing viewports, label
+  (src/abi/testdata/static/) through `lcgf-gen --static` into C++ (each UI's frame by
+  `zig build-obj`, and from C by clang and by gcc) and Rust (compiled, `lcgf::ct`, and through
+  liblcgf): 240 frames of changing viewports, label
   text, list counts, conditions, choices and scroll offsets, with pointer and Tab input. The
   draw lists, events and focus must be byte-identical, at each lane width of `liblcgf_auto.a`
   too;

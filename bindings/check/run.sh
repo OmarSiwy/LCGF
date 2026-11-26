@@ -170,17 +170,24 @@ done
 # ct_events), and their `.zon` through lcgf-gen --static into C++ and Rust, over 240 frames of
 # changing viewports, label text, list counts, conditions, choices and scroll offsets, with
 # pointer and Tab input. The draw lists, events and focus must be byte-identical.
-# Each language twice: its own passes compiled against the tables (lcgf/ct.hpp, lcgf::ct), and
-# liblcgf's frame through the seam (`seam`).
+# C++ three ways: each UI's frame built by `zig build-obj` (lcgf-gen --lang zig, the fast path),
+# and without Zig from C (lcgf-gen --lang c): by clang, specialized, and by gcc, a call into
+# liblcgf. Rust twice: its own passes compiled against the tables (lcgf::ct), and liblcgf's frame
+# through the seam (`seam`).
+for cc in clang gcc; do
+    cmake -S "$root/bindings/cpp/check" -B "$work/cpp-$cc" -DCMAKE_PREFIX_PATH="$prefix" -DLCGF_ZIG=OFF \
+        -DCMAKE_C_COMPILER=$cc -DLCGF_SPECS="$root/src/abi/testdata" -DLCGF_SHADERS="$root/src/render/gpu" -DCMAKE_BUILD_TYPE=Release >/dev/null
+    cmake --build "$work/cpp-$cc" --target lcgf-cpp-ct-check >/dev/null
+done
 for ui in mixer card settings badge dash todo feed controls palette meter; do
     "$prefix/bin/lcgf-ct-dump" "$ui" 240 "$work/ct-$ui.zig.bin"
-    for how in "" seam; do
-        "$work/cpp/lcgf-cpp-ct-check" "$ui" 240 "$work/ct-$ui.cpp$how.bin" $how
-        cmp "$work/ct-$ui.zig.bin" "$work/ct-$ui.cpp$how.bin"
+    for how in cpp cpp-clang cpp-gcc; do
+        "$work/$how/lcgf-cpp-ct-check" "$ui" 240 "$work/ct-$ui.$how.bin"
+        cmp "$work/ct-$ui.zig.bin" "$work/ct-$ui.$how.bin"
+        # Events: pointer and Tab input through ct_events in each language.
+        cmp "$work/ct-$ui.zig.bin.events" "$work/ct-$ui.$how.bin.events"
     done
-    # The compiled UIs' events: pointer and Tab input through ct_events in each language.
-    cmp "$work/ct-$ui.zig.bin.events" "$work/ct-$ui.cpp.bin.events"
-    langs="C++ (compiled, seam)"
+    langs="C++ (zig, clang, gcc)"
     if [ $have_rust = yes ]; then
         for how in "" seam; do
             "$work/rust/release/lcgf-ct-check" "$ui" 240 "$work/ct-$ui.rust$how.bin" $how
@@ -254,7 +261,7 @@ if [ -f "$prefix/lib/liblcgf_auto.a" ]; then
             fi
         done
         for ui in mixer dash todo; do
-            "$work/cpp-auto/lcgf-cpp-ct-check" "$ui" 240 "$work/ct-$ui.auto.bin" seam
+            "$work/cpp-auto/lcgf-cpp-ct-check" "$ui" 240 "$work/ct-$ui.auto.bin"
             cmp "$work/ct-$ui.zig.bin" "$work/ct-$ui.auto.bin"
             if [ $have_rust = yes ]; then
                 "$work/rust-auto/release/lcgf-ct-check" "$ui" 240 "$work/ct-$ui.auto.bin" seam
@@ -274,8 +281,7 @@ for ui in toolbar mixer panel; do python3 "$root/bindings/check/events.py" "$wor
 # Frame time, each language over the same frames (not a gate: shown so a regression is seen).
 for ui in mixer settings dash todo; do
     "$prefix/bin/lcgf-ct-dump" "$ui" 240 --bench
-    "$work/cpp/lcgf-cpp-ct-check" "$ui" 240 --bench
-    "$work/cpp/lcgf-cpp-ct-check" "$ui" 240 --bench seam
+    for how in cpp cpp-clang cpp-gcc; do "$work/$how/lcgf-cpp-ct-check" "$ui" 240 --bench; done
     if [ $have_rust = yes ]; then
         "$work/rust/release/lcgf-ct-check" "$ui" 240 --bench
         "$work/rust/release/lcgf-ct-check" "$ui" 240 --bench seam

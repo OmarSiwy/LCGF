@@ -4,6 +4,7 @@
 // no allocation and no copies of rows: the caller owns the buffer, the tables are rodata, and
 // the state is a plain struct.
 #pragma once
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -154,35 +155,109 @@ private:
     Events<Widget> events_{};
 };
 
-/// A static UI (lcgf-gen --static): the comptime pipeline over its tables. The generated
-/// `<name>::Ui` derives from it and adds a setter per field. A frame reads only the labels'
-/// text from the state; it lays the UI out in the viewport and paints it.
-template <class State>
+/// An input event on one widget of a static UI: a click on a checkbox, or a slider's new value,
+/// 0 at its left edge to 1 at its right, while it is dragged.
+template <class Widget>
+struct Event {
+    Widget widget;
+    float value = 0;
+    bool slider = false;
+    /// The widget was clicked (a checkbox).
+    bool clicked(Widget w) const { return !slider && widget == w; }
+    /// A slider's new value, while it is dragged.
+    std::optional<float> slid(Widget w) const {
+        if (!slider || widget != w) return std::nullopt;
+        return value;
+    }
+};
+
+/// One keyboard shortcut: a scancode, the modifiers that must be held exactly (Input::shift,
+/// ctrl, alt, cmd) and the widget it activates. Laid out as lcgf_shortcut.
+template <class Widget>
+struct Shortcut {
+    std::uint8_t code;
+    std::uint8_t mods;
+    Widget widget;
+};
+
+/// A static UI (lcgf-gen --static): liblcgf's static-UI frame over the UI's tables, in memory of
+/// its own. The generated `<name>::Ui` derives from it, with `Frame` and `Words` the UI's own
+/// frame (specialized to its tables) and tables, and adds a setter per field. A frame reads the
+/// labels' text and the regions' selectors from the state, lays the UI out and paints it.
+template <class State, class Widget, class Field, std::size_t Bytes,
+          void (*Frame)(void*, std::size_t, const void*, float, float, lcgf_draw*),
+          const std::uint32_t* (*Words)(std::size_t*)>
 class StaticUi {
 public:
     State state;
 
-    StaticUi(std::span<const std::uint32_t> tables, std::span<std::byte> buffer, State s)
-        : state(s), buf_(buffer.data()) {
-        status_ = static_cast<Status>(lcgf_ct_init(tables.data(), tables.size(), buffer.data(), buffer.size()));
+    explicit StaticUi(State s) : state(s) {
+        std::size_t len = 0;
+        const std::uint32_t* words = Words(&len);
+        status_ = static_cast<Status>(lcgf_ct_init(words, len, buf_, Bytes));
     }
     StaticUi(const StaticUi&) = delete;
     StaticUi& operator=(const StaticUi&) = delete;
 
-    /// `Status::ok`, or why the tables or the buffer were refused (then `frame` must not run).
+    /// `Status::ok`, or why the tables were refused (then `frame` must not run).
     Status status() const { return status_; }
 
     /// One frame in a `width` x `height` viewport.
     const DrawList& frame(float width, float height) {
-        LCGF_CT_FRAME(buf_, &state, width, height, &last_);
+        Frame(buf_, Bytes, &state, width, height, &last_);
         draw_ = DrawList(last_);
         return draw_;
     }
     const DrawList& frame(const Input& in) { return frame(in.viewport[0], in.viewport[1]); }
     const DrawList& draw() const { return draw_; }
 
+    /// After a frame: lays out again only what field `F` moves, and paints again.
+    template <Field F>
+    const DrawList& relayout() {
+        lcgf_ct_relayout(buf_, &state, static_cast<std::uint32_t>(F), &last_);
+        draw_ = DrawList(last_);
+        return draw_;
+    }
+    /// The colour field `F` into the quads bound to it in the last draw list.
+    template <Field F>
+    void patch() { lcgf_ct_patch(buf_, &state, static_cast<std::uint32_t>(F)); }
+    /// The quads a patch changed since `clear_dirty`, one byte each; all of them after a frame.
+    std::span<const std::uint8_t> dirty() { return {lcgf_ct_dirty(buf_), draw_.raw().quad_len}; }
+    void clear_dirty() { lcgf_ct_clear_dirty(buf_); }
+
+    /// The topmost widget under (x, y) in the last frame's layout.
+    std::optional<Widget> at(float x, float y) { return widget(lcgf_ct_at(buf_, x, y)); }
+    /// This frame's pointer event: a press picks the widget under the pointer; a checkbox is
+    /// clicked when the release is over it too; a slider reports its value every frame it is held.
+    std::optional<Event<Widget>> pointer(const Input& in) {
+        std::uint32_t w = 0;
+        float v = 0;
+        const int kind = lcgf_ct_pointer(buf_, &in, &w, &v);
+        if (kind == 0) return std::nullopt;
+        return Event<Widget>{Widget(w), v, kind == 2};
+    }
+    /// Moves focus for every Tab press and repeat in this frame's keys; Shift goes back.
+    void focus_keys(const Input& in, std::uint8_t tab = Input::tab) { lcgf_ct_focus_keys(buf_, &in, tab); }
+    std::optional<Widget> focus() const { return widget(lcgf_ct_focus(buf_)); }
+    void set_focus(std::optional<Widget> w) { lcgf_ct_set_focus(buf_, w ? std::uint32_t(*w) : LCGF_NO_WIDGET); }
+    /// The widget Tab (`back` false) or Shift+Tab moves focus to from `from`, wrapping.
+    std::optional<Widget> next_focus(std::optional<Widget> from, bool back) const {
+        return widget(lcgf_ct_next_focus(buf_, from ? std::uint32_t(*from) : LCGF_NO_WIDGET, back));
+    }
+    /// The widget a shortcut of `list` activates for key `code` with exactly `mods` held.
+    template <std::size_t N>
+    static std::optional<Widget> shortcut(const std::array<Shortcut<Widget>, N>& list, std::uint8_t code, std::uint8_t mods) {
+        static_assert(sizeof(Shortcut<Widget>) == sizeof(lcgf_shortcut));
+        return widget(lcgf_ct_shortcut(reinterpret_cast<const lcgf_shortcut*>(list.data()), N, code, mods));
+    }
+
 private:
-    std::byte* buf_;
+    static std::optional<Widget> widget(std::uint32_t row) {
+        if (row == LCGF_NO_WIDGET) return std::nullopt;
+        return Widget(row);
+    }
+
+    alignas(column_align) mutable std::byte buf_[Bytes];
     Status status_;
     lcgf_draw last_{};
     DrawList draw_{last_};

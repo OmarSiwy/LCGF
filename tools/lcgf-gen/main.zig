@@ -14,7 +14,7 @@
 //! of rows, columns, labels, checkboxes and sliders whose structure never changes. The fold,
 //! the constant columns and the paint templates are made here, as Zig makes them at comptime.
 //!
-//!   lcgf-gen <spec.zon> --static --lang cpp|rust|c|words -o <out>
+//!   lcgf-gen <spec.zon> --static --lang cpp|rust|c|zig|words -o <out>
 //!
 //! A shader: its bind groups reflected from the WGSL by the same reader `lcgf_render.gpu` uses
 //! at comptime (src/render/gpu/reflect.zig, `parseInto`), with the code of each back end it is
@@ -41,7 +41,7 @@ const ct = lcgf.abi_ct;
 const naga = lcgf.gpu_naga;
 const markup = @import("markup/main.zig");
 
-const Lang = enum { cpp, rust, c, words, zon };
+const Lang = enum { cpp, rust, c, zig, words, zon };
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -180,6 +180,7 @@ pub fn main(init: std.process.Init) !void {
             .cpp => try g.cpp(),
             .rust => try g.rust(),
             .c => try g.cSource(),
+            .zig => try g.zigSource(),
             .words => try out.appendSlice(arena, std.mem.sliceAsBytes(words)),
             .zon => try out.appendSlice(arena, bytes),
         }
@@ -200,7 +201,7 @@ pub fn main(init: std.process.Init) !void {
         switch (lang) {
             .cpp => try g.cpp(),
             .rust => try g.rust(),
-            .c => return usage(),
+            .c, .zig => return usage(),
             .words => try out.appendSlice(arena, std.mem.sliceAsBytes(words)),
             .zon => try out.appendSlice(arena, bytes),
         }
@@ -561,73 +562,6 @@ const StaticGen = struct {
         return out.items;
     }
 
-    fn blockCpp(g: *const StaticGen, name: []const u8, b: *const NativeBlock) !void {
-        try g.print("    struct {s} {{\n        static constexpr std::uint32_t n = {d};\n", .{ name, b.n });
-        for (NativeBlock.names, NativeBlock.axes, 0..) |col, per_axis, k| {
-            if (per_axis) {
-                try g.print("        static constexpr std::uint32_t {s}[2][{d}] = {{", .{ col, b.n });
-                try g.list(b.u32s[k][0], false);
-                try g.print(", ", .{});
-                try g.list(b.u32s[k][1], false);
-                try g.print("}};\n", .{});
-            } else {
-                try g.print("        static constexpr std::uint32_t {s}[{d}] = ", .{ col, b.n });
-                try g.list(b.u32s[k][0], false);
-                try g.print(";\n", .{});
-            }
-        }
-        try g.print("        static constexpr std::uint8_t clips[{d}] = {{", .{b.n});
-        for (b.clips, 0..) |c, i| try g.print("{s}{d}", .{ if (i == 0) "" else ", ", c });
-        try g.print("}};\n        static constexpr std::uint32_t border[{d}] = ", .{b.n});
-        try g.list(b.border, false);
-        try g.print(";\n        static constexpr std::uint32_t label_rows[{d}] = ", .{@max(b.label_rows.len, 1)});
-        try g.list(b.label_rows, false);
-        try g.print(";\n        static constexpr lcgf::ct::Region regions[{d}] = {{", .{@max(b.regions.len, 1)});
-        for (b.regions, 0..) |r, i| {
-            try g.print("{s}", .{if (i == 0) "" else ", "});
-            try g.list(&r, false);
-        }
-        if (b.regions.len == 0) try g.print("{{}}", .{});
-        try g.print("}};\n        static constexpr std::array<std::uint32_t, 2> alts[{d}] = {{", .{b.alts.len});
-        for (b.alts, 0..) |w, i| try g.print("{s}{{{{{d}, {d}}}}}", .{ if (i == 0) "" else ", ", w[0], w[1] });
-        try g.print("}};\n    }};\n", .{});
-    }
-
-    /// `T::<name>[count]` from header word offset `off` (`per` words each, as std::array when > 1).
-    fn arrayCpp(g: *const StaticGen, name: []const u8, off: u32, count: u32, per: u32) !void {
-        const ws = g.words[off..][0 .. count * per];
-        if (per == 1) {
-            try g.print("    static constexpr std::uint32_t {s}[{d}] = ", .{ name, @max(count, 1) });
-            try g.list(ws, false);
-            try g.print(";\n", .{});
-            return;
-        }
-        try g.print("    static constexpr std::array<std::uint32_t, {d}> {s}[{d}] = {{", .{ per, name, @max(count, 1) });
-        for (0..count) |k| {
-            try g.print("{s}{{", .{if (k == 0) "" else ", "});
-            try g.list(ws[k * per ..][0..per], false);
-            try g.print("}}", .{});
-        }
-        if (count == 0) try g.print("{{}}", .{});
-        try g.print("}};\n", .{});
-    }
-
-    /// The widget tables of ct_events: rows, which are sliders, and the focus order (every
-    /// checkbox and slider, in row order).
-    fn widgetsCpp(g: *const StaticGen) !void {
-        const ws = g.x.widgets;
-        try g.print("    static constexpr std::uint32_t widgets = {d}, focusables = {d};\n    static constexpr std::uint32_t widget_rows[{d}] = {{", .{ ws.len, ws.len, @max(ws.len, 1) });
-        for (ws, 0..) |w, k| try g.print("{s}{d}", .{ if (k == 0) "" else ", ", w.row });
-        if (ws.len == 0) try g.print("0", .{});
-        try g.print("}};\n    static constexpr bool widget_slider[{d}] = {{", .{@max(ws.len, 1)});
-        for (ws, 0..) |w, k| try g.print("{s}{}", .{ if (k == 0) "" else ", ", w.slider });
-        if (ws.len == 0) try g.print("false", .{});
-        try g.print("}};\n    static constexpr std::uint32_t focus_order[{d}] = {{", .{@max(ws.len, 1)});
-        for (ws, 0..) |_, k| try g.print("{s}{d}", .{ if (k == 0) "" else ", ", k });
-        if (ws.len == 0) try g.print("0", .{});
-        try g.print("}};\n", .{});
-    }
-
     fn widgetsRust(g: *const StaticGen) !void {
         const ws = g.x.widgets;
         try g.print("/// The widgets, valued by their rows: what `at`, `pointer` and `focus` report.\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n", .{});
@@ -654,9 +588,11 @@ const StaticGen = struct {
         try g.print("        }}\n    }}\n}}\n\n", .{});
     }
 
-    /// The C type a constant column's rows are written as: its own for numbers, so a compiler
-    /// sees a column of one value as a splat; whole words otherwise.
-    fn cColumnType(comptime field: []const u8) []const u8 {
+    /// How a constant column's rows are written: as its own number type, so a compiler sees a
+    /// column of one value as a splat, or as whole words for anything else.
+    const ColumnType = struct { c: []const u8, zig: []const u8, elem: usize };
+
+    fn columnType(comptime field: []const u8) ColumnType {
         const FT = @FieldType(lcgf.tree.Tree.Columns, field);
         const T = switch (@typeInfo(FT)) {
             .pointer => |p| p.child,
@@ -664,13 +600,88 @@ const StaticGen = struct {
             else => unreachable,
         };
         return switch (T) {
-            f32 => "float",
-            u32 => "uint32_t",
-            u16 => "uint16_t",
-            u8 => "uint8_t",
-            i16 => "int16_t",
-            else => "uint32_t",
+            f32 => .{ .c = "float", .zig = "f32", .elem = 4 },
+            u32 => .{ .c = "uint32_t", .zig = "u32", .elem = 4 },
+            u16 => .{ .c = "uint16_t", .zig = "u16", .elem = 2 },
+            u8 => .{ .c = "uint8_t", .zig = "u8", .elem = 1 },
+            i16 => .{ .c = "int16_t", .zig = "i16", .elem = 2 },
+            else => .{ .c = "uint32_t", .zig = "u32", .elem = 4 },
         };
+    }
+
+    /// Each constant column of each tree as its own array named `col<tree>_<k>`, in C or Zig;
+    /// returns, per `frameWith` column, the array's name or null for a written column.
+    fn columnArrays(g: *const StaticGen, comptime zig: bool) ![ct.cols_len]?[]const u8 {
+        const h = g.header();
+        var refs: [ct.cols_len]?[]const u8 = @splat(null);
+        for ([_]*const ct.Block{ &h.full, &h.skel }, 0..) |b, bi| {
+            if (bi == 1 and h.folded == 0) continue;
+            const offs = g.words[b.cols..][0..ct.column_arrays.len];
+            inline for (ct.column_arrays, 0..) |col, k| if (offs[k] != ct.none) {
+                const ty = comptime columnType(col.field);
+                const bytes = std.mem.sliceAsBytes(g.words[offs[k]..])[0 .. ct.rowsMax(b.n) * col.size];
+                const id = try std.fmt.allocPrint(g.arena, "col{d}_{d}", .{ bi, k });
+                const count = bytes.len / ty.elem;
+                if (zig)
+                    try g.print("const {s}: [{d}]{s} align(64) = .{{", .{ id, count, ty.zig })
+                else
+                    try g.print("static const {s} {s}[{d}] __attribute__((aligned(64))) = {{", .{ ty.c, id, count });
+                for (0..count) |i| {
+                    if (i % 16 == 0) try g.print("\n   ", .{});
+                    const v: u32 = switch (ty.elem) {
+                        1 => bytes[i],
+                        2 => std.mem.readInt(u16, bytes[i * 2 ..][0..2], .little),
+                        else => std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little),
+                    };
+                    if (comptime std.mem.eql(u8, ty.zig, "f32")) {
+                        if (zig) try g.print(" @bitCast(@as(u32, 0x{x})),", .{v}) else try g.print(" {s},", .{try cFloat(g.arena, @bitCast(v))});
+                    } else if (comptime std.mem.eql(u8, ty.zig, "i16"))
+                        try g.print(" {d},", .{@as(i16, @bitCast(@as(u16, @intCast(v))))})
+                    else
+                        try g.print(" 0x{x},", .{v});
+                }
+                try g.print("\n}};\n", .{});
+                refs[bi * ct.column_arrays.len + k] = id;
+            };
+        }
+        return refs;
+    }
+
+    /// The UI's frame as a Zig root (`--lang zig`), for `zig build-obj` against the lcgf sources
+    /// `zig build abi` installs (share/lcgf/zig): liblcgf's static-UI frame (`ct.Ui.frameWith`)
+    /// with this UI's words and each constant column as constants, so Zig specializes it as it
+    /// does a comptime UI. Exports `lcgf_ui_<name>_frame` and `lcgf_ui_<name>_words`.
+    fn zigSource(g: *const StaticGen) !void {
+        const name = g.x.spec.name;
+        try g.print(
+            \\//! Generated by lcgf-gen --static --lang zig from {s}. Do not edit: change the spec and
+            \\//! run lcgf-gen again. The frame of the static UI `{s}`, specialized to its tables.
+            \\const ct = @import("lcgf").abi_ct;
+            \\
+            \\const words: [{d}]u32 align(64) = .{{
+        , .{ g.source, name, g.words.len });
+        try g.words_();
+        try g.print("\n}};\n", .{});
+        const refs = try g.columnArrays(true);
+        try g.print("const written: [1]u8 align(64) = .{{0}};\nconst cols: [{d}][*]const u8 = .{{", .{ct.cols_len});
+        for (refs, 0..) |r, i| {
+            if (i % 4 == 0) try g.print("\n   ", .{});
+            if (r) |id| try g.print(" @ptrCast(&{s}),", .{id}) else try g.print(" &written,", .{});
+        }
+        try g.print(
+            \\
+            \\}};
+            \\
+            \\export fn lcgf_ui_{0s}_frame(buf: [*]align(64) u8, bytes: usize, state: [*]const u8, width: f32, height: f32, out: *anyopaque) callconv(.c) void {{
+            \\    ct.frameInto(&words, &cols, buf[0..bytes], state, .{{ width, height }}, out);
+            \\}}
+            \\
+            \\export fn lcgf_ui_{0s}_words(len: *usize) callconv(.c) [*]const u32 {{
+            \\    len.* = words.len;
+            \\    return &words;
+            \\}}
+            \\
+        , .{name});
     }
 
     /// The UI's frame as C (`--lang c`): liblcgf's static-UI engine (share/lcgf/lcgf_ct_l*.c,
@@ -679,7 +690,6 @@ const StaticGen = struct {
     /// compilers call liblcgf's frame over the same words.
     fn cSource(g: *const StaticGen) !void {
         const name = g.x.spec.name;
-        const h = g.header();
         try g.print(
             \\// Generated by lcgf-gen --static --lang c from {s}. Do not edit: change the spec and run
             \\// lcgf-gen again. The frame of the static UI `{s}`: with clang, liblcgf's static-UI engine
@@ -694,37 +704,12 @@ const StaticGen = struct {
         try g.print("static const uint32_t words[{d}] __attribute__((aligned(64))) = {{", .{g.words.len});
         try g.words_();
         try g.print("\n}};\n\n", .{});
-        // Each constant column of each tree, as its own array.
-        var refs: [ct.cols_len][]const u8 = @splat("0");
-        for ([_]*const ct.Block{ &h.full, &h.skel }, 0..) |b, bi| {
-            if (bi == 1 and h.folded == 0) continue;
-            const offs = g.words[b.cols..][0..ct.column_arrays.len];
-            inline for (ct.column_arrays, 0..) |col, k| if (offs[k] != ct.none) {
-                const ty = comptime cColumnType(col.field);
-                const elem: usize = if (comptime std.mem.eql(u8, ty, "uint8_t")) 1 else if (comptime std.mem.eql(u8, ty, "uint16_t") or std.mem.eql(u8, ty, "int16_t")) 2 else 4;
-                const bytes = std.mem.sliceAsBytes(g.words[offs[k]..])[0 .. ct.rowsMax(b.n) * col.size];
-                const id = try std.fmt.allocPrint(g.arena, "col{d}_{d}", .{ bi, k });
-                try g.print("static const {s} {s}[{d}] __attribute__((aligned(64))) = {{", .{ ty, id, bytes.len / elem });
-                for (0..bytes.len / elem) |i| {
-                    if (i % 16 == 0) try g.print("\n   ", .{});
-                    const v: u32 = switch (elem) {
-                        1 => bytes[i],
-                        2 => std.mem.readInt(u16, bytes[i * 2 ..][0..2], .little),
-                        else => std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little),
-                    };
-                    if (comptime std.mem.eql(u8, ty, "float"))
-                        try g.print(" {s},", .{try cFloat(g.arena, @bitCast(v))})
-                    else if (comptime std.mem.eql(u8, ty, "int16_t"))
-                        try g.print(" {d},", .{@as(i16, @bitCast(@as(u16, @intCast(v))))})
-                    else
-                        try g.print(" 0x{x},", .{v});
-                }
-                try g.print("\n}};\n", .{});
-                refs[bi * ct.column_arrays.len + k] = try std.fmt.allocPrint(g.arena, "(const uint8_t *){s}", .{id});
-            };
-        }
+        const refs = try g.columnArrays(false);
         try g.print("static const uint8_t *const cols[{d}] = {{", .{ct.cols_len});
-        for (refs, 0..) |r, i| try g.print("{s}{s},", .{ if (i % 4 == 0) "\n    " else " ", r });
+        for (refs, 0..) |r, i| {
+            try g.print("{s}", .{if (i % 4 == 0) "\n    " else " "});
+            if (r) |id| try g.print("(const uint8_t *){s},", .{id}) else try g.print("0,", .{});
+        }
         try g.print(
             \\
             \\}};
@@ -776,122 +761,44 @@ const StaticGen = struct {
 
     fn cpp(g: *const StaticGen) !void {
         const name = g.x.spec.name;
-        const h = g.header();
-        const full = try NativeBlock.decode(g.arena, g.words, h, &h.full);
         try g.print(
             \\// Generated by lcgf-gen --static from {s}. Do not edit: change the spec and run lcgf-gen again.
-            \\// A static UI: the comptime pipeline's tables (src/abi/ct.zig: the fold, the constant columns
-            \\// and the paint templates), the values Zig makes at compile time, as constants the passes of
-            \\// lcgf/ct.hpp are compiled against. `SeamUi` runs the same UI through liblcgf instead.
+            \\// A static UI: liblcgf's static-UI frame (src/abi/ct.zig, the comptime pipeline's frame over the
+            \\// tables lcgf-gen made of the spec), specialized to this UI by its own frame, which lcgf_add_ui
+            \\// builds from lcgf-gen --static --lang zig (or --lang c without Zig).
             \\#pragma once
-            \\#include <array>
             \\#include <cstddef>
             \\#include <cstdint>
-            \\#include <lcgf/ct.hpp>
             \\#include <lcgf/lcgf.hpp>
+            \\
+            \\extern "C" void lcgf_ui_{s}_frame(void *buf, std::size_t bytes, const void *state, float width, float height, lcgf_draw *out);
+            \\extern "C" const std::uint32_t *lcgf_ui_{s}_words(std::size_t *len);
             \\
             \\namespace {s} {{
             \\
             \\
-        , .{ g.source, name });
+        , .{ g.source, name, name, name });
         try stateCpp(g.arena, g.out, g.x.spec.state, g.x.fields, g.x.state_size, g.x.state_align);
-        const n = h.full.n;
         try g.print("\n/// The widgets, valued by their rows: what `at`, `pointer` and `focus` report.\nenum class Widget : std::uint32_t {{", .{});
         for (g.x.widgets, 0..) |w, k| try g.print("{s} {s} = {d}", .{ if (k == 0) "" else ",", w.name, w.row });
         try g.print(" }};\n/// The state's fields, for `relayout` and `patch`.\nenum class Field : std::uint32_t {{", .{});
         for (g.x.fields, 0..) |f, k| try g.print("{s} {s} = {d}", .{ if (k == 0) "" else ",", f.name, k });
-        try g.print(" }};\n", .{});
         try g.print(
+            \\ }};
+            \\/// Bytes the UI keeps, for any lane count.
+            \\inline constexpr std::size_t bytes = {d};
             \\
-            \\/// The tables, as compile-time constants (floats as their bits).
-            \\struct Tables {{
-            \\    using Widget = {s}::Widget;
-            \\    static constexpr std::uint32_t n = {d}, labels = {d}, quads = {d}, batches = {d}, regions = {d};
-            \\    static constexpr std::uint32_t slot_count = {d}, coord = {d}, string_cap = {d};
-            \\    static constexpr bool folded = {}, live = {}, windows = {}, has_child_clip = {}, root_when = {}, slots_shared = {};
-            \\    static constexpr std::uint32_t text_px = 0x{x}, text_font = {d}, advance = 0x{x}, line = 0x{x};
+            \\/// The UI: its state and its frame's memory, a value of its own.
+            \\class Ui : public lcgf::StaticUi<State, Widget, Field, bytes, lcgf_ui_{s}_frame, lcgf_ui_{s}_words> {{
+            \\public:
+            \\    explicit Ui(State s = {{}}) : StaticUi(s) {{}}
             \\
-        , .{
-            name,
-            n,
-            h.labels,
-            h.quads,
-            h.batches,
-            h.regions,
-            h.slot_count,
-            h.coord,
-            h.string_cap,
-            h.folded > 0,
-            h.regions > 0,
-            h.has_windows != 0,
-            h.has_child_clip != 0,
-            h.root_when != 0,
-            h.slot_count != n,
-            @as(u32, @bitCast((lcgf.types.TextStyle{}).px)),
-            @backingInt((lcgf.types.TextStyle{}).font),
-            @as(u32, @bitCast((lcgf.protocol.Mono{}).advance)),
-            @as(u32, @bitCast((lcgf.protocol.Mono{}).line)),
-        });
-        try g.blockCpp("full", &full);
-        if (h.folded > 0) {
-            const skel = try NativeBlock.decode(g.arena, g.words, h, &h.skel);
-            try g.blockCpp("skel", &skel);
-            try g.arrayCpp("expand_base", h.expand[0], n, 1);
-            try g.print("    static constexpr std::uint32_t expand_rel[2][{d}] = {{", .{n});
-            try g.list(g.words[h.expand[1]..][0..n], false);
-            try g.print(", ", .{});
-            try g.list(g.words[h.expand[2]..][0..n], false);
-            try g.print("}};\n    static constexpr std::uint32_t expand_size[2][{d}] = {{", .{n});
-            try g.list(g.words[h.expand[3]..][0..n], false);
-            try g.print(", ", .{});
-            try g.list(g.words[h.expand[4]..][0..n], false);
-            try g.print("}};\n", .{});
-            try g.arrayCpp("expand_keep", h.expand[5], n, 1);
-        } else try g.print("    using skel = full;\n", .{});
-        try g.arrayCpp("paint_node", h.paint_node, h.quads, 1);
-        try g.arrayCpp("clip_node", h.clip_node, h.quads, 1);
-        try g.arrayCpp("keys", h.keys, h.quads, 1);
-        try g.arrayCpp("templates", h.templates, h.quads, @sizeOf(lcgf.draw_list.Quad) / 4);
-        try g.arrayCpp("batch_first", h.batch_first, h.batches, 1);
-        try g.arrayCpp("batch_count", h.batch_count, h.batches, 1);
-        try g.arrayCpp("batch_key", h.batch_key, h.batches, 1);
-        try g.arrayCpp("label_plans", h.label_plans, h.labels, @sizeOf(lcgf.ct_tables.Label) / 4);
-        try g.widgetsCpp();
-        try g.print("    using Field = {s}::Field;\n    static constexpr std::uint32_t fields = {d}, patch_count = {d};\n", .{ name, h.fields, h.patch_count });
-        try g.arrayCpp("spans", h.spans, h.fields, 2);
-        try g.arrayCpp("patches", h.patches, h.patch_count, 4);
-        try g.print("    static std::uint32_t color([[maybe_unused]] const State& s, std::uint32_t field) {{\n        switch (field) {{\n", .{});
-        for (g.x.fields, 0..) |f, k| if (f.type == .color) try g.print("        case {d}: return s.{s};\n", .{ k, f.name });
-        try g.print("        default: return 0;\n        }}\n    }}\n", .{});
-        try g.arrayCpp("slot_of", h.slots, n, 1);
-        try g.arrayCpp("slot_defaults", h.slot_defaults, h.slot_count, 1);
-        try g.print("    static void texts([[maybe_unused]] const State& s, [[maybe_unused]] lcgf::ct::Sink& o, [[maybe_unused]] std::uint32_t* end) {{", .{});
-        try g.texts(false);
-        try g.print(" }}\n    static void select([[maybe_unused]] const State& s, [[maybe_unused]] std::uint32_t* n, [[maybe_unused]] float* scroll) {{", .{});
-        for (g.selectors(), 0..) |sl, k| {
-            try g.print(" n[{d}] = std::uint32_t(s.{s});", .{ k, sl.field.name });
-            if (sl.scroll) |sc| try g.print(" scroll[{d}] = s.{s};", .{ k, sc }) else try g.print(" scroll[{d}] = 0;", .{k});
-        }
-        try g.print(" }}\n}};\n\n/// The UI: a value holding its state and its frame's columns, compiled against `Tables`.\nclass Ui : public lcgf::ct::Ui<Tables, State> {{\npublic:\n    explicit Ui(State s = {{}}) : lcgf::ct::Ui<Tables, State>(s) {{}}\n", .{});
+        , .{ g.bytes, name, name });
         for (g.x.fields) |f| {
             const ty = fieldType(f.type);
             try g.print("    void set_{s}({s} v) {{ state.{s} = v; }}\n    {s} {s}() const {{ return state.{s}; }}\n", .{ f.name, ty, f.name, ty, f.name, f.name });
         }
-        try g.print("}};\n\n/// The same UI through liblcgf's frame (lcgf.h), over these words.\nalignas(64) inline constexpr std::uint32_t words[{d}] = {{", .{g.words.len});
-        try g.words_();
-        try g.print(
-            \\
-            \\}};
-            \\/// Bytes `SeamUi` needs in your buffer, aligned to lcgf::column_align, for any lane count.
-            \\inline constexpr std::size_t bytes = {d};
-            \\class SeamUi : public lcgf::StaticUi<State> {{
-            \\public:
-            \\    explicit SeamUi(std::span<std::byte> buffer, State s = {{}}) : lcgf::StaticUi<State>(words, buffer, s) {{}}
-            \\}};
-            \\
-            \\}} // namespace {s}
-            \\
-        , .{ g.bytes, name });
+        try g.print("}};\n\n}} // namespace {s}\n", .{name});
     }
 
     fn rust(g: *const StaticGen) !void {

@@ -1,12 +1,10 @@
 #include <cstdlib>
 // The C++ side of the static UIs' gate (bindings/check/run.sh): the comptime examples' `.zon`
-// (src/abi/testdata/static/) through lcgf-gen --static and lcgf::StaticUi, over the frames of
-// bindings/check/ct_dump.zig, dumped in its format. The dump must equal Zig's comptime pipeline's.
+// (src/abi/testdata/static/) through lcgf-gen --static and lcgf::StaticUi (liblcgf's static-UI
+// frame, specialized per UI by lcgf_add_ui), over the frames of bindings/check/ct_dump.zig,
+// dumped in its format. The dump must equal Zig's comptime pipeline's.
 //
-//   lcgf-cpp-ct-check <mixer|card|settings|badge|dash|todo|feed|controls> <frames> <out.bin|--bench> [seam]
-//
-// `seam` runs the UI through liblcgf (`SeamUi`); without it, through the passes compiled here
-// (lcgf/ct.hpp, `Ui`).
+//   lcgf-cpp-ct-check <mixer|card|settings|badge|dash|todo|feed|controls|palette|meter> <frames> <out.bin|--bench> [partial]
 //
 // Field k of frame f's state is what src/abi/ct.zig's `stateFor` makes: a string
 // `texts[(f + 3k) mod 7]`, a bool `(f + k) mod 3 != 0`, a count small or large on alternate
@@ -72,8 +70,6 @@ void dump(std::vector<char>& o, const lcgf::DrawList& list) {
     bytes(o, d.cmd_key, d.cmd_len);
 }
 
-// One UI's frames: `texts_of` sets the state's fields for frame f. `U` is the generated `Ui`
-// (compiled against the tables) or `SeamUi` (liblcgf's frame).
 // Frame f's input, as bindings/check/ct_dump.zig makes it.
 lcgf::Input input_of(std::uint32_t f, lcgf_key_event* tab) {
     lcgf::Input in;
@@ -84,9 +80,6 @@ lcgf::Input input_of(std::uint32_t f, lcgf_key_event* tab) {
     if (f % 5 == 0) in.keys({tab, 1});
     return in;
 }
-
-template <class U>
-concept HasEvents = requires(U& u, const lcgf::Input& in) { u.pointer(in); };
 
 template <class U, class Set>
 int run(const char* name, const char* how, U& ui, std::uint32_t frames, const char* out_path, Set texts_of) {
@@ -100,22 +93,20 @@ int run(const char* name, const char* how, U& ui, std::uint32_t frames, const ch
             texts_of(ui.state, f);
             const auto vp = viewport(f);
             const lcgf::DrawList& d = ui.frame(vp[0], vp[1]);
-            if (!bench) dump(o, d);
-            if constexpr (HasEvents<U>) {
-                if (!bench) {
-                    lcgf_key_event tab;
-                    const lcgf::Input in = input_of(f, &tab);
-                    std::uint32_t row = 0xffffffffu, value = 0, focus = 0xffffffffu;
-                    if (const auto e = ui.pointer(in)) {
-                        row = std::uint32_t(e->widget);
-                        value = std::bit_cast<std::uint32_t>(e->value);
-                    }
-                    ui.focus_keys(in);
-                    if (const auto w = ui.focus()) focus = std::uint32_t(*w);
-                    put(ev, row);
-                    put(ev, value);
-                    put(ev, focus);
+            if (!bench) {
+                dump(o, d);
+                lcgf_key_event tab;
+                const lcgf::Input in = input_of(f, &tab);
+                std::uint32_t row = 0xffffffffu, value = 0, focus = 0xffffffffu;
+                if (const auto e = ui.pointer(in)) {
+                    row = std::uint32_t(e->widget);
+                    value = std::bit_cast<std::uint32_t>(e->value);
                 }
+                ui.focus_keys(in);
+                if (const auto w = ui.focus()) focus = std::uint32_t(*w);
+                put(ev, row);
+                put(ev, value);
+                put(ev, focus);
             }
         }
         const long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
@@ -126,43 +117,19 @@ int run(const char* name, const char* how, U& ui, std::uint32_t frames, const ch
         return 0;
     }
     std::ofstream(out_path, std::ios::binary).write(o.data(), std::streamsize(o.size()));
-    if constexpr (HasEvents<U>)
-        std::ofstream(std::string(out_path) + ".events", std::ios::binary).write(ev.data(), std::streamsize(ev.size()));
+    std::ofstream(std::string(out_path) + ".events", std::ios::binary).write(ev.data(), std::streamsize(ev.size()));
     return 0;
 }
 
-template <class Ns, class Set>
-int run_ui(const char* name, bool seam, std::uint32_t frames, const char* out, Set set) {
-    if (seam) {
-        static lcgf::Buffer<Ns::bytes> buffer;
-        static typename Ns::SeamUi ui(buffer.span());
-        if (ui.status() != lcgf::Status::ok) {
-            std::fprintf(stderr, "%s: refused (%d)\n", name, int(ui.status()));
-            return 1;
-        }
-        return run(name, "c++/sm", ui, frames, out, set);
+template <class U, class Set>
+int run_ui(const char* name, std::uint32_t frames, const char* out, Set set) {
+    static U ui;
+    if (ui.status() != lcgf::Status::ok) {
+        std::fprintf(stderr, "%s: refused (%d)\n", name, int(ui.status()));
+        return 1;
     }
-    static typename Ns::Ui ui;
     return run(name, "c++", ui, frames, out, set);
 }
-
-// The generated namespaces, as types for run_ui.
-#define LCGF_NS(n) \
-    struct n##_ns { \
-        using Ui = n::Ui; \
-        using SeamUi = n::SeamUi; \
-        static constexpr std::size_t bytes = n::bytes; \
-    };
-LCGF_NS(mixer)
-LCGF_NS(card)
-LCGF_NS(settings)
-LCGF_NS(badge)
-LCGF_NS(dash)
-LCGF_NS(todo)
-LCGF_NS(feed)
-LCGF_NS(controls)
-LCGF_NS(palette)
-LCGF_NS(meter)
 
 // `partial`: bindings/check/ct_dump.zig's relayout and patch replay. `full` sets frame f's
 // state, `text` changes one label's field and lays it out again, `colors` changes and patches
@@ -247,28 +214,27 @@ int partial(std::string_view ui, std::uint32_t frames, const char* out) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        std::fprintf(stderr, "usage: lcgf-cpp-ct-check <ui> <frames> <out.bin|--bench> [seam]\n");
+        std::fprintf(stderr, "usage: lcgf-cpp-ct-check <ui> <frames> <out.bin|--bench> [partial]\n");
         return 2;
     }
     const std::string_view ui = argv[1];
     const auto frames = std::uint32_t(std::strtoul(argv[2], nullptr, 10));
     const char* out = argv[3];
-    const bool seam = argc > 4 && std::strcmp(argv[4], "seam") == 0;
     if (argc > 4 && std::strcmp(argv[4], "partial") == 0) return partial(ui, frames, out);
     if (ui == "mixer")
-        return run_ui<mixer_ns>("mixer", seam, frames, out, [](mixer::State& s, std::uint32_t f) {
+        return run_ui<mixer::Ui>("mixer", frames, out, [](mixer::State& s, std::uint32_t f) {
             s.title = text(f, 0);
             s.volume = value(f, 1);
             s.muted = flag(f, 2);
             s.pan = value(f, 3);
         });
     if (ui == "card")
-        return run_ui<card_ns>("card", seam, frames, out, [](card::State& s, std::uint32_t f) {
+        return run_ui<card::Ui>("card", frames, out, [](card::State& s, std::uint32_t f) {
             s.heading = text(f, 0);
             s.body = text(f, 1);
         });
     if (ui == "settings")
-        return run_ui<settings_ns>("settings", seam, frames, out, [](settings::State& s, std::uint32_t f) {
+        return run_ui<settings::Ui>("settings", frames, out, [](settings::State& s, std::uint32_t f) {
             s.title = text(f, 0);
             s.wifi = flag(f, 1);
             s.bluetooth = flag(f, 2);
@@ -282,12 +248,12 @@ int main(int argc, char** argv) {
             s.location = flag(f, 10);
         });
     if (ui == "badge")
-        return run_ui<badge_ns>("badge", seam, frames, out, [](badge::State& s, std::uint32_t f) {
+        return run_ui<badge::Ui>("badge", frames, out, [](badge::State& s, std::uint32_t f) {
             s.name = text(f, 0);
             s.level = value(f, 1);
         });
     if (ui == "dash")
-        return run_ui<dash_ns>("dash", seam, frames, out, [](dash::State& s, std::uint32_t f) {
+        return run_ui<dash::Ui>("dash", frames, out, [](dash::State& s, std::uint32_t f) {
             s.title = text(f, 0);
             s.a = text(f, 1);
             s.b = text(f, 2);
@@ -295,27 +261,27 @@ int main(int argc, char** argv) {
             s.level = value(f, 4);
         });
     if (ui == "todo")
-        return run_ui<todo_ns>("todo", seam, frames, out, [](todo::State& s, std::uint32_t f) {
+        return run_ui<todo::Ui>("todo", frames, out, [](todo::State& s, std::uint32_t f) {
             s.title = text(f, 0);
             s.len = count(f, 1);
             s.footer = flag(f, 2);
             s.mode = pick(f, 3);
         });
     if (ui == "controls")
-        return run_ui<controls_ns>("controls", seam, frames, out, [](controls::State& s, std::uint32_t f) {
+        return run_ui<controls::Ui>("controls", frames, out, [](controls::State& s, std::uint32_t f) {
             s.title = text(f, 0);
             s.muted = flag(f, 1);
             s.volume = value(f, 2);
             s.pan = value(f, 3);
         });
     if (ui == "palette")
-        return run_ui<palette_ns>("palette", seam, frames, out, [](palette::State& s, std::uint32_t f) {
+        return run_ui<palette::Ui>("palette", frames, out, [](palette::State& s, std::uint32_t f) {
             s.title = text(f, 0);
             s.accent = color(f, 1);
             s.edge = color(f, 2);
         });
     if (ui == "meter")
-        return run_ui<meter_ns>("meter", seam, frames, out, [](meter::State& s, std::uint32_t f) {
+        return run_ui<meter::Ui>("meter", frames, out, [](meter::State& s, std::uint32_t f) {
             s.name = text(f, 0);
             s.level = value(f, 1);
             s.count = count(f, 2);
@@ -323,7 +289,7 @@ int main(int argc, char** argv) {
             s.peak = value(f, 4);
         });
     if (ui == "feed")
-        return run_ui<feed_ns>("feed", seam, frames, out, [](feed::State& s, std::uint32_t f) {
+        return run_ui<feed::Ui>("feed", frames, out, [](feed::State& s, std::uint32_t f) {
             s.count = count(f, 0);
             s.scroll = value(f, 1);
         });
