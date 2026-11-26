@@ -269,7 +269,7 @@ pub fn plan(nodes: []const Node, fields: []Field, springs: []const Spring, th: *
         var widget: u32 = none;
         if (n.id != null and (op == .button or op == .checkbox or op == .slider or op == .custom)) {
             widget = @intCast(nw);
-            widgets[nw] = .{ .row = @intCast(i), .kind = n.kind, .focusable = op == .checkbox or op == .slider };
+            widgets[nw] = .{ .row = @intCast(i), .kind = n.kind, .focusable = op == .checkbox or op == .slider or (op == .button and n.style.role == .button) };
             nw += 1;
         } else if ((n.id != null and op != .widget) or op == .custom) {
             if (!n.lenient) return error.BadKind;

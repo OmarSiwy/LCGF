@@ -777,14 +777,14 @@ test "ct.dialog, begin: any content, opened by a bool, closed by Escape, Tab kep
     try testing.expectEqual(rows_closed + 2 + 1 + 3 + 2, t.len);
     try testing.expectEqual(@backingInt(a11y.Role.dialog), t.c.role[t.find(.from("prefs_panel"))]);
     // Focus moves into the dialog the frame after it is first built (a step reads last
-    // frame's tree); Tab and Shift+Tab stay on its one focus stop, the checkbox. (At run time
-    // the button is a focus stop too; there Tab stays inside the panel's rows.)
+    // frame's tree); Tab and Shift+Tab move between its two focus stops, the checkbox and the
+    // button, as at run time, and stay inside the panel's rows.
     t = (try h.frame(&in)).runtime.tree;
     const W = AnyPage.Ui.Events.Widget;
     try testing.expectEqual(@as(?W, .snap), h.ui.focus);
-    for ([_]bool{ false, true, false }) |shift| {
+    for ([_]bool{ false, true, false }, [_]W{ .done, .snap, .done }) |shift, want| {
         _ = try S.key(h, &in, &ev, popover.keys.tab, shift);
-        try testing.expectEqual(@as(?W, .snap), h.ui.focus);
+        try testing.expectEqual(@as(?W, want), h.ui.focus);
         const rt = &h.ctx.trees[h.ctx.cur];
         const panel = rt.find(.from("prefs_panel"));
         const at = rt.find(@fromBackingInt(h.ctx.inter.focus));

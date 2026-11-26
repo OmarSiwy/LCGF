@@ -52,7 +52,7 @@ pub fn Events(comptime spec: Spec) type {
                 out.names[k.*] = name;
                 out.nodes[k.*] = row.*;
                 out.kinds[k.*] = node.kind;
-                out.focus[k.*] = if (node.widget) |W_| (@hasDecl(W_, "focusable") and W_.focusable) else focusable(node.kind);
+                out.focus[k.*] = if (node.widget) |W_| (@hasDecl(W_, "focusable") and W_.focusable) else focusable(node.kind) or (node.kind == .row and node.style.role == .button);
                 k.* += 1;
             }
             row.* += 1;
@@ -274,8 +274,9 @@ pub fn Events(comptime spec: Spec) type {
             break :blk @Union(.auto, Widget, &ids.names, &types_, &@splat(.{}));
         };
 
-        /// Whether keyboard focus stops at a widget of `kind`: the ones that take input. Nodes
-        /// with a `Spec.widget` say for themselves (`widget_focusable`).
+        /// Whether keyboard focus stops at a widget of `kind`: the ones that take input. A
+        /// button (a row with an id and the button role) is one too, as on runtime pages.
+        /// Nodes with a `Spec.widget` say for themselves (`widget_focusable`).
         pub fn focusable(comptime kind: Kind) bool {
             return switch (kind) {
                 .checkbox, .slider => true,

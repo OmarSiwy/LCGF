@@ -1785,7 +1785,7 @@ test "ct: spec builders give the comptime front end's widget enum, kinds and foc
     try testing.expectEqualSlices(spec_zig.Kind, &.{ .row, .checkbox, .slider }, &Default.Ui.Events.widget_kinds);
     try testing.expectEqual(void, @FieldType(Default.Ui.Events.Event, "reset"));
     try testing.expectEqual(f32, @FieldType(Default.Ui.Events.Event, "exposure"));
-    try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .wire, .exposure }, Default.Ui.Events.focus_order);
+    try testing.expectEqualSlices(Default.Ui.Events.Widget, &.{ .reset, .wire, .exposure }, Default.Ui.Events.focus_order);
 }
 
 /// A custom widget declaring all three optional parts of the `Spec.widget` contract: it is
