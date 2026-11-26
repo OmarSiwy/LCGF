@@ -21,6 +21,9 @@ pub const Emit = struct {
     modules: std.StringArrayHashMapUnmanaged(void) = .empty,
     /// Emit the runtime frontend (`Context`/`Frame` and widget calls) instead of a `Spec` page.
     runtime: bool = false,
+    /// The token uses of the node being written (runtime frontend), read by `tokenField`.
+    uses: []const ir.TokenUse = &.{},
+    text_uses: ir.TextTokens = .{},
 
     fn print(e: *Emit, comptime format: []const u8, args: anytype) void {
         e.out.print(e.arena, format, args) catch @panic("out of memory");
@@ -110,7 +113,14 @@ pub const Emit = struct {
                 if (std.mem.eql(u8, s, name)) break true;
             } else false;
             const is_params = comptime std.mem.eql(u8, name, "params");
-            if ((!skipped and !std.meta.eql(@field(v, name), @field(default, name))) or (is_params and params.len > 0)) {
+            const token = if (comptime skipped) null else e.tokenField(@TypeOf(v), name, @field(v, name));
+            if (token) |expr| {
+                e.write(if (any) ", ." else " .");
+                e.write(name);
+                e.write(" = ");
+                e.write(expr);
+                any = true;
+            } else if ((!skipped and !std.meta.eql(@field(v, name), @field(default, name))) or (is_params and params.len > 0)) {
                 e.write(if (any) ", ." else " .");
                 e.write(name);
                 e.write(" = ");
@@ -119,6 +129,57 @@ pub const Emit = struct {
             }
         }
         e.write(if (any) " }" else "}");
+    }
+
+    /// `ui.tokens.values.<field>` of token `t`.
+    fn tokenExpr(e: *Emit, t: u32) []const u8 {
+        return std.fmt.allocPrint(e.arena, "ui.tokens.values.{f}", .{std.zig.fmtId(e.page.tokens.items[t].field)}) catch unreachable;
+    }
+
+    /// The expression of a style field that reads run-time tokens (`uses`, `text_uses` of
+    /// the node being written), or null when it is a constant.
+    fn tokenField(e: *Emit, comptime T: type, comptime name: []const u8, v: anytype) ?[]const u8 {
+        if (T == types.TextStyle) {
+            if (comptime std.mem.eql(u8, name, "px")) if (e.text_uses.px != none) return e.tokenExpr(e.text_uses.px);
+            if (comptime std.mem.eql(u8, name, "color")) if (e.text_uses.color != none) return e.tokenExpr(e.text_uses.color);
+            return null;
+        }
+        if (T != types.Style or e.uses.len == 0) return null;
+        const Tg = ir.Target;
+        const scalar = [_]struct { []const u8, Tg }{ .{ "gap", .gap }, .{ "border", .border }, .{ "radius", .radius }, .{ "fill", .fill }, .{ "border_color", .border_color } };
+        inline for (scalar) |sc| if (comptime std.mem.eql(u8, name, sc[0])) {
+            for (e.uses) |u| if (u.target == sc[1]) return e.tokenExpr(u.token);
+            return null;
+        };
+        const arrays = [_]struct { []const u8, []const Tg }{
+            .{ "pad", &.{ .pad_left, .pad_top, .pad_right, .pad_bottom } },
+            .{ "size", &.{ .width, .height } },
+            .{ "min", &.{ .min_width, .min_height } },
+            .{ "max", &.{ .max_width, .max_height } },
+        };
+        inline for (arrays) |ar| if (comptime std.mem.eql(u8, name, ar[0])) {
+            var any = false;
+            var out: std.ArrayList(u8) = .empty;
+            out.appendSlice(e.arena, ".{ ") catch unreachable;
+            for (ar[1], 0..) |target, k| {
+                if (k > 0) out.appendSlice(e.arena, ", ") catch unreachable;
+                const tok = for (e.uses) |u| {
+                    if (u.target == target) break u.token;
+                } else none;
+                if (tok != none) {
+                    any = true;
+                    if (comptime std.mem.eql(u8, name, "size")) out.print(e.arena, ".px({s})", .{e.tokenExpr(tok)}) catch unreachable else out.appendSlice(e.arena, e.tokenExpr(tok)) catch unreachable;
+                } else {
+                    // The constant element, printed by the generic printer into `out`.
+                    std.mem.swap(std.ArrayList(u8), &out, &e.out);
+                    e.value(v[k]);
+                    std.mem.swap(std.ArrayList(u8), &out, &e.out);
+                }
+            }
+            out.appendSlice(e.arena, " }") catch unreachable;
+            return if (any) out.items else null;
+        };
+        return null;
     }
 
     fn string(e: *Emit, s: []const u8) void {
@@ -469,6 +530,8 @@ pub const Emit = struct {
     /// Statements that build node `i` up to its children, and what closes it.
     fn rtOpen(e: *Emit, i: u32, list_depth: u32) []const u8 {
         const n = e.page.nodes.get(i);
+        e.uses = n.uses;
+        e.text_uses = n.text_uses;
         switch (n.kind) {
             .container, .landmark => {
                 var st = n.style;
@@ -479,7 +542,7 @@ pub const Emit = struct {
                 return "f.close();";
             },
             .label, .heading, .text => {
-                const plain = n.kind == .label and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0;
+                const plain = n.kind == .label and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
                 if (plain) {
                     e.print("_ = {s}.label(f, &theme, ", .{e.use("label")});
                     e.rtCaption(n.text_kind, n.text);
@@ -600,6 +663,19 @@ pub const Emit = struct {
     /// `build(ui, f)`, which builds the page into a runtime `Frame` and records its events.
     fn runtimeUi(e: *Emit) void {
         const nodes = e.page.nodes.slice();
+        const tokens = e.page.tokens.items;
+        if (tokens.len > 0) {
+            e.write("\n/// The page's run-time theme tokens (its `--t-*` custom properties), with the defaults its\n/// CSS gives. The page reads them from the caller's table while it builds.\npub const Tokens = struct {\n");
+            for (tokens) |t| switch (t.kind) {
+                .length => e.print("    {f}: f32 = {d}, // {s}\n", .{ std.zig.fmtId(t.field), t.default_px, e.where(t.loc) }),
+                .color => {
+                    e.print("    {f}: lcgf.types.Color = ", .{std.zig.fmtId(t.field)});
+                    e.color(t.default_color);
+                    e.print(", // {s}\n", .{e.where(t.loc)});
+                },
+            };
+            e.write("};\npub const ThemeTable = lcgf.theme_table.ThemeTable(Tokens);\npub const default_tokens: ThemeTable = .{};\n");
+        }
         e.write(
             \\
             \\/// The page in the runtime front end: the same state store as the comptime page's
@@ -619,11 +695,27 @@ pub const Emit = struct {
             \\    /// The state as the frame began, for on:change.
             \\    before: State = .{},
             \\
+        );
+        if (tokens.len > 0) e.write(
+            \\    /// The caller's theme tokens; point it at your table.
+            \\    tokens: *const ThemeTable = &default_tokens,
+            \\    /// The table's generation the last build read.
+            \\    seen: u32 = 0,
+            \\
+            \\    /// Whether the tokens changed since the last build, which then lays the page out again.
+            \\    pub fn themeChanged(ui: *const Ui) bool {
+            \\        return ui.tokens.changedSince(ui.seen);
+            \\    }
+            \\
+            \\
+        );
+        e.write(
             \\    pub fn build(ui: *Ui, f: *lcgf.frame.Frame) void {
             \\        ui.events = .{};
             \\        ui.before = ui.signals.state;
             \\
         );
+        if (tokens.len > 0) e.write("        ui.seen = ui.tokens.generation;\n");
         var stack: std.ArrayList(struct { node: u32, close: []const u8 }) = .empty;
         var lists: u32 = 0;
         for (0..nodes.len) |i_| {

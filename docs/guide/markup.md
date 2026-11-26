@@ -95,6 +95,20 @@ By default the page is a comptime page (`ComptimeUi`).
 Both keep the same `State`, `spec` and handlers, because `ui.signals` is the same store in both.
 Every fixture draws identical frames in the two frontends.
 
+### Run-time theme tokens
+
+With `--runtime-vars=t-` (`.runtime_vars = "t-"` in `addMarkup`), each `var(--t-name)` the page
+reads becomes a token instead of being folded at build time. A token is one length or one
+colour (hex or a name); its default is the CSS value.
+
+The runtime page then exports `Tokens`, with those defaults, and `ThemeTable`
+(`lcgf.theme_table.ThemeTable(Tokens)`). Point `ui.tokens` at your table.
+
+`table.set(.name, value)` bumps the table's generation. `ui.themeChanged()` is then true, and
+the next frame lays the page out with the new values. Pages that use no token compile to the
+same code as without the option (`ci/run.sh markup-zero-cost`). The comptime frontend reads
+tokens once T-CT lands (docs/plans/markup-engine-api.md).
+
 ## Handlers
 
 Your handler type needs one `pub fn` per name the page uses. `Page(H).frame(h, input)` builds,

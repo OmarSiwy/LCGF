@@ -35,6 +35,8 @@ pub const Fixture = struct {
     /// The runtime frontend cannot build it yet (engine spec R1); its runtime parity test is
     /// in `markup-pending`.
     spec_only: bool = false,
+    /// Built for the runtime frontend with `--runtime-vars=<this>`, and its runtime_test.zig run.
+    runtime_vars: []const u8 = "",
 };
 
 pub const Manifest = struct { rows: []const Row, fixtures: []const Fixture };

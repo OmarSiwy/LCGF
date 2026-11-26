@@ -73,7 +73,16 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
     for (manifest.manifest.fixtures) |f| {
         const html = b.path(b.fmt("{s}/{s}/page.html", .{ dir, f.name }));
         const page = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec" });
-        const page_rt = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime" });
+        const page_rt = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
+        if (f.runtime_vars.len > 0) {
+            const rt_test = b.addTest(.{ .name = b.fmt("markup-{s}-tokens", .{f.name}), .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt("{s}/{s}/runtime_test.zig", .{ dir, f.name })),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page_rt", .module = page_rt } },
+            }) });
+            step.dependOn(&b.addRunArtifact(rt_test).step);
+        }
         if (f.waits_for.len == 0) pages.append(b.allocator, .{ .name = f.name, .module = page }) catch @panic("out of memory");
         const twin = b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/twin.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
         const t = b.addTest(.{ .name = b.fmt("markup-{s}", .{f.name}), .root_module = b.createModule(.{
@@ -103,6 +112,20 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
                     .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "ui", .module = side[1] } },
                 }) });
                 cost.dependOn(&b.addInstallFile(obj.getEmittedBin(), b.fmt("markup-cost/{s}-{s}.o", .{ f.name, side[0] })).step);
+            }
+            // A page with no `--t-*` token is the same runtime page with --runtime-vars.
+            if (f.runtime_vars.len == 0) {
+                const with_vars = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .runtime_vars = "t-" });
+                for ([_]struct { []const u8, *Build.Module }{ .{ "rt", page_rt }, .{ "rtvars", with_vars } }) |side| {
+                    const obj = b.addObject(.{ .name = b.fmt("{s}-{s}", .{ f.name, side[0] }), .root_module = b.createModule(.{
+                        .root_source_file = b.path(dir ++ "/cost_probe_rt.zig"),
+                        .target = target,
+                        .optimize = .ReleaseFast,
+                        .strip = true,
+                        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "ui", .module = side[1] } },
+                    }) });
+                    cost.dependOn(&b.addInstallFile(obj.getEmittedBin(), b.fmt("markup-cost/{s}-{s}.o", .{ f.name, side[0] })).step);
+                }
             }
         }
     }
@@ -171,6 +194,8 @@ pub const Options = struct {
     vendored: ?Build.LazyPath = null,
     /// `spec` or `runtime`; null takes the page's own `lcgf-frontend` (spec when it has none).
     frontend: ?[]const u8 = null,
+    /// `--runtime-vars=` prefix: `var(--<prefix>*)` become run-time theme tokens.
+    runtime_vars: ?[]const u8 = null,
 };
 
 /// The Zig module generated from `o.html`, importing `lcgf` (the `framework` dependency's) and
@@ -207,6 +232,7 @@ pub fn addPage(b: *Build, gen: *Build.Step.Compile, lcgf: *Build.Module, o: Opti
     }
     run.addArgs(&.{ "--lang", "zig" });
     if (o.frontend) |fe| run.addArgs(&.{ "--frontend", fe });
+    if (o.runtime_vars) |rv| run.addArg(b.fmt("--runtime-vars={s}", .{rv}));
     if (o.vendored) |v| {
         // The tool regenerates, fails when the vendored file differs, and otherwise writes it
         // out unchanged; the module compiles that output, so nothing builds against a stale file.

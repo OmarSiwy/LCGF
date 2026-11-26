@@ -84,7 +84,30 @@ pub const Node = struct {
     max: u32 = 0,
     /// Engine API from docs/plans/markup-engine-api.md: flex item margins (F2), or null.
     margin: ?[4]f32 = null,
+    /// Style fields read from run-time theme tokens, and the text style's.
+    uses: []const TokenUse = &.{},
+    text_uses: TextTokens = .{},
 };
+
+/// A run-time theme token (`--t-*` under `--runtime-vars=t-`): a field of the generated
+/// `Tokens`, read from the caller's `ThemeTable` while the page builds.
+pub const Token = struct {
+    /// The custom property without its leading dashes (`t-space-m`), and the Zig field.
+    css: []const u8,
+    field: []const u8,
+    kind: enum(u8) { length, color },
+    default_px: f32 = 0,
+    default_color: lcgf.types.Color = .transparent,
+    loc: diag.Loc,
+};
+
+/// The style field a token sets.
+pub const Target = enum(u8) { pad_left, pad_top, pad_right, pad_bottom, gap, width, height, min_width, min_height, max_width, max_height, border, radius, fill, border_color };
+
+pub const TokenUse = struct { target: Target, token: u32 };
+
+/// Tokens behind a label's text style: its colour and size, inherited as the values are.
+pub const TextTokens = struct { color: u32 = none, px: u32 = none };
 
 pub const FieldType = enum(u8) {
     str,
@@ -134,6 +157,7 @@ pub const Page = struct {
     nodes: std.MultiArrayList(Node) = .empty,
     fields: std.ArrayList(Field) = .empty,
     handlers: std.ArrayList(Handler) = .empty,
+    tokens: std.ArrayList(Token) = .empty,
     theme: Theme = .{},
     /// `<html lcgf-frontend="runtime">`: the page asks for the runtime frontend.
     runtime: bool = false,

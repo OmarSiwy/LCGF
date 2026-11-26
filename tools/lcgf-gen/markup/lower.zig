@@ -34,6 +34,18 @@ pub const Lowerer = struct {
     /// Per document node: its computed text style and font size.
     text: []TextStyle,
     root_px: f32 = 14,
+    /// `--runtime-vars=t-`: custom properties `--t-*` are run-time theme tokens; "" for none.
+    runtime_prefix: []const u8 = "",
+    /// Token table index of a value token that a `var(--t-*)` produced.
+    origin: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    /// The token behind the value the last `component` read, or none.
+    last_token: u32 = none,
+    /// Token uses of the box being lowered, attached to its IR node by `addNode`.
+    uses: std.ArrayList(ir.TokenUse) = .empty,
+    /// Per document node: the tokens behind its text style (inherited).
+    text_tokens: []ir.TextTokens = &.{},
+    /// The document node whose IR node comes next, for its text tokens.
+    current: u32 = none,
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -87,6 +99,8 @@ pub const Lowerer = struct {
             while (t < range[1]) {
                 const tok = l.c.toks.get(t);
                 if (tok.type != .function or !css.eq(tok.str, "var")) {
+                    // A token a run-time var() produced keeps its origin through later passes.
+                    if (l.origin.get(t)) |o| ok(l.origin.put(l.arena, @intCast(l.c.toks.len), o));
                     ok(l.c.toks.append(l.arena, tok));
                     t += 1;
                     continue;
@@ -110,13 +124,63 @@ pub const Lowerer = struct {
                     l.ds.err(tok.loc, "{s} is not set here and var() has no fallback", .{name});
                     return null;
                 };
+                const at_rep: u32 = @intCast(l.c.toks.len);
                 for (rep[0]..rep[1]) |x| ok(l.c.toks.append(l.arena, l.c.toks.get(x)));
+                if (l.runtime_prefix.len > 0 and std.mem.startsWith(u8, name, "--") and std.mem.startsWith(u8, name[2..], l.runtime_prefix))
+                    l.runtimeToken(name[2..], at_rep, @intCast(l.c.toks.len), tok.loc);
                 t = close;
             }
             range = .{ first, @intCast(l.c.toks.len) };
         }
         l.ds.err(at, "custom properties refer to each other in a cycle", .{});
         return null;
+    }
+
+    /// Registers the run-time token `css` (`t-space-m`) for the value tokens `[a, b)` its
+    /// var() became, which must be one value: a length or a colour.
+    fn runtimeToken(l: *Lowerer, name: []const u8, a: u32, b: u32, at: Loc) void {
+        var first = a;
+        var end = b;
+        while (first < end and l.c.toks.items(.type)[first] == .whitespace) first += 1;
+        while (end > first and l.c.toks.items(.type)[end - 1] == .whitespace) end -= 1;
+        if (end - first != 1) {
+            l.ds.err(at, "run-time token --{s} must be one length or one colour (hex or a name)", .{name});
+            return;
+        }
+        const index: u32 = for (l.page.tokens.items, 0..) |t, i| {
+            if (std.mem.eql(u8, t.css, name)) break @intCast(i);
+        } else blk: {
+            var zig_name: std.ArrayList(u8) = .empty;
+            for (name[l.runtime_prefix.len..]) |ch| ok(zig_name.append(l.arena, if (ch == '-') '_' else std.ascii.toLower(ch)));
+            const kind: @FieldType(ir.Token, "kind") = if (values.len(l.c, first) != null) .length else .color;
+            var tk: ir.Token = .{ .css = name, .field = zig_name.items, .kind = kind, .loc = at };
+            if (kind == .length) {
+                tk.default_px = values.px(values.len(l.c, first).?, l.root_px, l.root_px) orelse {
+                    l.ds.err(at, "run-time token --{s}: give its default in px", .{name});
+                    return;
+                };
+            } else tk.default_color = values.color(l.c, first, end) orelse {
+                l.ds.err(at, "run-time token --{s} must be one length or one colour (hex or a name)", .{name});
+                return;
+            };
+            if (!l.identifier(tk.field, at)) return;
+            ok(l.page.tokens.append(l.arena, tk));
+            break :blk @intCast(l.page.tokens.items.len - 1);
+        };
+        ok(l.origin.put(l.arena, first, index));
+    }
+
+    /// Records that style field `target` of the box being lowered reads the token behind the
+    /// value just read, if any.
+    fn use(l: *Lowerer, target: ir.Target) void {
+        if (l.last_token == none) return;
+        const kind = l.page.tokens.items[l.last_token].kind;
+        const wants: @TypeOf(kind) = switch (target) {
+            .fill, .border_color => .color,
+            else => .length,
+        };
+        if (kind != wants) l.ds.err(l.page.tokens.items[l.last_token].loc, "run-time token --{s} is a {s} but sets a {s}", .{ l.page.tokens.items[l.last_token].css, @tagName(kind), @tagName(wants) });
+        ok(l.uses.append(l.arena, .{ .target = target, .token = l.last_token }));
     }
 
     /// The value tokens that set longhand `p` on `n`, `var()`s substituted, or null when
@@ -139,6 +203,15 @@ pub const Lowerer = struct {
     /// The tokens of `v` that apply to its longhand: all of a longhand's, or the component a
     /// shorthand gives it (CSS's 1-to-4 value rule for box sides and corners).
     fn component(l: *Lowerer, v: Value) ?[2]u32 {
+        const r = l.componentOf(v) orelse {
+            l.last_token = none;
+            return null;
+        };
+        l.last_token = if (r[1] - r[0] == 1) l.origin.get(r[0]) orelse none else none;
+        return r;
+    }
+
+    fn componentOf(l: *Lowerer, v: Value) ?[2]u32 {
         if (v.shorthand == none) return .{ v.first, v.end };
         const sh = values.shorthands[v.shorthand];
         var parts: [8][2]u32 = undefined;
@@ -343,6 +416,8 @@ pub const Lowerer = struct {
                 continue;
             }
             l.text[i] = if (p == none) root_text else l.text[p];
+            l.text_tokens[i] = if (p == none) .{} else l.text_tokens[p];
+            l.current = i;
             if (kinds[i] == .text) {
                 l.textNode(i);
                 continue;
@@ -453,16 +528,34 @@ pub const Lowerer = struct {
             if (len != null and len.?.unit == .pct) ts.px = parent_px * len.?.v / 100 else if (len) |x| {
                 if (values.px(x, parent_px, l.root_px)) |p| ts.px = p else l.badValue(t, .@"font-size", r[1]);
             } else l.badValue(t, .@"font-size", r[1]);
+            // A token sets the size as written: no em or % over it.
+            if (l.last_token != none) l.text_tokens[n].px = l.tokenOf(l.last_token, .length);
         };
         l.text[n] = ts;
-        if (l.colorOf(n, .color)) |col| ts.color = col;
+        if (l.colorOf(n, .color)) |col| {
+            ts.color = col;
+            l.text_tokens[n].color = if (l.last_token != none) l.tokenOf(l.last_token, .color) else none;
+        }
         if (l.keyword(n, .@"white-space")) |ws| {
             if (css.eq(ws, "normal") or css.eq(ws, "pre-wrap") or css.eq(ws, "pre-line")) ts.wrap = true else if (css.eq(ws, "nowrap") or css.eq(ws, "pre")) ts.wrap = false else l.badValue(l.declared(n, .@"white-space").?.first, .@"white-space", l.declared(n, .@"white-space").?.end);
         }
         l.text[n] = ts;
     }
 
-    fn addNode(l: *Lowerer, node: ir.Node) u32 {
+    /// Token `t`, which must be of `kind`.
+    fn tokenOf(l: *Lowerer, t: u32, kind: @FieldType(ir.Token, "kind")) u32 {
+        const tk = l.page.tokens.items[t];
+        if (tk.kind != kind) l.ds.err(tk.loc, "run-time token --{s} is a {s} but sets a {s}", .{ tk.css, @tagName(tk.kind), @tagName(kind) });
+        return t;
+    }
+
+    fn addNode(l: *Lowerer, node_: ir.Node) u32 {
+        var node = node_;
+        if (l.uses.items.len > 0) {
+            node.uses = ok(l.arena.dupe(ir.TokenUse, l.uses.items));
+            l.uses.clearRetainingCapacity();
+        }
+        if (l.current != none) node.text_uses = l.text_tokens[l.current];
         ok(l.page.nodes.append(l.arena, node));
         return @intCast(l.page.nodes.len - 1);
     }
@@ -573,24 +666,29 @@ pub const Lowerer = struct {
     /// the parent's direction: flex-grow and flex-basis act along it.
     fn boxStyle(l: *Lowerer, n: u32, base: Style, axis: types.Axis, params: *[]const u8, margin: *?[4]f32) Style {
         var s = base;
+        l.uses.clearRetainingCapacity();
         const main: u1 = @backingInt(axis);
         const cross: u1 = 1 - main;
-        inline for (.{ .{ Prop.width, 0 }, .{ Prop.height, 1 } }) |pa| if (l.length(n, pa[0])) |len| {
+        inline for (.{ .{ Prop.width, 0, ir.Target.width }, .{ Prop.height, 1, ir.Target.height } }) |pa| if (l.length(n, pa[0])) |len| {
+            if (len == .px) l.use(pa[2]);
             s.size[pa[1]] = switch (len) {
                 .px => |v| .px(v),
                 .pct => |v| .pct(v),
                 .auto => .fit,
             };
         };
-        inline for (.{ .{ Prop.@"min-width", 0 }, .{ Prop.@"min-height", 1 } }) |pa| if (l.px(n, pa[0])) |v| {
+        inline for (.{ .{ Prop.@"min-width", 0, ir.Target.min_width }, .{ Prop.@"min-height", 1, ir.Target.min_height } }) |pa| if (l.px(n, pa[0])) |v| {
             s.min[pa[1]] = v;
+            l.use(pa[2]);
         };
-        inline for (.{ .{ Prop.@"max-width", 0 }, .{ Prop.@"max-height", 1 } }) |pa| if (l.px(n, pa[0])) |v| {
+        inline for (.{ .{ Prop.@"max-width", 0, ir.Target.max_width }, .{ Prop.@"max-height", 1, ir.Target.max_height } }) |pa| if (l.px(n, pa[0])) |v| {
             s.max[pa[1]] = v;
+            l.use(pa[2]);
         };
         // CSS top, right, bottom, left; LCGF left, top, right, bottom.
-        inline for (.{ .{ Prop.@"padding-left", 0 }, .{ Prop.@"padding-top", 1 }, .{ Prop.@"padding-right", 2 }, .{ Prop.@"padding-bottom", 3 } }) |pa| if (l.px(n, pa[0])) |v| {
+        inline for (.{ .{ Prop.@"padding-left", 0, ir.Target.pad_left }, .{ Prop.@"padding-top", 1, ir.Target.pad_top }, .{ Prop.@"padding-right", 2, ir.Target.pad_right }, .{ Prop.@"padding-bottom", 3, ir.Target.pad_bottom } }) |pa| if (l.px(n, pa[0])) |v| {
             s.pad[pa[1]] = v;
+            l.use(pa[2]);
         };
         if (l.number(n, .@"flex-grow")) |g| s.size[main] = if (g == 0) s.size[main] else .grow(g);
         if (l.number(n, .@"flex-shrink")) |g| s.shrink = g > 0;
@@ -618,12 +716,21 @@ pub const Lowerer = struct {
         inline for (.{ Prop.@"overflow-x", Prop.@"overflow-y" }) |p| if (l.keyword(n, p)) |kw| {
             if (css.eq(kw, "hidden") or css.eq(kw, "clip")) s.clip = true else if (!css.eq(kw, "visible")) l.ds.err(l.declared(n, p).?.loc, "overflow: {s} needs a scroll container, which the compiler does not lower yet", .{kw});
         };
-        if (l.colorOf(n, .@"background-color")) |col| s.fill = col;
+        if (l.colorOf(n, .@"background-color")) |col| {
+            s.fill = col;
+            l.use(.fill);
+        }
         if (l.declared(n, .@"background-image")) |v| if (l.component(v)) |r| {
             if (!values.isIdent(l.c, r[0], "none")) l.gradient(n, r, &s, params);
         };
-        if (l.px(n, .@"border-top-width")) |w| s.border = w;
-        if (l.colorOf(n, .@"border-color")) |col| s.border_color = col;
+        if (l.px(n, .@"border-top-width")) |w| {
+            s.border = w;
+            l.use(.border);
+        }
+        if (l.colorOf(n, .@"border-color")) |col| {
+            s.border_color = col;
+            l.use(.border_color);
+        }
         if (l.keyword(n, .@"border-style")) |kw| {
             if (params.len > 0 and (css.eq(kw, "dashed") or css.eq(kw, "dotted")))
                 l.ds.err(l.declared(n, .@"border-style").?.loc, "one quad feature per box: a {s} border and a gradient cannot share a box", .{kw});
@@ -640,6 +747,7 @@ pub const Lowerer = struct {
         inline for (.{ Prop.@"border-top-left-radius", Prop.@"border-top-right-radius", Prop.@"border-bottom-right-radius", Prop.@"border-bottom-left-radius" }, 0..) |p, i| if (l.px(n, p)) |v| {
             radii[i] = v;
             any_radius = true;
+            if (i == 0) l.use(.radius);
         };
         if (any_radius) {
             if (radii[0] == radii[1] and radii[1] == radii[2] and radii[2] == radii[3]) s.radius = radii[0] else {
@@ -814,7 +922,10 @@ pub const Lowerer = struct {
         s.dir = dir;
         // gap along the main axis; CSS's column-gap is the gap between items of a row.
         const gp: Prop = if (dir == .x) .@"column-gap" else .@"row-gap";
-        if (l.px(n, gp)) |g| s.gap = g;
+        if (l.px(n, gp)) |g| {
+            s.gap = g;
+            l.use(.gap);
+        }
         if (l.keyword(n, .@"justify-content")) |kw| {
             if (alignOf(kw)) |a| s.main = a else if (!l.refused("value", kw, "justify-content", l.declared(n, .@"justify-content").?.loc)) l.badValue(l.declared(n, .@"justify-content").?.first, .@"justify-content", l.declared(n, .@"justify-content").?.end);
         }
@@ -1475,6 +1586,7 @@ pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: 
         .ir_of = Lowerer.ok(arena.alloc(u32, n)),
         .skip = Lowerer.ok(arena.alloc(bool, n)),
         .text = Lowerer.ok(arena.alloc(TextStyle, n)),
+        .text_tokens = Lowerer.ok(arena.alloc(ir.TextTokens, n)),
     };
     @memset(l.ir_of, none);
     @memset(l.skip, false);
