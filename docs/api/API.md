@@ -1041,6 +1041,8 @@ Spec: a UI declared as a compile-time value.
 - `fn styled(comptime s: Spec, comptime style: Style) Spec`: `s` laid out by `style`: `styled(slider(.volume, .{ .name = "Volume" }), .{ .size = .{ .px(80), .px(10) } })`.
 - `fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec`: Label `s` drawn in `text_style` instead of the page theme's: `textStyled(heading(1, "Mixer"), .{ .px = 28, .color = .rgb(230, 230, 235) })`.
 - `fn paragraph(comptime s: Spec, comptime p: @import("../text/layout/stack.zig").Paragraph) Spec`: Label `s` with paragraph style `p`: `paragraph(label(.a), .{ .line_height = .{ .px = 20 } })`.
+- `fn decorated(comptime s: Spec, comptime d: @import("../text/layout/decorations.zig").Style) Spec`: Label `s` with text decoration `d`: `decorated(label(.a), .{ .underline = true })`.
+- `fn spans(comptime s: Spec, comptime runs: []const @import("../text/protocol.zig").Span) Spec`: Label `s` as one paragraph in several styles: from each span's `start` byte on, its text style's size, colour and font: `spans(label("a bold word"), &.{ .{ .start = 2, .style = bold }, .{ .start = 6, .style = plain } })`.
 - `fn flexed(comptime s: Spec, comptime flex: FlexStyle) Spec`: `s` laid out with the flex rules `flex` as well as its style: `flexed(label(.a), .{ .margin = .{ 6, 2, 6, 2 } })`.
 - `fn named(comptime s: Spec, comptime name: []const u8) Spec`: `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 - `fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec`: A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which the first `count` are live, `count` being the run-time value of the integer state field bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`.
@@ -1051,7 +1053,7 @@ Spec: a UI declared as a compile-time value.
 ### `Spec` (struct)
 One node of the declaration.
 
-Fields: `kind`, `id`, `bind`, `text`, `text_style`, `paragraph`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`, `tokens`
+Fields: `kind`, `id`, `bind`, `text`, `text_style`, `paragraph`, `decoration`, `spans`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`, `tokens`
 
 - `fn shows(s: Spec, field: []const u8) bool`: The state fields this node shows: its `bind`, or a formatted label's arguments.
 
@@ -1067,6 +1069,7 @@ The measure / wrap protocol: how text extents reach layout.
 
 ### Top level
 
+- `Span = struct { start: u32, style: types.TextStyle }`: One style run of a paragraph: from byte `start` of its text on (to the next span's start), `style`'s size, colour and font instead of the run's.
 - `fn StaticAtlas(comptime strings: []const []const u8) type`: Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
 
 ### `Mono` (struct)
@@ -1084,11 +1087,12 @@ Fields: `advance`, `line`
 ### `MonoParagraphs` (struct)
 `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
 
-Fields: `mono`, `rows`, `styles`, `table`, `strings`
+Fields: `mono`, `rows`, `styles`, `table`, `decorations`, `spans`, `strings`
 
 - `fn measure(p: MonoParagraphs, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
 - `fn wrap(p: MonoParagraphs, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
-- `fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them.
+- `fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them, each glyph in its span's size and colour.
+- `fn decorate(p: MonoParagraphs, d: *DrawList) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -3544,11 +3548,11 @@ Fields: `ctx`, `in`
 - `fn layoutWith(f: *Frame, font: Mono) void`: Measure and arrange without painting: insert prepared textures or explicit passes, then call finish.
 - `fn endFlex(f: *Frame, font: Mono, fx: *Flex) Output`: `end` with the flex rules (margins, wrap, align-self, aspect, baselines) the caller wrote into `fx` this frame, one row per node: `fx.set(@backingInt(node), &.{ .margin = ...
 - `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
-- `fn endParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) on some runs: texts row `rows[i]` takes `table[styles[i]]`, measured and wrapped by `protocol.MonoParagraphs` over this frame's strings.
-- `fn layoutParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) void`: The layout half of `endParagraphs`.
-- `fn endFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
-- `fn layoutFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
-- `fn paragraphs(f: *const Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) MonoParagraphs`: The font `endParagraphs` measures with.
+- `fn endParagraphs(f: *Frame, font: MonoParagraphs) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (`protocol.MonoParagraphs`; its `strings` are set to this frame's).
+- `fn layoutParagraphs(f: *Frame, font: MonoParagraphs) void`: The layout half of `endParagraphs`.
+- `fn endFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
+- `fn layoutFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
+- `fn finishParagraphs(f: *Frame, font: MonoParagraphs) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
 - `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
 - `fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.
