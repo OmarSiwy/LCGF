@@ -57,7 +57,18 @@ fn checkFrame(out: lcgf.context.Output, pointer: [2]f32) !void {
             pointer[0] >= vis[0][i] and pointer[0] < vis[2][i] and
             pointer[1] >= vis[1][i] and pointer[1] < vis[3][i]) expected_hit = @intCast(i);
     }
-    try std.testing.expectEqual(expected_hit, lcgf.hit.at(tree, pointer[0], pointer[1], .any));
+    const got = lcgf.hit.at(tree, pointer[0], pointer[1], .any);
+    if (lcgf.geometry.needsExactHit(tree)) {
+        // A transform or a rounded clip sends `at` to the exact test, which also drops points
+        // outside the transformed shape: what it returns must still be a sensing node whose
+        // box holds the point, and no later one may be.
+        if (got != lcgf.types.none) {
+            try std.testing.expect(tree.c.sense[got] & sense_mask != 0);
+            const vis = tree.c.vis;
+            try std.testing.expect(pointer[0] >= vis[0][got] and pointer[0] < vis[2][got] and pointer[1] >= vis[1][got] and pointer[1] < vis[3][got]);
+            try std.testing.expect(got <= expected_hit);
+        }
+    } else try std.testing.expectEqual(expected_hit, got);
 
     const draw = out.draw;
     for (0..draw.cmd_len) |i| switch (draw.command(@intCast(i))) {
