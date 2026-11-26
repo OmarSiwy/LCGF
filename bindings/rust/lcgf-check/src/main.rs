@@ -1,13 +1,15 @@
 //! The Rust side of the bindings' gate (bindings/check/run.sh): a generated UI run frame by
 //! frame, its draw lists written in the dump format of bindings/check/dump.zig.
 //!
-//!   lcgf-check <toolbar|mixer> <inputs.txt> <out.bin>
-//!   lcgf-check <toolbar|mixer> <inputs.txt> --bench   (ns per frame, 200 passes)
+//!   lcgf-check <toolbar|mixer|panel|counter> <inputs.txt> <out.bin>
+//!   lcgf-check <toolbar|mixer|panel|counter> <inputs.txt> --bench   (ns per frame, 200 passes)
 //!
 //! The toolbar comes from its `.zon` file (`include_ui!`), the mixer and the panel from the
-//! `ui!` DSL: all go through lcgf-gen while this crate compiles.
+//! `ui!` DSL, the counter from examples/markup's HTML page: all go through lcgf-gen while this
+//! crate compiles.
 
 lcgf::include_ui!("toolbar.zon");
+lcgf::include_ui!("../../../examples/markup/ui/counter.html");
 
 // The panel through the DSL: regions, a custom draw node and a sprung slider.
 lcgf::ui! {
@@ -127,7 +129,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     assert!(
         args.len() == 4,
-        "usage: lcgf-check <toolbar|mixer|panel> <inputs.txt> <out.bin>"
+        "usage: lcgf-check <toolbar|mixer|panel|counter> <inputs.txt> <out.bin>"
     );
     let mut out = Vec::new();
     let lines = inputs(&args[2]);
@@ -167,6 +169,18 @@ fn main() {
             let mut buf = Box::new(lcgf::Buffer::<{ mixer::BYTES }>::new());
             let mut ui = mixer::Ui::new(&mut buf).expect("lcgf_ui_init");
             run!(ui, |_: &mut mixer::Ui, _: &str, _: u32| {});
+        }
+        "counter" => {
+            let mut buf = Box::new(lcgf::Buffer::<{ counter::BYTES }>::new());
+            let mut ui = counter::Ui::new(&mut buf).expect("lcgf_ui_init");
+            run!(
+                ui,
+                |ui: &mut counter::Ui, field: &str, v: u32| match field {
+                    "count" => ui.set_count(v as f32),
+                    "clicks" => ui.set_clicks(v),
+                    _ => {}
+                }
+            );
         }
         "panel" => {
             let mut buf = Box::new(lcgf::Buffer::<{ panel::BYTES }>::new());

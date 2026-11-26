@@ -168,6 +168,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
+    // The markup example's page in the gate: its Zig spec-frontend module and its seam spec.
+    if (b.lazyDependency("lexbor", .{})) |lexbor| {
+        const gen = markup.addHostGen(b, b.path("."), lexbor, lcgf_host);
+        const html = b.path("examples/markup/ui/counter.html");
+        lcgf_dump.root_module.addImport("counter_ui", markup.addPage(b, gen, lcgf, .{ .html = html }));
+        lcgf_dump.root_module.addAnonymousImport("counter_zon", .{ .root_source_file = markup.addSeamSpec(b, gen, html) });
+    }
     abi_step.dependOn(&b.addInstallArtifact(lcgf_dump, .{}).step);
     abi_step.dependOn(&b.addInstallFile(b.path("src/abi/lcgf.h"), "include/lcgf.h").step);
     abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("bindings/cpp/include"), .install_dir = .header, .install_subdir = "" }).step);

@@ -9,6 +9,8 @@ add_executable(lcgf-cpp-check check.cpp)
 lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/toolbar.zon)
 lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/mixer.zon)
 lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/panel.zon)
+# examples/markup's HTML page, through lcgf-gen's HTML front end.
+lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/../../../examples/markup/ui/counter.html)
 
 # The GPU half: one frame recorded through lcgf/gpu.hpp into bindings/check/record.c's recorder.
 find_library(LCGF_RECORD lcgf_record PATH_SUFFIXES lib REQUIRED)
