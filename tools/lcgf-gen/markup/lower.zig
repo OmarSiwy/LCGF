@@ -568,6 +568,47 @@ pub const Lowerer = struct {
         l.checkProps();
         l.swapElse();
         l.hoistOverlays();
+        l.stackBelow();
+    }
+
+    /// Moves each box with a negative z-index (`Node.below`), with its subtree, before its
+    /// siblings, the most negative first: later rows paint above earlier ones, so it paints
+    /// below its siblings and above its parent's background, as if the parent were the
+    /// stacking context. Floating boxes only, so the layout does not change.
+    fn stackBelow(l: *Lowerer) void {
+        if (l.ds.errors > 0) return;
+        const old = l.page.nodes;
+        const n: u32 = @intCast(old.len);
+        var any = false;
+        for (old.items(.placed)) |p| any = any or p.below < 0;
+        if (!any) return;
+        var order: std.ArrayList(u32) = .empty;
+        for (0..n) |i| if (old.items(.parent)[i] == none) l.stackWalk(@intCast(i), &order);
+        const map = ok(l.arena.alloc(u32, n));
+        for (order.items, 0..) |i, k| map[i] = @intCast(k);
+        var nodes: std.MultiArrayList(ir.Node) = .empty;
+        for (order.items) |i| {
+            var node = old.get(i);
+            if (node.parent != none) node.parent = map[node.parent];
+            ok(nodes.append(l.arena, node));
+        }
+        l.page.nodes = nodes;
+    }
+
+    fn stackWalk(l: *Lowerer, i: u32, order: *std.ArrayList(u32)) void {
+        const parents = l.page.nodes.items(.parent);
+        const placed = l.page.nodes.items(.placed);
+        ok(order.append(l.arena, i));
+        var kids: std.ArrayList(u32) = .empty;
+        for (i + 1..parents.len) |c| if (parents[c] == i) ok(kids.append(l.arena, @intCast(c)));
+        const Less = struct {
+            p: []const ir.Placed,
+            fn less(ctx: @This(), a: u32, c: u32) bool {
+                return @min(ctx.p[a].below, 0) < @min(ctx.p[c].below, 0);
+            }
+        };
+        std.sort.insertion(u32, kids.items, Less{ .p = placed }, Less.less);
+        for (kids.items) |c| l.stackWalk(c, order);
     }
 
     /// Moves each overlay's subtree, in order, to the end of a new root: an unpadded column
@@ -1082,6 +1123,7 @@ pub const Lowerer = struct {
         node.placed.anchor = l.placed.anchor;
         node.placed.sticky = l.placed.sticky;
         node.placed.layer = l.placed.layer;
+        node.placed.below = l.placed.below;
         l.placed = .{};
         node.flex = l.flex;
         l.flex = .{};
@@ -1208,8 +1250,7 @@ pub const Lowerer = struct {
         node.flex.cross = null;
         node.flex.aspect = 0;
         // Positioning moves the whole decorated box (engine spec F17).
-        // Positioning moves the whole decorated box; its tracks stay with it.
-        inline for (.{ "anchor", "sticky", "layer" }) |f| {
+        inline for (.{ "anchor", "sticky", "layer", "below" }) |f| {
             @field(wrapper.placed, f) = @field(node.placed, f);
             @field(node.placed, f) = @field(ir.Placed{}, f);
         }
@@ -1709,6 +1750,8 @@ pub const Lowerer = struct {
         if (l.declared(n, .@"z-index")) |v| if (l.zIndex(v, raised)) |z| {
             if (!positioned) l.ds.err(v.loc, "z-index applies to a positioned box (position: relative, absolute, fixed or sticky)", .{});
             l.placed.layer = z;
+            if (l.placed.below < 0 and !(css.eq(kw, "absolute") or css.eq(kw, "fixed")))
+                l.ds.err(v.loc, "a negative z-index is lowered on absolute and fixed boxes only", .{});
         };
         if (!positioned) return;
         const set = [4]bool{ l.k.get(n, .left).decl != none, l.k.get(n, .top).decl != none, l.k.get(n, .right).decl != none, l.k.get(n, .bottom).decl != none };
@@ -1754,7 +1797,7 @@ pub const Lowerer = struct {
     }
 
     /// A `z-index` as a stacking layer: `auto` is the box's own level (1 for fixed and sticky),
-    /// N from 0 to 254 is layer N + 1.
+    /// N from 0 to 254 is layer N + 1, and a negative N is layer 0 with `Placed.below`.
     fn zIndex(l: *Lowerer, v: Value, raised: bool) ?u8 {
         if (v.end - v.first == 1 and values.isIdent(l.c, v.first, "auto")) return @intFromBool(raised);
         const ty = l.c.toks.items(.type)[v.first];
@@ -1764,8 +1807,12 @@ pub const Lowerer = struct {
             return null;
         }
         if (x < 0) {
-            l.ds.err(v.loc, "a negative z-index is not supported; raise the boxes in front instead", .{});
-            return null;
+            if (x < -32768) {
+                l.badValue(v.first, .@"z-index", v.end);
+                return null;
+            }
+            l.placed.below = @intFromFloat(x);
+            return 0;
         }
         if (x > 254) {
             l.ds.err(v.loc, "z-index above 254 is not supported (one byte of stacking layers)", .{});
@@ -2263,6 +2310,7 @@ pub const Lowerer = struct {
             if (w != none and nodes.items(.parent)[w] != none and nodes.items(.placed)[w].grid == null and nodes.items(.placed)[nodes.items(.parent)[w]].grid != null and std.meta.eql(nodes.items(.loc)[w], nodes.items(.loc)[i])) i = w;
             const p = nodes.items(.parent)[i];
             if (p != none and nodes.items(.placed)[p].grid != null) {
+                if (nodes.items(.placed)[i].below < 0) l.ds.err(l.loc(n), "a negative z-index on a grid item is not supported: it would change the auto-placement order", .{});
                 if (l.gridItem(n, p)) |it| nodes.items(.placed)[i].cell = it;
                 if (l.doc.isElement(n, "caption")) if (l.slots.get(n)) |slot| {
                     nodes.items(.placed)[i].cell = slot;

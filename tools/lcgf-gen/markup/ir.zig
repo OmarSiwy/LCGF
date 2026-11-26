@@ -170,7 +170,9 @@ pub const Part = union(enum) {
 };
 
 /// Engine spec F7 and F17: grid tracks and cells, `right`/`bottom` insets and `position: fixed` (`spec.anchored`), the top
-/// inset of `position: sticky` (`spec.sticky`), and `z-index` (`spec.layer`).
+/// inset of `position: sticky` (`spec.sticky`), and `z-index` (`spec.layer`). `below` is a
+/// negative z-index on a floating box: it is moved before its siblings, so it paints below them
+/// and above its parent's background (`Lowerer.stackBelow`).
 pub const Placed = struct {
     /// F7: the tracks of a `display: grid` container, and where a grid's child sits
     /// (`grid-column`, `grid-row`, `grid-area`; null for the next free cell).
@@ -179,6 +181,7 @@ pub const Placed = struct {
     anchor: ?lcgf.overlay.Place = null,
     sticky: ?f32 = null,
     layer: u8 = 0,
+    below: i16 = 0,
 };
 
 /// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as

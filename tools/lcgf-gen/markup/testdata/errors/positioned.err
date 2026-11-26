@@ -1,5 +1,5 @@
-positioned.html:3:32: error: a negative z-index is not supported; raise the boxes in front instead
-  .under { position: absolute; z-index: -1; }
+positioned.html:3:32: error: a negative z-index is lowered on absolute and fixed boxes only
+  .under { position: relative; z-index: -1; }
                                ^
 positioned.html:4:11: error: z-index applies to a positioned box (position: relative, absolute, fixed or sticky)
   .flat { z-index: 4; }

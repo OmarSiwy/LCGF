@@ -311,7 +311,9 @@ wide as the parent (`top`/`bottom` alike). `fixed` anchors the box to the viewpo
 with `top` holds the box that far below the top of the viewport (`spec.sticky`); scroll
 containers are not lowered yet. Fixed and sticky boxes paint above the in-flow ones, and
 `z-index` N from 0 to 254 on a positioned box paints it and its subtree above that, in layer
-N + 1 (`spec.layer`); absolute and relative boxes with `z-index: auto` keep tree order. Clicks
+N + 1 (`spec.layer`); absolute and relative boxes with `z-index: auto` keep tree order. A negative `z-index` on an
+absolute or fixed box paints it below its siblings and above its parent's background, as if the
+parent were the stacking context. Clicks
 go to the widget painted on top.
 
 A `<table>` is a grid of `fit` columns, one per cell of its widest row. Each `<tr>` is a row

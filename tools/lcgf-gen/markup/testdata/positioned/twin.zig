@@ -18,6 +18,8 @@ fn floating(comptime text: []const u8, comptime style: lcgf.types.Style) s.Spec 
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     s.col(.{ .size = .{ .px(200), .px(120) }, .pad = @splat(6), .fill = .rgb(0x30, 0x34, 0x40) }, .{
+        // z-index: -1 on a floating box: before its siblings, so below them.
+        s.col(.{ .size = .{ .px(40), .px(20) }, .float = true, .offset = .{ 2, 2 }, .fill = .rgb(0x40, 0x50, 0x80) }, .{}),
         // position: relative; right: 5px; bottom: 2px.
         s.styled(label.ct.label(theme, "Title"), .{ .transform = .{ 1, 0, 0, 1, -5, -2 }, .role = .label }),
         // inset 0: as large as the parent's content box.
