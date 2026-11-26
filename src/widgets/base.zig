@@ -510,91 +510,108 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         /// Optional caller-owned direction rows and device grid, sequenced at the same
         /// points as style.locale.end. Tree/keyboard/semantic order is never reversed.
         pub fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.zig").Presentation) @import("../style/locale.zig").LayoutError!Output {
+            return ui.frameAs(false, in, settings, presentation);
+        }
+
+        /// Builds, lays out and paints the frame again from the state as it is now, applying no
+        /// input: for a caller that changed what the layout reads after `frame` (a fit region's
+        /// kept size, `ct_interop.setFit`), so the frame shows it without waiting for the next.
+        /// The event of the frame stays `frame`'s; this one reports none.
+        pub fn rebuild(ui: *Self, in: *const Input) Output {
+            return ui.frameAs(true, in, &ui.frame_settings, .{}) catch unreachable;
+        }
+
+        inline fn frameAs(ui: *Self, comptime replay: bool, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.zig").Presentation) @import("../style/locale.zig").LayoutError!Output {
             try presentation.rounding.validate();
             if (presentation.directions) |directions| try @import("../style/locale.zig").validateDirections(directions, rows);
-            const active = if (dynamic) Regions.mask(Regions.select(State, &ui.signals.state)) else {};
-            if (dynamic and E.widget_count > 0) {
-                for (E.widget_nodes, 0..) |row, slot| if (active[row] == 0) {
-                    for (&ui.rects.c) |*side| side[slot] = 0;
+            var event: ?E.Event = null;
+            var next_input_mask = if (comptime has_input_availability) ui.previous_input_mask else {};
+            _ = .{ &event, &next_input_mask }; // set only when the frame applies input
+            if (!replay) {
+                const active = if (dynamic) Regions.mask(Regions.select(State, &ui.signals.state)) else {};
+                if (dynamic and E.widget_count > 0) {
+                    for (E.widget_nodes, 0..) |row, slot| if (active[row] == 0) {
+                        for (&ui.rects.c) |*side| side[slot] = 0;
+                    };
+                    if (ui.focus) |w| if (active[@backingInt(w)] == 0) {
+                        ui.focus = null;
+                    };
+                    if (ui.pointer.pressed) |w| if (active[@backingInt(w)] == 0) {
+                        ui.pointer.pressed = null;
+                    };
+                }
+                const press = in.buttons.left and !ui.pointer.down;
+                ui.frame_settings = settings.*;
+                ui.failure = null;
+                ui.platform_cursor = .arrow;
+                ui.cursor_set = false;
+                var key = false;
+                for (in.events) |e| key = key or e.kind == .press;
+                ui.focus_visible = ((ui.focus_visible or key) and !press) or settings.always_show_focus;
+                _ = ui.refreshInputAvailability(in);
+                event = if (comptime has_input_availability)
+                    E.pointerEnabled(&ui.pointer, &ui.rects, &ui.input_mask, in)
+                else
+                    E.pointer(&ui.pointer, &ui.rects, in);
+                if (press) ui.focus = ui.pointer.pressed;
+                // Tab and Shift+Tab, as `Context.begin` moves `Interaction.focus`.
+                if (dynamic and E.focus_order.len > 0) {
+                    for (in.events) |e| {
+                        if (e.code != (focus.Keymap{}).tab or (e.kind != .press and e.kind != .repeat)) continue;
+                        var w = ui.focus;
+                        ui.focus = null;
+                        for (0..E.focus_order.len) |_| {
+                            w = E.nextFocus(w, e.mods.shift);
+                            if (active[@backingInt(w.?)] != 0 and (comptime !has_input_availability or ui.input_mask.allows(w.?))) {
+                                ui.focus = w;
+                                break;
+                            }
+                        }
+                    }
+                } else if (comptime has_input_availability)
+                    E.focusKeysEnabled(&ui.focus, in, (focus.Keymap{}).tab, &ui.input_mask)
+                else
+                    E.focusKeys(&ui.focus, in, (focus.Keymap{}).tab);
+                if (event) |e| switch (e) {
+                    inline else => |payload, tag| {
+                        const k = comptime E.slot(tag);
+                        const n = comptime nodeAt(spec, E.widget_nodes[k]);
+                        switch (comptime E.widget_kinds[k]) {
+                            .checkbox => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
+                            .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
+                            .label, .col, .row => {},
+                        }
+                    },
                 };
-                if (ui.focus) |w| if (active[@backingInt(w)] == 0) {
-                    ui.focus = null;
-                };
-                if (ui.pointer.pressed) |w| if (active[@backingInt(w)] == 0) {
-                    ui.pointer.pressed = null;
-                };
-            }
-            const press = in.buttons.left and !ui.pointer.down;
-            ui.frame_settings = settings.*;
-            ui.failure = null;
-            ui.platform_cursor = .arrow;
-            ui.cursor_set = false;
-            var key = false;
-            for (in.events) |e| key = key or e.kind == .press;
-            ui.focus_visible = ((ui.focus_visible or key) and !press) or settings.always_show_focus;
-            _ = ui.refreshInputAvailability(in);
-            var event = if (comptime has_input_availability)
-                E.pointerEnabled(&ui.pointer, &ui.rects, &ui.input_mask, in)
-            else
-                E.pointer(&ui.pointer, &ui.rects, in);
-            if (press) ui.focus = ui.pointer.pressed;
-            // Tab and Shift+Tab, as `Context.begin` moves `Interaction.focus`.
-            if (dynamic and E.focus_order.len > 0) {
-                for (in.events) |e| {
-                    if (e.code != (focus.Keymap{}).tab or (e.kind != .press and e.kind != .repeat)) continue;
-                    var w = ui.focus;
-                    ui.focus = null;
-                    for (0..E.focus_order.len) |_| {
-                        w = E.nextFocus(w, e.mods.shift);
-                        if (active[@backingInt(w.?)] != 0 and (comptime !has_input_availability or ui.input_mask.allows(w.?))) {
-                            ui.focus = w;
-                            break;
+                // Custom widgets (`Spec.widget`) apply this frame's input to their state.
+                inline for (comptime customRows(spec)) |row| {
+                    const W_ = comptime nodeAt(spec, row).widget.?;
+                    // A step may return an event of its own (a key that activates the widget),
+                    // which the frame reports when the pointer made none.
+                    if (comptime @hasDecl(W_, "step")) {
+                        // `steps_hidden`: a widget whose own region hides it (a tooltip's bubble)
+                        // still steps, to decide when to show; it reads only other rows.
+                        const hidden_ok = comptime @hasDecl(W_, "steps_hidden") and W_.steps_hidden;
+                        if (!dynamic or hidden_ok or (active[row] != 0 and (!ui.built or ui.tree_rows[row] != types.none))) {
+                            const got = W_.step(ui, row, event, in);
+                            if (@TypeOf(got) == ?E.Event) {
+                                const accepted = if (comptime has_input_availability) ui.allowedEvent(got) else got;
+                                event = event orelse accepted;
+                            }
                         }
                     }
                 }
-            } else if (comptime has_input_availability)
-                E.focusKeysEnabled(&ui.focus, in, (focus.Keymap{}).tab, &ui.input_mask)
-            else
-                E.focusKeys(&ui.focus, in, (focus.Keymap{}).tab);
-            if (event) |e| switch (e) {
-                inline else => |payload, tag| {
-                    const k = comptime E.slot(tag);
-                    const n = comptime nodeAt(spec, E.widget_nodes[k]);
-                    switch (comptime E.widget_kinds[k]) {
-                        .checkbox => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
-                        .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
-                        .label, .col, .row => {},
-                    }
-                },
-            };
-            // Custom widgets (`Spec.widget`) apply this frame's input to their state.
-            inline for (comptime customRows(spec)) |row| {
-                const W_ = comptime nodeAt(spec, row).widget.?;
-                // A step may return an event of its own (a key that activates the widget),
-                // which the frame reports when the pointer made none.
-                if (comptime @hasDecl(W_, "step")) {
-                    // `steps_hidden`: a widget whose own region hides it (a tooltip's bubble)
-                    // still steps, to decide when to show; it reads only other rows.
-                    const hidden_ok = comptime @hasDecl(W_, "steps_hidden") and W_.steps_hidden;
-                    if (!dynamic or hidden_ok or (active[row] != 0 and (!ui.built or ui.tree_rows[row] != types.none))) {
-                        const got = W_.step(ui, row, event, in);
-                        if (@TypeOf(got) == ?E.Event) {
-                            const accepted = if (comptime has_input_availability) ui.allowedEvent(got) else got;
-                            event = event orelse accepted;
-                        }
-                    }
+                // A step may have disabled another control. Update hover/focus for the build
+                // without retroactively canceling an activation that legitimately caused it.
+                next_input_mask = ui.refreshInputAvailability(in);
+                if (comptime has_input_availability) {
+                    if (ui.focus) |target| if (!ui.input_mask.allows(target)) {
+                        ui.focus = null;
+                    };
                 }
-            }
-            // A step may have disabled another control. Update hover/focus for the build
-            // without retroactively canceling an activation that legitimately caused it.
-            const next_input_mask = ui.refreshInputAvailability(in);
-            if (comptime has_input_availability) {
-                if (ui.focus) |target| if (!ui.input_mask.allows(target)) {
-                    ui.focus = null;
-                };
-            }
 
-            ui.springs.frame(&ui.signals.state, in.dt, !ui.built, settings.reduced_motion);
+                ui.springs.frame(&ui.signals.state, in.dt, !ui.built, settings.reduced_motion);
+            }
             ui.build_hit = ui.hitAt(in);
             ui.building = true;
             defer ui.building = false;

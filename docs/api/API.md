@@ -3886,6 +3886,7 @@ Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rec
 - `fn frame(ui: *Self, in: *const Input) Output`: Steps input against last frame's rects, applies each widget's behaviour to the state, then builds, lays out and paints the frame.
 - `fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output`: Uses the same accessibility settings as the runtime context.
 - `fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.…`: Optional caller-owned direction rows and device grid, sequenced at the same points as style.locale.end.
+- `fn rebuild(ui: *Self, in: *const Input) Output`: Builds, lays out and paints the frame again from the state as it is now, applying no input: for a caller that changed what the layout reads after `frame` (a fit region's kept size, `ct_interop.setFit`), so the frame shows it without waiting for the next.
 - `fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`: Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
 - `fn semantics(ui: *Self, s: *a11y.Semantics) void`: Names each live node of this frame that has an accessible name (`Spec.name`, set with `spec.named`) in `s` (`Semantics.label`), its bytes added to this frame's strings.
 - `fn keep(ui: *Self, comptime W: type) *[4]f32`: Hover and held for the widget at spec row `row`, as `Interaction.response` reports them: while a widget is held, only it shows hover.
@@ -8276,7 +8277,7 @@ Interop between the two front ends (tier 1): a runtime `Frame` inside a region o
 ### Top level
 
 - `fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region: an empty column named `id` whose content another front end builds.
-- `fn fitRegion(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region sized by its content (markup E1): on each axis whose `style` size is `fit`, it takes the size its owner measured last (`setFit`), so the comptime layout, which runs before the content exists, gives it the room the content took one frame earlier.
+- `fn fitRegion(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region sized by its content (markup E1): on each axis whose `style` size is `fit`, it takes the size its owner measured last (`setFit`).
 - `fn FitRegion(comptime name: [:0]const u8) type`: The `Spec.widget` of a `fitRegion` named `name`.
 - `fn setFit(ui: anytype, comptime id: @EnumLiteral(), size: [2]f32) bool`: Records the content size `size` of the `fitRegion` named `id` in comptime UI `ui`, for its next frame.
 - `fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec`: A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.

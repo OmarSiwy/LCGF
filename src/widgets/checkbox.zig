@@ -481,3 +481,33 @@ test "checkboxFace: restyled as spec.styled restyles ct.checkbox, in both front 
     }
     try testing.expectEqual(1, S.h.app.clicks);
 }
+
+test "ComptimeUi.rebuild: the same frame laid out again from the state, applying no input again" {
+    const interop = @import("../comptime/interop.zig");
+    const fit_page = comptime spec_zig.col(.{}, .{
+        interop.fitRegion(.menu, .{ .size = .{ .fit, .px(20) } }),
+        ct.checkbox(.default, .on, .on, "On"),
+    });
+    const S = struct {
+        var ui: base.ComptimeUi(struct { on: bool = false }, fit_page, .default) = .{};
+    };
+    var in: Input = .{};
+    const at = S.ui.frame(&in).tree.rect(3);
+    // A click on the checkbox: pressed, then released over it.
+    in.pointer = .{ (at.x0 + at.x1) / 2, (at.y0 + at.y1) / 2 };
+    in.buttons.left = true;
+    _ = S.ui.frame(&in);
+    in.buttons.left = false;
+    _ = S.ui.frame(&in);
+    try testing.expect(S.ui.signals.state.on);
+    // The region's owner measures its content after the frame and lays the page out again.
+    try testing.expect(interop.setFit(&S.ui, .menu, .{ 50, 30 }));
+    const again = S.ui.rebuild(&in);
+    try testing.expectEqual(50, again.tree.rect(2).x1 - again.tree.rect(2).x0);
+    // The rebuild applies the frame's input no second time: the click toggled once.
+    try testing.expect(S.ui.signals.state.on);
+    try testing.expectEqual(null, again.event);
+    // The next frame lays the region out as the rebuild did.
+    const next = S.ui.frame(&in).tree;
+    try testing.expectEqual(50, next.rect(2).x1 - next.rect(2).x0);
+}
