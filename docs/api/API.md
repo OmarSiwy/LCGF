@@ -8485,6 +8485,7 @@ The parts of `Style` a spec sets; defaults are `Style`'s.
 
 Fields: `size`, `min`, `max`, `pad`, `gap`, `main`, `cross`, `shrink`, `clip`, `fill`, `border_color`, `border`, `radius`, `opacity`, `fill_bind`, `border_bind`
 
+- `fn style(z: ZStyle, th: *const Theme, dir: types.Axis) Style`
 
 ### `ZNode` (union)
 

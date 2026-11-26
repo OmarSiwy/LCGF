@@ -95,7 +95,7 @@ pub const ZStyle = struct {
     fill_bind: ?[]const u8 = null,
     border_bind: ?[]const u8 = null,
 
-    fn style(z: ZStyle, th: *const Theme, dir: types.Axis) Style {
+    pub fn style(z: ZStyle, th: *const Theme, dir: types.Axis) Style {
         var s: Style = .{
             .dir = dir,
             .min = z.min,

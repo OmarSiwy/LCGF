@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<body>
+  <main>
+    <h1>Title</h1>
+    <input type="text" bind:value="name">
+    <span style="color: red">Red</span>
+    <input type="range" bind:value="level" min="0" max="10">
+    <template lcgf-if="open"><div><span>A</span></div></template>
+    <template lcgf-else><div><span>B</span></div></template>
+  </main>
+</body>
+</html>

@@ -28,6 +28,7 @@
 //! An HTML page and its CSS: a generated UI module (markup/main.zig, docs/guide/markup.md).
 //!
 //!   lcgf-gen <page.html> [--css <extra.css>]... --lang zig -o <page_ui.zig> [--depfile <d>]
+//!   lcgf-gen <page.html> --lang zon|cpp|rust|words [-o <out>] [--depfile <d>]   (seam subset)
 //!   lcgf-gen --mappings    (the HTML/CSS mapping manifest as TSV)
 //!
 
@@ -52,7 +53,7 @@ pub fn main(init: std.process.Init) !void {
         _ = all.next();
         var list: std.ArrayList([]const u8) = .empty;
         while (all.next()) |a| try list.append(arena, a);
-        if (markup.wants(list.items)) std.process.exit(try markup.main(io, arena, list.items));
+        if (markup.wants(list.items)) std.process.exit(try markup.main(io, arena, list.items, tablesOf));
     }
     var args = try init.minimal.args.iterateAllocator(arena);
     _ = args.next();
@@ -187,24 +188,8 @@ pub fn main(init: std.process.Init) !void {
     } else {
         const path = input orelse return usage();
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20));
-        const src = try arena.dupeSentinel(u8, bytes, 0);
-        const x = zon.read(init.gpa, arena, src, path) catch |e| switch (e) {
-            error.ParseZon, error.UnknownField, error.FieldWithoutType => std.process.exit(1),
-            else => return e,
-        };
-        const words = zon.tables(arena, &x) catch |e| {
-            std.log.err("{s}: {s}", .{ path, @errorName(e) });
-            std.process.exit(1);
-        };
-        const ui_bytes = seam.Ui.bytes(words) catch unreachable;
-        const g: Gen = .{ .arena = arena, .out = &out, .x = &x, .words = words, .bytes = ui_bytes, .source = path };
-        switch (lang) {
-            .cpp => try g.cpp(),
-            .rust => try g.rust(),
-            .c, .zig => return usage(),
-            .words => try out.appendSlice(arena, std.mem.sliceAsBytes(words)),
-            .zon => try out.appendSlice(arena, bytes),
-        }
+        if (lang == .c or lang == .zig) return usage();
+        try out.appendSlice(arena, tablesOf(arena, @tagName(lang), try arena.dupeSentinel(u8, bytes, 0), path) orelse std.process.exit(1));
     }
     if (out_path) |p| {
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = p, .data = out.items });
@@ -214,6 +199,33 @@ pub fn main(init: std.process.Init) !void {
         try w.interface.writeAll(out.items);
         try w.interface.flush();
     }
+}
+
+/// A `.zon` spec (`src`, read from `path`) as `lang`'s widget tables: `cpp`, `rust`, `words`, or
+/// `zon` (echoed). Null after logging what is wrong. The markup front end calls it too.
+fn tablesOf(arena: std.mem.Allocator, lang_name: []const u8, src: [:0]const u8, path: []const u8) ?[]const u8 {
+    return tablesOrError(arena, lang_name, src, path) catch |e| {
+        std.log.err("{s}: {s}", .{ path, @errorName(e) });
+        return null;
+    };
+}
+
+fn tablesOrError(arena: std.mem.Allocator, lang_name: []const u8, src: [:0]const u8, path: []const u8) !?[]const u8 {
+    const x = zon.read(arena, arena, src, path) catch |e| switch (e) {
+        error.ParseZon, error.UnknownField, error.FieldWithoutType => return null,
+        else => return e,
+    };
+    const words = try zon.tables(arena, &x);
+    var out: std.ArrayList(u8) = .empty;
+    const g: Gen = .{ .arena = arena, .out = &out, .x = &x, .words = words, .bytes = seam.Ui.bytes(words) catch unreachable, .source = path };
+    switch (std.meta.stringToEnum(Lang, lang_name).?) {
+        .cpp => try g.cpp(),
+        .rust => try g.rust(),
+        .words => try out.appendSlice(arena, std.mem.sliceAsBytes(words)),
+        .zon => try out.appendSlice(arena, src),
+        .c, .zig => unreachable,
+    }
+    return out.items;
 }
 
 fn usage() void {

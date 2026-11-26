@@ -2,6 +2,7 @@
 //!
 //!   lcgf-gen page.html [--css extra.css]... --lang zig -o OUT [--depfile OUT.d]
 //!            [--check VENDORED] [--explain] [--no-warnings]
+//!   lcgf-gen page.html --lang zon|cpp|rust|words ...   (the page in the seam's subset, to_zon.zig)
 //!   lcgf-gen --mappings        (the manifest as TSV)
 //!
 //! On any error nothing is written: the messages go to stderr in GNU format and the exit code
@@ -17,6 +18,11 @@ const cascade = @import("cascade.zig");
 const lower = @import("lower.zig");
 const manifest = @import("manifest.zig");
 const emit_zig = @import("emit_zig.zig");
+const to_zon = @import("to_zon.zig");
+
+/// lcgf-gen's table emitters (tools/lcgf-gen/main.zig): `.zon` text in, the `lang` output out,
+/// or null after logging the error.
+pub const Tables = *const fn (arena: std.mem.Allocator, lang: []const u8, zon: [:0]const u8, path: []const u8) ?[]const u8;
 
 const ua_css = @embedFile("ua.css");
 
@@ -41,7 +47,7 @@ pub fn wants(args: []const []const u8) bool {
     return false;
 }
 
-pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8) !u8 {
+pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8, tables: Tables) !u8 {
     var o: Options = .{};
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -64,10 +70,11 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8) !u8 
             o.check = value(args, &i) orelse return usage();
         } else if (std.mem.eql(u8, a, "--frontend")) {
             const f = value(args, &i) orelse return usage();
-            o.frontend = std.meta.stringToEnum(Frontend, f) orelse {
-                std.log.err("--frontend {s}: the Zig emitter has the spec and runtime frontends (tables and static are C++/Rust, M6)", .{f});
+            o.frontend = std.meta.stringToEnum(Frontend, f) orelse .zon;
+            if (o.frontend == .zon) {
+                std.log.err("--frontend {s}: the Zig emitter has the spec and runtime frontends (--lang cpp|rust take the seam's tables)", .{f});
                 return 2;
-            };
+            }
         } else if (std.mem.startsWith(u8, a, "--runtime-vars=")) {
             o.runtime_vars = a["--runtime-vars=".len..];
         } else if (std.mem.eql(u8, a, "--mappings")) {
@@ -87,19 +94,19 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8) !u8 
         try stdout.interface.flush();
         return 0;
     }
-    if (!std.mem.eql(u8, o.lang, "zig")) {
-        std.log.err("--lang {s}: the C++ and Rust emitters wait for the C ABI (docs/plans/markup-compiler.md M6/M7)", .{o.lang});
-        return 2;
-    }
+    const zig = std.mem.eql(u8, o.lang, "zig");
+    if (!zig and std.meta.stringToEnum(enum { zon, cpp, rust, words }, o.lang) == null) return usage();
     const path = o.html orelse return usage();
     var ds: diag.Diags = .{ .arena = arena, .warnings = o.warnings };
     var deps: std.ArrayList([]const u8) = .empty;
-    const result = compile(io, arena, &ds, &deps, path, o.css.items, o.explain, o.frontend, o.runtime_vars);
+    const result = compile(io, arena, &ds, &deps, path, o.css.items, o.explain, if (zig) o.frontend else .zon, o.runtime_vars);
     var stderr_buf: [4096]u8 = undefined;
     var stderr = std.Io.File.stderr().writer(io, &stderr_buf);
     try ds.render(&stderr.interface);
     try stderr.interface.flush();
-    const text = result orelse return 1;
+    var text = result orelse return 1;
+    // C++, Rust and the raw words: the ZON through the table emitters, as a `.zon` input is.
+    if (!zig and !std.mem.eql(u8, o.lang, "zon")) text = tables(arena, o.lang, try arena.dupeSentinel(u8, text, 0), path) orelse return 1;
     if (o.check) |vendored| {
         const have = std.Io.Dir.cwd().readFileAlloc(io, vendored, arena, .limited(16 << 20)) catch "";
         if (!std.mem.eql(u8, have, text)) {
@@ -132,7 +139,7 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8) !u8 
 }
 
 fn usage() u8 {
-    std.log.err("usage: lcgf-gen page.html [--css extra.css]... --lang zig -o OUT [--depfile OUT.d] [--check VENDORED]  |  lcgf-gen --mappings", .{});
+    std.log.err("usage: lcgf-gen page.html [--css extra.css]... --lang zig|zon|cpp|rust|words -o OUT [--depfile OUT.d] [--check VENDORED]  |  lcgf-gen --mappings", .{});
     return 2;
 }
 
@@ -273,7 +280,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     }
     const runtime = switch (frontend) {
         .runtime => true,
-        .spec => false,
+        .spec, .zon => false,
         .auto => l.page.runtime,
     };
     if (runtime) l.checkRuntime();
@@ -281,6 +288,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     loadAssets(io, arena, ds, deps, &l.page);
     if (explain) ds.note(.{ .file = file, .off = 0 }, "{s}", .{if (runtime) "runtime frontend: the page is a build(ui, frame) of Frame and widget calls" else "spec frontend: every construct on this page lowers to a comptime Spec"});
     if (ds.errors > 0) return null;
+    if (frontend == .zon) return to_zon.text(arena, to_zon.lower(arena, ds, &l.page) orelse return null);
     var e: emit_zig.Emit = .{ .arena = arena, .ds = ds, .page = &l.page, .runtime = runtime };
     // The output is formatted as `zig fmt` would, so it reads like code written by hand.
     const raw = arena.dupeSentinel(u8, e.file(path), 0) catch @panic("out of memory");
@@ -411,7 +419,8 @@ fn svgSize(bytes: []const u8) ?[2]f32 {
 }
 
 /// Which lowering `--frontend` asks for; `auto` takes the page's `lcgf-frontend`, else spec.
-pub const Frontend = enum { auto, spec, runtime };
+/// `zon` is the seam's spec language (`--lang zon|cpp|rust|words`).
+pub const Frontend = enum { auto, spec, runtime, zon };
 
 fn dash(comptime f: []const u8) []const u8 {
     comptime {

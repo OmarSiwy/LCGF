@@ -185,7 +185,7 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
             const expected = d.readFileAlloc(io, b.fmt("{s}.err", .{stem}), b.allocator, .limited(1 << 16)) catch std.debug.panic("{s}/{s}.err is missing", .{ sub, stem });
             const run = b.addRunArtifact(gen);
             run.setCwd(b.path(sub));
-            run.addArgs(&.{ entry.name, "--no-warnings", "--lang", "zig" });
+            run.addArgs(&.{ entry.name, "--no-warnings", "--lang", if (std.mem.startsWith(u8, stem, "zon-")) "zon" else "zig" });
             run.expectExitCode(1);
             run.expectStdErrEqual(expected);
             run.addFileInput(b.path(b.fmt("{s}/{s}", .{ sub, entry.name })));
@@ -268,4 +268,17 @@ pub fn addPage(b: *Build, gen: *Build.Step.Compile, lcgf: *Build.Module, o: Opti
     m.addImport("lcgf", lcgf);
     if (o.app) |a| m.addImport("app", a);
     return m;
+}
+
+/// `html` in the C seam's spec language (`lcgf-gen --lang zon`), the `.zon` C++ and Rust build
+/// their tables from; for a Zig check that runs the page through the seam.
+pub fn addSeamSpec(b: *Build, gen: *Build.Step.Compile, html: Build.LazyPath) Build.LazyPath {
+    const stem = std.fs.path.stem(html.getDisplayName());
+    const run = b.addRunArtifact(gen);
+    run.addFileArg(html);
+    run.addArgs(&.{ "--lang", "zon", "-o" });
+    const out = run.addOutputFileArg(b.fmt("{s}.zon", .{stem}));
+    run.addArg("--depfile");
+    _ = run.addDepFileOutputArg(b.fmt("{s}.zon.d", .{stem}));
+    return out;
 }
