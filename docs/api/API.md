@@ -242,6 +242,7 @@ One node's row as `Tree.push` writes it, computed from a `Style`: sizing modes a
 
 Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`, `transform_origin`, `paint_reference`, `paint_outset`, `prepared_texture`, `paint_revision`, `participation`, `cursor`
 
+- `collapsed = .{ "min", "max", "grow", "pct", "pad_lo", "pad_hi", "flow", "gap" }`: The layout inputs a collapsed node (`Participation.layout` off) has zeroed: `pct` to -1, the others to 0 (`Tree.pushRow`; tools/abi-gen writes the bindings' copy from it).
 - `fn from(s: *const Style) Template`
 
 ### `FlatRow` (struct)
@@ -1122,7 +1123,11 @@ The measure / wrap protocol: how text extents reach layout.
 
 ### Top level
 
-- `Span = struct { start: u32, style: types.TextStyle }`: One style run of a paragraph: from byte `start` of its text on (to the next span's start), `style`'s size, colour and font instead of the run's.
+- `Span = struct { start: u32, style: types.TextStyle, decoration: Decoration = .{} }`: One style run of a paragraph: from byte `start` of its text on (to the next span's start), `style`'s size, colour and font instead of the run's.
+- `Features = struct { spans: bool = true, decorations: bool = true }`: Which inputs a `MonoParagraphsOf` reads.
+- `MonoParagraphs = MonoParagraphsOf(.{})`: `MonoParagraphsOf` with every input.
+- `fn insertAfter(d: *DrawList, j: u32, first: u32) u32`: Puts quads `first..d.quad_len` (just appended after `paint.emit`) right after op `j`, the text op of their run: their ops after it, and the quads themselves moved to where the next quad op's quads begin, so every run of consecutive quad ops still names consecutive quads (`paint.encode` merges them).
+- `fn MonoParagraphsOf(comptime with: Features) type`: `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
 - `fn StaticAtlas(comptime strings: []const []const u8) type`: Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
 
 ### `Mono` (struct)
@@ -1137,15 +1142,22 @@ Fields: `advance`, `line`
 - `fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: The same metrics and geometry, with UVs from a static atlas subset.
 - `fn quadsForCommands(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: Expands only runs referenced by text commands.
 
-### `MonoParagraphs` (struct)
+### `Styled` (struct)
+Styled runs of a frame, for any font: run `rows[i]` of `Texts` takes `table[styles[i]]`, and `decorations` and `spans`, when not empty, have one row per `table` row.
+
+Fields: `rows`, `styles`, `table`, `decorations`, `spans`
+
+
+### `MonoParagraphsOf(..)` (generic struct)
 `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
 
 Fields: `mono`, `rows`, `styles`, `table`, `decorations`, `spans`, `strings`
 
-- `fn measure(p: MonoParagraphs, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
-- `fn wrap(p: MonoParagraphs, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
-- `fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them, each glyph in its span's size and colour.
-- `fn decorate(p: MonoParagraphs, d: *DrawList) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
+- `fn measure(p: Self, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
+- `fn wrap(p: Self, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
+- `fn quads(p: Self, d: *const DrawList, tx: *const Texts, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them (from the frame's `tx`: each run's wrap flag and width), each glyph in its span's size and colour.
+- `fn decorate(p: Self, d: *DrawList, tx: *const Texts) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
+- `fn styled(p: Self) Styled`: The styled runs this font measures, for a real shaper (`text_stack.Stack.style`).
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -3610,14 +3622,14 @@ Fields: `ctx`, `in`
 - `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
 - `fn endFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) Output`: `endFlex` with the flex features of `opts` compiled in (`FlexOptions`), over `font` or a `paragraphs` font.
 - `fn layoutFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) void`: The layout half of `endFlexOpts`.
-- `fn endParagraphs(f: *Frame, font: MonoParagraphs) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (`protocol.MonoParagraphs`; its `strings` are set to this frame's).
-- `fn layoutParagraphs(f: *Frame, font: MonoParagraphs) void`: The layout half of `endParagraphs`.
-- `fn endFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
-- `fn layoutFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
-- `fn finishParagraphs(f: *Frame, font: MonoParagraphs) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
+- `fn endParagraphs(f: *Frame, font: anytype) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (a `protocol.MonoParagraphsOf`, such as `MonoParagraphs`; its `strings` are set to this frame's).
+- `fn layoutParagraphs(f: *Frame, font: anytype) void`: The layout half of `endParagraphs`.
+- `fn endFlexParagraphs(f: *Frame, font: anytype, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
+- `fn layoutFlexParagraphs(f: *Frame, font: anytype, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
+- `fn finishParagraphs(f: *Frame, font: anytype) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
 - `fn endSides(f: *Frame, font: anytype, sides: Sides) Output`: `end` with the side tables in `sides`.
 - `fn layoutSides(f: *Frame, font: anytype, sides: Sides) void`: The layout half of `endSides`: `grid.run`'s passes when there are grids, else `layout.run`'s (with flex rules, `runFlex`'s), with the font's measure and wrap; then the anchors and the sticky nodes.
-- `fn finishSides(f: *Frame, font: anytype, sides: Sides) Output`: The paint half of `endSides`: in layer order when `sides.layers` is given, then a `MonoParagraphs` font's decorations.
+- `fn finishSides(f: *Frame, font: anytype, sides: Sides) Output`: The paint half of `endSides`: in layer order when `sides.layers` is given, then a `protocol.MonoParagraphsOf` font's decorations.
 - `fn endGrid(f: *Frame, font: Mono, gs: *grid.Grids) Output`: `endSides` with grids only.
 - `fn layoutGrid(f: *Frame, font: Mono, gs: *grid.Grids) void`: `layoutSides` with grids only.
 - `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
@@ -3625,7 +3637,8 @@ Fields: `ctx`, `in`
 - `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.
 - `fn finalizeLayout(f: *Frame, options: rounding.Options) error{InvalidScale}!void`: Apply layout transitions after all placement passes, then snap, transform and clip.
 - `fn endText(f: *Frame, stack: *TextStack, ascent: []f32) Output`: Font-backed counterpart of `end`.
-- `fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and arrangement only, the public half of endText.
+- `fn endTextStyled(f: *Frame, stack: *TextStack, ascent: []f32, s: protocol.Styled, rows: text_stack.StyledRows, rects: []types.Rect) Output`: Font-backed measurement and arrangement only, the public half of endText.
+- `fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void`
 - `fn endTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!Output`
 - `fn layoutTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and placement before caller passes and finalizeLayout.
@@ -3766,11 +3779,19 @@ Optional rich paragraph row.
 Fields: `spans`, `metrics`, `normalized_spans`
 
 
+### `StyledRows` (struct)
+Caller-owned rows for `Stack.style`: a paragraph and a rich row per text, spans for the styled runs that have them (their span columns: every span plus one per run), and metrics scratch for the longest span list (plus one).
+
+Fields: `paragraphs`, `rich`, `spans`, `start`, `font`, `px`, `color`, `metrics`
+
+
 ### `Stack` (struct)
 Shapers by font index, and scratch for one paragraph.
 
 Fields: `shapers`, `cache`, `font_ids`, `font_generations`, `run`, `g`, `l`, `bidi`, `direction`, `paragraphs`, `default_paragraph`, `normalization`, `fallback`, `rich`, `paint_colors`, `span_px`, `px`, `text`, `normalized`, `ellipsis_glyph`, `ellipsis_font`, `ellipsis_px`, `overflow`
 
+- `fn style(st: *Stack, tx: *const Texts, s: protocol.Styled, rows: StyledRows) error{NoSpace}!void`: Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as `spec.paragraph`, `spec.spans` and the markup lower to): each listed row's paragraph, and for a run with spans a rich row whose first span is the run's own style.
+- `fn decorate(st: *Stack, tx: *const Texts, strings: *const Strings, s: protocol.Styled, d: *DrawList, rects: []Rect) void`: After `paint.emit`: the decorations of `s`'s decorated runs as solid quads right after each run's text (`protocol.insertAfter`), each run laid out again as drawn (`paragraph`) and decorated by `text_decorations.quads` with its face's metrics.
 - `fn serves(st: *const Stack, tx: *const Texts, k: usize) bool`: Whether this stack measures row `k`.
 - `fn layoutAt(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32) error{NoSpace}!void`: Lays row `k` of `tx` out into the scratch (`g`, `l`), start aligned, broken at `width`: shaped with its font at its size, then `lines.breakLines`, `lines.place` and, with `bidi`, `lines.reorder`.
 - `fn paragraph(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize) error{NoSpace}!void`: Row `k` laid out as `wrap` left it: broken at `avail` when it wraps, else not at all.
@@ -8350,6 +8371,51 @@ The `Spec.widget` of a `fitRegion` named `name`.
 - `custom_slots = 0`: The region's own custom command; no others.
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
+## `lcgf.abi` (src/abi/abi.zig)
+
+The mapping from a Zig function to its C export (docs/plans/bindings-rust.md §6.1), by comptime reflection over its signature.
+
+### Top level
+
+- `fn Handle(comptime T: type) type`: The C form of a pointer to a handle type `T` (a `*Frame`): an opaque type, cast back.
+- `fn Words(comptime T: type) type`: The C form of a struct of no C layout: its words, in `words.put` order.
+- `fn CParams(comptime T: type, comptime handles: anytype) []const type`: The C parameters a Zig parameter of type `T` becomes; `handles` are the types passed as opaque pointers.
+- `fn CResult(comptime T: type) type`: The C result of a Zig result `T`; a slice returns its pointer and writes its length out, and a struct of no C layout writes its words out.
+- `fn cParamsOf(comptime F: type, comptime handles: anytype) []const type`: Every C parameter of `F`'s export, in order: each Zig parameter's, then `*usize` for a slice result's length or `*Words(R)` for a words result.
+- `fn fromC(comptime T: type, comptime handles: anytype, c: anytype, comptime at: usize) T`: Zig parameter `T` from its C arguments, `c[at..]` (`CParams(T)` of them).
+- `fn toC(comptime T: type, v: T) CResult(T)`: Zig result `v` as its C result.
+- `fn Wrap(comptime f: anytype, comptime handles: anytype) type`: The `callconv(.c)` export of `f`: one C function per arity, its arguments handed to `invoke`.
+
+### `Handle(..)` (generic struct)
+The C form of a pointer to a handle type `T` (a `*Frame`): an opaque type, cast back.
+
+
+### `Words(..)` (generic struct)
+The C form of a struct of no C layout: its words, in `words.put` order.
+
+Fields: `w`
+
+- `Zig = T`
+
+### `CResult(..)` (generic struct)
+The C result of a Zig result `T`; a slice returns its pointer and writes its length out, and a struct of no C layout writes its words out.
+
+
+### `Wrap(..)` (generic struct)
+The `callconv(.c)` export of `f`: one C function per arity, its arguments handed to `invoke`.
+
+
+## `lcgf.abi_words` (src/abi/words.zig)
+
+The word codec: a value as u32 words, written field by field in declaration order, and the layout hash over the field lists.
+
+### Top level
+
+- `fn wordsOf(comptime T: type) comptime_int`: Words of a value of `T` written field by field (`put`).
+- `fn put(comptime T: type, v: T, out: []u32) void`: A value as words and back: f32 as its bits, ints, bools and enums as u32, packed structs as their backing integer, arrays and structs element by element.
+- `fn get(comptime T: type, in: []const u32) T`
+- `fn layoutHashOf(comptime list: anytype) u32`: The layout hash of `list`: FNV-1a of the field names and kinds of each type.
+
 ## `lcgf.abi_plan` (src/abi/plan.zig)
 
 plan(): what the widgets' comptime front end (`ComptimeUi`, src/widgets/base.zig) decides while compiling, as a pure function over arrays.
@@ -8366,6 +8432,11 @@ plan(): what the widgets' comptime front end (`ComptimeUi`, src/widgets/base.zig
 - `Op = enum(u8) { container, button, label, checkbox, box, slider, thumb, custom, widget }`: What a row pushes.
 - `Widget = struct { row: u32, kind: Kind, focusable: bool }`
 - `Error = error{ BadTree, BadBind, BadKind, BadRegion, BadSpring }`
+- `wordsOf = codec.wordsOf`
+- `put = codec.put`
+- `get = codec.get`
+- `layoutHashOf = codec.layoutHashOf`
+- `layout_hash: u32 = codec.layoutHashOf(.{ Style, TextStyle, Color, RowWords, Header, Dir })`: The layout hash of the tables: of every type they carry, and of the row encoding.
 - `Dir = extern struct { id: u32, class: u32, words_per_row: u32, offset: u32, len: u32 }`: One entry of the column directory: where a column's words are.
 - `Column = enum(u32) { rows, styles, widgets, fields, springs, theme, formats, segs, text }`
 - `column_count = @typeInfo(Column).@"enum".field_names.len`
@@ -8386,10 +8457,6 @@ plan(): what the widgets' comptime front end (`ComptimeUi`, src/widgets/base.zig
 - `fn PlanOf(comptime spec: Spec) type`: `ComptimeUi(State, spec, th)`'s plan, made while compiling: the rows and styles it pushes, the same `plan` the seam's tables are encoded from.
 - `fn planOf(comptime State: type, comptime spec: Spec, comptime th: Theme) PlanOf(spec)`
 - `fn emit(host: anytype, c: anytype, looks: *const Looks, r: u32, row: Row, style: Style, parent: u32) u32`: Pushes row `r` under tree row `parent` and returns its tree row: the one place a row's op becomes a tree row, for both front ends of the tables (`ComptimeUi.push` and the seam's frame).
-- `fn wordsOf(comptime T: type) comptime_int`: Words of a value of `T` written field by field (`Words.put`).
-- `fn put(comptime T: type, v: T, out: []u32) void`: A value as words and back: f32 as its bits, ints, bools and enums as u32, packed structs as their backing integer, arrays and structs element by element.
-- `fn get(comptime T: type, in: []const u32) T`
-- `fn layoutHashOf(comptime list: anytype) u32`: `layout_hash` over other types: the runtime front end's (src/abi/runtime.zig).
 - `fn encodedWords(n: usize, f: usize, springs: usize, fm: FormatSize) usize`: An upper bound on the words of a plan of `n` nodes and `f` fields, and of formats `fm` (`formatSize`).
 - `fn formatSize(nodes: []const Node) FormatSize`
 - `fn encode(p: *const Plan, out: []u32) usize`: Writes `p` into `out` (at least `encodedWords` long); returns the words used.
@@ -8599,6 +8666,21 @@ The runtime front end behind the C seam: `Context`, `Frame` and the reference wi
 - `row_words = plan.wordsOf(Template)`
 - `layout: u32 = plan.layoutHashOf(.{ Style, TextStyle, Template, CView, Look, Extra })`: What C++ and Rust must agree on to call the runtime front end: the words of a style, a text style and a row, and the columns they push rows into.
 - `depth_bit: u5 = @bitOffsetOf(context.Status, "depth")`: Bit of `CView.status` that `enter` sets when the stack overflows (`Status.depth`).
+- `fn cLimitsBytes(l: *const CLimits) callconv(.c) usize`
+- `fn cInit(buf: [*]u8, len: usize, l: *const CLimits) callconv(.c) c_int`
+- `fn cNeedsFrame(p: *anyopaque, in: *const seam.CInput) callconv(.c) c_int`: `int`, as lcgf.h declares it: a C `bool` return would leave the caller reading the upper bits.
+- `fn cBegin(p: *anyopaque, in: *const seam.CInput) callconv(.c) void`
+- `fn cCanvasBytes(l: *const CLimits) callconv(.c) usize`: Bytes `lcgf_rt_enable_canvas` needs for `l`: the context's canvas rows and their palettes, two generations of `customs` each.
+- `fn cEnableCanvas(p: *anyopaque, buf: [*]u8, len: usize) callconv(.c) c_int`
+- `fn cCanvas(p: *anyopaque, id: u32, s: [*]const u32, shapes: *const canvas.Instances, o: *const abi_canvas.COptions) callconv(.c) u32`: `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of them the caller's until the frame is drawn.
+- `fn cEnd(p: *anyopaque, out: *seam.CFrame) callconv(.c) void`
+- `fn cOpen(p: *anyopaque, id: u32, s: [*]const u32) callconv(.c) u32`
+- `fn cView(p: *anyopaque, out: *CView) callconv(.c) void`
+- `fn cRowFromStyle(s: [*]const u32, out: [*]u32) callconv(.c) void`: `Template.from`: the row of a style, for C callers and for the gate that holds the C++ and Rust ports to it.
+- `fn cClose(p: *anyopaque) callconv(.c) void`
+- `fn cAnimate(p: *anyopaque, id: u32, target: f32, stiffness: f32, damping: f32) callconv(.c) f32`
+- `fn cButton(p: *anyopaque, id: u32, str: [*]const u8, len: usize) callconv(.c) u8`
+- `fn cSlider(p: *anyopaque, id: u32, value: *f32, lo: f32, hi: f32) callconv(.c) u8`
 - `fn exportAll() void`
 
 ### `CLimits` (struct)
@@ -8612,6 +8694,44 @@ The frame's tree as `open` and `leaf` write it: where `Tree.pushRow` and `Frame.
 
 Fields: `len`, `xlen`, `overflow`, `depth`, `status`, `cap`, `depth_cap`, `stack`, `id`, `parent`, `end`, `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `nkids`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `extra`, `scope`, `x_node`, `x_row`
 
+
+### `Runtime` (struct)
+The context, its frame in progress, and the theme and font the widgets use.
+
+Fields: `ctx`, `frame`, `input`, `theme`, `font`, `palettes`, `palette_len`
+
+
+## `lcgf.abi_api` (src/abi/api.zig)
+
+The export list: which Zig functions liblcgf exports to C, under which names, and which C name each type that crosses has (docs/plans/bindings-rust.md §6).
+
+### Top level
+
+- `handles = .{ Frame, Context, canvas.Instances }`: Types passed as opaque pointers (`lcgf_frame *`).
+- `value_handles = .{Frame}`
+- `column_align = @import("../core/mem.zig").column_align`
+- `renames = .{.{ "float", "floating" }}`: Field names C, C++ or Rust cannot take, and what they are called there.
+- `Loc = struct { file: []const u8, decl: ?[]const u8, name: []const u8 }`: Where a function is: its file, its container (`null` for the file's top level) and name.
+- `containers = .{ frame, context_, widgets, anim_values }`
+- `fn Export(comptime c_name: []const u8, comptime f: anytype, comptime api_loc: ?Loc, comptime impl_loc: Loc) type`: One export: its C name, the function that implements it, the Zig function it is (`api`, whose doc comment the header carries; null for a loose one) and where the implementation is (`impl`, whose parameter names the header carries).
+- `fn snake(comptime name: []const u8) []const u8`: `fooBar` as `foo_bar`.
+- `fn cName(comptime prefix: []const u8, comptime name: []const u8) []const u8`
+- `fn exportAll() void`
+- `fn isC(comptime f: anytype) bool`: A function written for C already (`callconv(.c)`), exported as it is.
+
+### `Container` (struct)
+A container whose `pub fn`s the tripwire checks: each is exported or in `skip`, with why.
+
+Fields: `prefix`, `file`, `decl`, `skip`
+
+
+### `Export(..)` (generic struct)
+One export: its C name, the function that implements it, the Zig function it is (`api`, whose doc comment the header carries; null for a loose one) and where the implementation is (`impl`, whose parameter names the header carries).
+
+- `c = c_name`
+- `func = f`
+- `api = api_loc`
+- `impl = impl_loc`
 
 ## `lcgf.abi_canvas` (src/abi/canvas.zig)
 
