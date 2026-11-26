@@ -404,7 +404,7 @@ pub fn flatten(t: *const Tree, tx: *const Texts, strings: []const u8, s: *Semant
     ix[0] = none; // the root's parent is itself: it reads `none` before writing its own row
     var w: u32 = 0;
     for (0..t.len) |k| {
-        const keep = (c.role[k] != 0) and t.participation(@intCast(k)).semantics;
+        const keep = simd.andB(c.role[k] != 0, t.participation(@intCast(k)).semantics);
         const par = ix[c.parent[k]];
         ix[k] = simd.selU(keep, w, par);
         const pi = @min(par, spare);
