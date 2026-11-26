@@ -550,14 +550,14 @@ pub const Frame = struct {
     /// `layout.run`'s (with flex rules, `runFlex`'s), with the font's measure and wrap; then
     /// the anchors and the sticky nodes.
     pub fn layoutSides(f: *Frame, font: anytype, sides: Sides) void {
-        if (@TypeOf(font) == MonoParagraphs) f.layoutSidesWith(f.withStrings(font), sides) else f.layoutSidesWith(font, sides);
+        if (comptime isParagraphs(@TypeOf(font))) f.layoutSidesWith(f.withStrings(font), sides) else f.layoutSidesWith(font, sides);
     }
 
     /// The paint half of `endSides`: in layer order when `sides.layers` is given, then a
-    /// `MonoParagraphs` font's decorations.
+    /// `protocol.MonoParagraphsOf` font's decorations.
     pub fn finishSides(f: *Frame, font: anytype, sides: Sides) Output {
         const out = if (sides.layers) |ly| f.finishLayered(ly) else f.finish();
-        if (@TypeOf(font) == MonoParagraphs) f.withStrings(font).decorate(&f.ctx.draw);
+        if (comptime isParagraphs(@TypeOf(font))) f.withStrings(font).decorate(&f.ctx.draw, f.texts());
         return out;
     }
 
