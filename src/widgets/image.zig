@@ -6,6 +6,10 @@
 //! size), this one shows colour pictures at their size or fitted to a box.
 //!
 //! Runtime: `image.image(f, th, pic, .{})`. Comptime: `image.ct.image(th, pic, .{})`.
+//!
+//! A picture decoded when the program is built (lcgf-gen's asset table for `<img src>`,
+//! or `embed.embed`) is an `Asset`: its pixels in read-only data and the texture the
+//! application uploads them as; `Asset.picture` is the `Image` the widget shows.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -44,12 +48,28 @@ pub const Image = struct {
     }
 };
 
+/// A picture decoded at build time, and the texture it is drawn from. The application
+/// uploads `image.pixels` (premultiplied RGBA8 rows, `image.w` by `image.h`) as `texture`
+/// before the first frame that shows it; nothing here reads or decodes a file.
+pub const Asset = struct {
+    texture: Texture,
+    image: embed.Image,
+
+    /// The whole picture, at one logical pixel per texel.
+    pub fn picture(a: Asset) Image {
+        return .whole(a.image, a.texture);
+    }
+};
+
 /// How it is shown.
 pub const Options = struct {
-    /// The box it is shown in, logical pixels; null for its own size.
+    /// The box it is shown in, logical pixels; null for its own size. A side of 0 follows
+    /// the other by the picture's shape (an `<img>` with only a width).
     box: ?[2]f32 = null,
     /// How it fits the box.
     fit: Fit = .contain,
+    /// Corner radius; null for the theme's.
+    radius: ?f32 = null,
 };
 
 /// How a picture fits a box (CSS `object-fit`).
@@ -69,7 +89,7 @@ pub const Fit = enum(u8) {
 pub fn checkImage(pic: Image, opt: Options) ?[]const u8 {
     if (!(pic.size[0] > 0 and pic.size[1] > 0)) return "image: the picture needs a size above 0";
     if (!(pic.uv[2] > pic.uv[0] and pic.uv[3] > pic.uv[1])) return "image: the texture rect is empty";
-    if (opt.box) |b| if (!(b[0] > 0 and b[1] > 0)) return "image: the box needs a size above 0";
+    if (opt.box) |b| if (!(b[0] >= 0 and b[1] >= 0 and b[0] + b[1] > 0)) return "image: the box needs a size above 0";
     return null;
 }
 
@@ -80,7 +100,9 @@ pub const Placed = struct { size: [2]f32, uv: [4]f32 };
 
 /// `pic` placed as `opt` says: its own size without a box, else fitted (`Fit`).
 pub fn place(pic: Image, opt: Options) Placed {
-    const box = opt.box orelse return .{ .size = pic.size, .uv = pic.uv };
+    var box = opt.box orelse return .{ .size = pic.size, .uv = pic.uv };
+    if (box[0] == 0) box[0] = box[1] * pic.size[0] / pic.size[1];
+    if (box[1] == 0) box[1] = box[0] * pic.size[1] / pic.size[0];
     const sx = box[0] / pic.size[0];
     const sy = box[1] / pic.size[1];
     return switch (opt.fit) {
@@ -111,7 +133,7 @@ pub fn style(th: *const Theme, pic: Image, opt: Options) Style {
         .size = .{ .px(p.size[0]), .px(p.size[1]) },
         .texture = pic.texture,
         .uv = p.uv,
-        .radius = th.radius,
+        .radius = opt.radius orelse th.radius,
         .fill = tints(th)[@intFromBool(pic.texture == .white)],
         .role = .image,
     };
@@ -260,6 +282,19 @@ test "place: own size, stretch, contain and cover" {
     try testing.expectEqual(Placed{ .size = .{ 30, 15 }, .uv = pic.uv }, place(pic, .{ .box = .{ 30, 30 } }));
     // Cover: scaled to 60 x 30, half its width shown, the middle half of its texture rect.
     try testing.expectEqual(Placed{ .size = .{ 30, 30 }, .uv = .{ 0.125, 0, 0.375, 1 } }, place(pic, .{ .box = .{ 30, 30 }, .fit = .cover }));
+    // One side given: the other follows the picture's shape.
+    try testing.expectEqual(Placed{ .size = .{ 30, 15 }, .uv = pic.uv }, place(pic, .{ .box = .{ 30, 0 }, .fit = .stretch }));
+    try testing.expectEqual(Placed{ .size = .{ 60, 30 }, .uv = pic.uv }, place(pic, .{ .box = .{ 0, 30 }, .fit = .stretch }));
+}
+
+test "Asset: a picture decoded at build time, the whole texture at its size" {
+    const px: [4 * 3 * 2]u8 = @splat(0);
+    const a: Asset = .{ .texture = @fromBackingInt(5), .image = .{ .w = 3, .h = 2, .pixels = &px } };
+    try testing.expectEqual(Image{ .texture = @fromBackingInt(5), .size = .{ 3, 2 } }, a.picture());
+    // A radius of its own, or the theme's.
+    const th: Theme = .default;
+    try testing.expectEqual(@as(f32, 0), style(&th, a.picture(), .{ .radius = 0 }).radius);
+    try testing.expectEqual(th.radius, style(&th, a.picture(), .{}).radius);
 }
 
 test "style: the texture, a white tint, the theme's radius; a placeholder in the control colour" {
@@ -389,7 +424,9 @@ test "checkImage: a size, a texture rect and a box" {
     try testing.expectEqual(null, checkImage(Default.photo, .{}));
     try testing.expectEqualStrings("image: the picture needs a size above 0", checkImage(.{}, .{}).?);
     try testing.expectEqualStrings("image: the texture rect is empty", checkImage(.{ .size = .{ 1, 1 }, .uv = .{ 0.5, 0, 0.5, 1 } }, .{}).?);
-    try testing.expectEqualStrings("image: the box needs a size above 0", checkImage(Default.photo, .{ .box = .{ 0, 10 } }).?);
+    try testing.expectEqualStrings("image: the box needs a size above 0", checkImage(Default.photo, .{ .box = .{ 0, 0 } }).?);
+    try testing.expectEqualStrings("image: the box needs a size above 0", checkImage(Default.photo, .{ .box = .{ -1, 10 } }).?);
+    try testing.expectEqual(null, checkImage(Default.photo, .{ .box = .{ 0, 10 } }));
 }
 
 test {
