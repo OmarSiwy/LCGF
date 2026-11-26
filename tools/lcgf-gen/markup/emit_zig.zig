@@ -391,6 +391,13 @@ pub const Emit = struct {
                 e.selectOptions(n);
                 e.write(")");
             },
+            .menu_button, .menu_list => {
+                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("menu"), if (n.kind == .menu_button) "button" else "list", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                e.menuDef(n.args);
+                e.write(", ");
+                if (n.kind == .menu_button) e.caption(n.text_kind, n.text) else e.stringList(n.captions);
+                e.write(")");
+            },
             .popover_button => {
                 e.print("{s}.ct.button(theme, .{f}, .{f}, ", .{ e.use("popover"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
@@ -465,6 +472,23 @@ pub const Emit = struct {
             e.print("\" }} }}, // {s}\n", .{a.src});
         }
         e.write("};\n\n");
+    }
+
+    /// A menu's `widgets_menu.Def`: its item names.
+    fn menuDef(e: *Emit, names: []const []const u8) void {
+        e.write(".{ .items = ");
+        e.stringList(names);
+        e.write(" }");
+    }
+
+    /// `&.{ "a", "b" }`.
+    fn stringList(e: *Emit, list: []const []const u8) void {
+        e.write("&.{");
+        for (list, 0..) |c, k| {
+            e.write(if (k == 0) " " else ", ");
+            e.string(c);
+        }
+        e.write(" }");
     }
 
     /// A select's `widgets_select.Options`: its captions and group headers.
@@ -543,6 +567,7 @@ pub const Emit = struct {
             .number => "lcgf.widgets_number.Number",
             .select => "lcgf.widgets_select.SelectState",
             .tip => "lcgf.widgets_tooltip.Tip",
+            .menu => "lcgf.widgets_menu.MenuState",
             .pair => "[2]f32",
             .@"enum" => "enum {}",
         };
@@ -554,7 +579,7 @@ pub const Emit = struct {
             .str => "\"\"",
             .bool => "false",
             .f32, .u32 => "0",
-            .text, .number, .pair, .@"enum", .select, .tip => ".{}",
+            .text, .number, .pair, .@"enum", .select, .tip, .menu => ".{}",
         };
     }
 
@@ -889,6 +914,20 @@ pub const Emit = struct {
                 }
                 if (!content) return "";
                 return std.fmt.allocPrint(e.arena, "app.components.{f}.close(f, &theme);", .{std.zig.fmtId(n.text)}) catch unreachable;
+            },
+            .menu_button => {
+                e.print("_ = {s}.trigger(f, &theme, \"{s}\", ", .{ e.use("menu"), n.id });
+                e.rtCaption(n.text_kind, n.text);
+                e.write(");");
+                return "";
+            },
+            .menu_list => {
+                e.print("_ = {s}.show(f, &theme, \"{s}\", ", .{ e.use("menu"), n.id });
+                e.menuDef(n.args);
+                e.print(", &{s}, ", .{e.stateRef(n.bind)});
+                e.stringList(n.captions);
+                e.write(");");
+                return "";
             },
             .popover_button => {
                 e.print("_ = {s}.trigger(f, &theme, \"{s}\", &{s}, ", .{ e.use("popover"), n.id, e.stateRef(n.bind) });
@@ -1457,6 +1496,7 @@ pub const Emit = struct {
         if (e.page.handlers.items.len == 0) e.write("        _ = ui;\n        _ = h;\n");
         for (e.page.handlers.items) |h| if (h.each.len > 0) continue else switch (h.event) {
             .click, .submit => e.print("        if (ui.events.{f}) h.{f}(ui); // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) }),
+            .choose => e.print("        if ({s}.chosen == {d}) h.{f}(ui); // {s}\n", .{ e.stateRef(h.field), h.item + 1, std.zig.fmtId(h.name), e.where(h.loc) }),
             .change => if (textChange(h))
                 e.print("        if (ui.events.{s}_change) h.{f}(ui, {s}.text()); // {s}\n", .{ h.widget, std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) })
             else
@@ -1729,7 +1769,7 @@ pub const Emit = struct {
         var prongs: std.StringArrayHashMapUnmanaged(void) = .empty;
         for (hs) |h| {
             changes = changes or (h.event == .change and h.each.len == 0 and !textChange(h));
-            if (h.each.len == 0 and (h.event != .change or textChange(h))) prongs.put(e.arena, h.widget, {}) catch unreachable;
+            if (h.each.len == 0 and h.event != .choose and (h.event != .change or textChange(h))) prongs.put(e.arena, h.widget, {}) catch unreachable;
         }
         const clicks: u32 = @intCast(prongs.count());
         if (hs.len == 0) e.write("            _ = h;\n");
@@ -1772,6 +1812,8 @@ pub const Emit = struct {
             e.print("            if (events_{s}.{f}) |index| h.{f}(&p.ui, index); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
         for (hs) |h| if (h.event == .change and h.each.len > 0)
             e.print("            if (events_{s}.{f}) |change| h.{f}(&p.ui, change[0], change[1]); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
+        for (hs) |h| if (h.event == .choose)
+            e.print("            if (p.ui.signals.state.{f}.chosen == {d}) h.{f}(&p.ui); // {s}\n", .{ std.zig.fmtId(h.field), h.item + 1, std.zig.fmtId(h.name), e.where(h.loc) });
         for (hs) |h| if (h.event == .change and h.each.len == 0 and !textChange(h))
             e.print("            if (p.ui.signals.state.{f}{s} != before.{f}{s}) h.{f}(&p.ui, p.ui.signals.state.{f}{s}); // {s}\n", .{ std.zig.fmtId(h.field), e.member(h), std.zig.fmtId(h.field), e.member(h), std.zig.fmtId(h.name), std.zig.fmtId(h.field), e.member(h), e.where(h.loc) });
         e.write("            return out;\n        }\n    };\n}\n\n");

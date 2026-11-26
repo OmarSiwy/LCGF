@@ -1,6 +1,6 @@
-//! overlays, written by hand: a select with a group of options, a button's tooltip (title=)
-//! and a dialog of any content (engine spec F10), each moved last into a root over the
-//! viewport so they float from its origin and draw above the page.
+//! overlays, written by hand: a select with a group of options, a button's tooltip (title=),
+//! a dialog of any content, a popover and a menu (engine spec F10), each moved last into a
+//! root over the viewport so they float from its origin and draw above the page.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -13,6 +13,7 @@ const label = lcgf.widgets_label;
 const select = lcgf.widgets_select;
 const tooltip = lcgf.widgets_tooltip;
 const popover = lcgf.widgets_popover;
+const menu = lcgf.widgets_menu;
 
 pub const theme: w.Theme = .{};
 
@@ -22,7 +23,10 @@ pub const State = struct {
     prefs_open: bool = true,
     snap: bool = false,
     info_open: bool = false,
+    edit_menu: menu.MenuState = .{},
 };
+
+const edit: menu.Def = .{ .items = &.{ "undo", "redo" } };
 
 const shapes: select.Options = .{ .texts = &.{ "Circle", "Square", "Tri" }, .groups = &.{.{ .at = 1, .label = "Angular" }} };
 
@@ -32,6 +36,7 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
             s.named(select.ct.select(theme, .shape, .shape, shapes), "Shape"),
             button.ct.button(theme, .settings, "Settings"),
             popover.ct.button(theme, .info, .info_open, "Info"),
+            menu.ct.button(theme, .edit, .edit_menu, edit, "Edit"),
         }),
     }),
     select.ct.list(theme, .shape, .shape, shapes),
@@ -42,6 +47,7 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
         button.ct.button(theme, .done, "Done"),
     }),
     popover.ct.popover(theme, .info, .info_open, .{label.ct.label(theme, "Version 1")}),
+    menu.ct.list(theme, .edit, .edit_menu, edit, &.{ "Undo", "Redo" }),
 });
 
 pub const names = .{"Shape"};
@@ -49,7 +55,7 @@ pub const names = .{"Shape"};
 /// The dialog starts open: Tab inside it, a press on its backdrop (nothing), Escape; then the
 /// select: open it, Down to Tri, Enter, and a click on Circle; then the pointer rests on
 /// Settings until its tooltip shows, and Escape hides it; Info opens its popover, and a
-/// press outside closes it.
+/// press outside closes it; Edit opens its menu, Down moves, and a click chooses.
 pub const replay =
     \\frame
     \\viewport 800 600
@@ -103,16 +109,37 @@ pub const replay =
     \\frame
     \\buttons
     \\frame
+    \\pointer 310 25
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\press 81
+    \\frame
+    \\pointer 310 85
+    \\frame
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
 ;
 
 pub fn Handlers(comptime Ui: type) type {
     return struct {
         shapes: u32 = 0,
         last: u32 = 99,
+        undos: u32 = 0,
+        redos: u32 = 0,
 
         pub fn shape_changed(h: *@This(), _: *Ui, value: u32) void {
             h.shapes += 1;
             h.last = value;
+        }
+        pub fn undo(h: *@This(), _: *Ui) void {
+            h.undos += 1;
+        }
+        pub fn redo_it(h: *@This(), _: *Ui) void {
+            h.redos += 1;
         }
         pub fn open_settings(_: *@This(), ui: *Ui) void {
             ui.signals.set(.prefs_open, true);
@@ -165,6 +192,18 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     in.buttons.left = false;
     _ = p.frame(h, &in);
     try std.testing.expect(!p.ui.signals.state.info_open);
+    // Edit opens its menu; Down and Enter choose Redo, a click on Undo chooses Undo.
+    try click(p, h, &in, "edit");
+    try std.testing.expect(p.ui.signals.state.edit_menu.open);
+    const keys = [_]lcgf.input.Input.Event{ .{ .kind = .press, .code = 0x51 }, .{ .kind = .press, .code = 0x28 } };
+    in.events = &keys;
+    _ = p.frame(h, &in);
+    in.events = &.{};
+    try std.testing.expectEqual(@as(u32, 1), h.redos);
+    try click(p, h, &in, "edit");
+    try click(p, h, &in, "edit_undo");
+    try std.testing.expectEqual(@as(u32, 1), h.undos);
+    try std.testing.expect(!p.ui.signals.state.edit_menu.open);
 }
 
 fn click(p: anytype, h: anytype, in: *lcgf.input.Input, comptime id: []const u8) !void {

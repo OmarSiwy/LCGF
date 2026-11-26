@@ -17,6 +17,7 @@
     </select>
     <button id="settings" on:click="open_settings" title="Open the preferences">Settings</button>
     <button popovertarget="info">Info</button>
+    <button popovertarget="edit">Edit</button>
   </div>
   <dialog id="prefs" bind:open="prefs_open" open>
     <span>Preferences</span>
@@ -24,5 +25,9 @@
     <button id="done" on:click="close_settings">Done</button>
   </dialog>
   <div id="info" popover><span>Version 1</span></div>
+  <menu id="edit" popover>
+    <li><button on:click="undo">Undo</button></li>
+    <li><button id="redo" on:click="redo_it">Redo</button></li>
+  </menu>
 </body>
 </html>

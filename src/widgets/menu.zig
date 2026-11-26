@@ -9,7 +9,9 @@
 //! Runtime: `trigger` in the page's flow, then `show(...)` under the root after the page.
 //!
 //! Comptime: `const M = Menu(th, .file, .menu, def);` gives the spec builders `M.button` and
-//! `M.layer` and the hooks `popover.ComptimePage(State, spec, th, M)` runs.
+//! `M.layer` and the hooks `popover.ComptimePage(State, spec, th, M)` runs. Or, in
+//! `base.ComptimeUi` beside any widget, a menu without a submenu: `ct.button(th, .file, .menu,
+//! "File")` in the flow and `ct.list(th, .file, .menu, def, texts)` last in the root.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -70,6 +72,11 @@ pub const MenuState = struct {
     hover: u8 = no_item,
     /// The item chosen this frame, in the one sequence, plus one; 0 when none.
     chosen: u8 = 0,
+
+    /// Whether the menu is shown: what `spec.when` over this field selects by (`ct.list`).
+    pub fn visible(s: MenuState) bool {
+        return s.open;
+    }
 };
 
 /// `null` if `State` can hold menu `def` bound to `menu`, else the compile error: `menu` must
@@ -361,6 +368,95 @@ fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime de
     f.close();
 }
 
+// ---- comptime front end in base.ComptimeUi ----------------------------------------------------
+
+pub const ct = struct {
+    /// The button that opens menu `name`, bound to the `MenuState` field `menu`, showing
+    /// `text` (a literal or a string field). Its runtime twin is `trigger`.
+    pub fn button(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime text: anytype) Spec {
+        var b = base.ct.button(th, name, text);
+        b.bind = @tagName(menu);
+        b.widget = Comptime(th, @tagName(name), @tagName(menu), def).Trigger;
+        return b;
+    }
+
+    /// The scrim and the list of menu `name` (items `def`, without a submenu, captioned by
+    /// `texts`), live while it is open (`spec.when`, `MenuState.visible`); put it last in the
+    /// page's root. Its runtime twin is `show`, whose result is `MenuState.chosen`.
+    pub fn list(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime texts: []const []const u8) Spec {
+        const id = @tagName(name);
+        const W = Comptime(th, id, @tagName(menu), def);
+        if (texts.len != def.items.len) @compileError("menu '" ++ id ++ "': one text per item");
+        comptime var rows: []const Spec = &.{};
+        inline for (def.items, texts) |item, text| {
+            rows = rows ++ .{Spec{ .kind = .row, .id = partName(id, item), .children = &.{.{ .kind = .label, .text = text }} }};
+        }
+        const panel: Spec = .{ .kind = .col, .id = partName(id, "panel"), .children = rows };
+        return spec_zig.when(menu, .{ .kind = .col, .id = partName(id, "scrim"), .widget = W.List, .children = &.{panel} });
+    }
+};
+
+/// The custom widgets (`Spec.widget`) of `ct.button` and `ct.list`: the button's `step` reads
+/// its own, the scrim's and the items' responses and the keys through `advance`, as `show`
+/// does at run time, and keeps its rect for the list's `push`.
+pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime menu: []const u8, comptime def: Def) type {
+    if (def.sub.len != 0 or def.sub_at != null) @compileError("menu '" ++ name ++ "': ct.list takes a menu without a submenu");
+    if (def.items.len == 0 or def.items.len >= no_item) @compileError("menu '" ++ name ++ "': 1 to 254 items");
+    return struct {
+        pub const Trigger = struct {
+            pub fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8 {
+                return base.fieldError(State, "menu '" ++ name ++ "'", bound, MenuState);
+            }
+
+            pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+                const U = @TypeOf(ui.*);
+                const at = ui.lastRect(row);
+                ui.keep(Trigger).* = .{ at.x0, at.y0, at.x1, at.y1 };
+                const scrim: U.Events.Widget = @field(U.Events.Widget, partName(name, "scrim"));
+                var hits: Hits = .{ .toggle = base.ctResponse(ui, row, event, in).clicked, .outside = ui.pointer.pressed == scrim };
+                inline for (def.items, 0..) |item, k| {
+                    const r: u32 = comptime @backingInt(@field(U.Events.Widget, partName(name, item)));
+                    hits.add(k, base.ctResponse(ui, r, event, in));
+                }
+                ui.signals.set(comptime U.field(menu), advance(def, @field(ui.signals.state, menu), hits, in.events));
+            }
+
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                const t = &ui.tables.t;
+                var st = n.style;
+                st.fill = base.buttonFill(&th, ui.response(next.*, in));
+                const i = t.push(parent, .hash(name), &st);
+                next.* += 1;
+                ui.push(n.children[0], i, next, in);
+                t.seal(i);
+            }
+        };
+
+        pub const List = struct {
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                const tb = &ui.tables;
+                const t = &tb.t;
+                const ms: MenuState = @field(ui.signals.state, menu);
+                const k4 = ui.keep(Trigger).*;
+                const sc = t.push(parent, .hash(partName(name, "scrim")), &popover.scrimStyle(in.viewport));
+                const l = t.push(sc, .hash(partName(name, "panel")), &listStyle(&th, .{ .x0 = k4[0], .y0 = k4[1], .x1 = k4[2], .y1 = k4[3] }));
+                t.c.role[l] = @backingInt(a11y.Role.menu);
+                inline for (def.items, n.children[0].children, 0..) |item, spec_row, k| {
+                    const r = t.push(l, .hash(partName(name, item)), &itemStyle(&th, highlighted(def, ms, k)));
+                    t.c.role[r] = @backingInt(a11y.Role.menu_item);
+                    const label = t.push(r, .none, &.{ .role = .label });
+                    t.c.text[label] = tb.tx.push(label, tb.strings.add(spec_row.children[0].text.?), &base.labelText(&th));
+                    t.seal(label);
+                    t.seal(r);
+                }
+                t.seal(l);
+                t.seal(sc);
+                next.* += comptime @import("../comptime/flatten.zig").count(n);
+            }
+        };
+    };
+}
+
 // ---- example page, replay and golden frames ---------------------------------------------------
 
 /// The example's menu: File with New, Open, Recent (a submenu of two scenes) and Quit.
@@ -371,7 +467,7 @@ pub const file_texts = [_][]const u8{ "New", "Open", "Recent", "Quit", "Scene 1"
 /// ends, in theme `th`. The tests and the golden images (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
-        const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
+        pub const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
 
         pub const App = struct {
             menu: MenuState = .{},
@@ -460,6 +556,84 @@ test "Menu: the page agrees in both front ends, closed, open and with the submen
     const recent = t.rect(t.find(.from("file_recent")));
     try testing.expectEqual(recent.x1 + 3, t.rect(t.find(.from("file_sub"))).x0);
     try testing.expectEqual(recent.y0, t.rect(t.find(.from("file_scene1"))).y0);
+}
+
+/// A menu without a submenu as `ct.button` and `ct.list` in `base.ComptimeUi`, and its
+/// runtime twin, `trigger` and `show`.
+const CtPage = struct {
+    const th: Theme = .default;
+    const E = Example(th);
+    const edit: Def = .{ .items = &.{ "undo", "redo", "cut" } };
+    const texts = [_][]const u8{ "Undo", "Redo", "Cut" };
+    pub const App = struct {
+        menu: MenuState = .{},
+        chosen: u8 = 0,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, .{});
+            _ = f.open(.none, E.toolbar_style);
+            _ = trigger(f, &th, "edit", "Edit");
+            f.close();
+            app.chosen = show(f, &th, "edit", edit, &app.menu, &texts);
+            f.close();
+        }
+    };
+    pub const State = struct { menu: MenuState = .{} };
+    pub const spec = spec_zig.col(.{}, .{
+        spec_zig.row(E.toolbar_style, .{ct.button(th, .edit, .menu, edit, "Edit")}),
+        ct.list(th, .edit, .menu, edit, &texts),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, E.limits);
+};
+var ct_harness: CtPage.Run = .{};
+
+test "ct.button, ct.list: a click opens the menu, the keys and the pointer choose, in both front ends" {
+    const h = &ct_harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var t = (try h.frame(&in)).runtime.tree;
+    const S = struct {
+        fn same(hh: *CtPage.Run) !void {
+            try testing.expectEqual(hh.app.menu, hh.ui.signals.state.menu);
+        }
+        fn at(tr: *const Tree, comptime id: []const u8) [2]f32 {
+            const r = tr.rect(tr.find(.from(id)));
+            return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+        }
+    };
+    // Click Edit: open on Undo.
+    in.pointer = S.at(t, "edit");
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    t = (try h.frame(&in)).runtime.tree;
+    try S.same(h);
+    try testing.expect(h.app.menu.open);
+    // Down, Enter: Redo chosen, closed.
+    ev[0] = .{ .kind = .press, .code = popover.keys.down };
+    in.events = &ev;
+    _ = try h.frame(&in);
+    ev[0] = .{ .kind = .press, .code = popover.keys.enter };
+    _ = try h.frame(&in);
+    try S.same(h);
+    try testing.expectEqual(@as(u8, 2), h.app.menu.chosen);
+    try testing.expect(!h.app.menu.open);
+    in.events = &.{};
+    // Open again and click Cut.
+    t = (try h.frame(&in)).runtime.tree;
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    t = (try h.frame(&in)).runtime.tree;
+    in.pointer = S.at(t, "edit_cut");
+    _ = try h.frame(&in);
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    _ = try h.frame(&in);
+    try S.same(h);
+    try testing.expectEqual(@as(u8, 3), h.app.menu.chosen);
 }
 
 test "listStyle, subStyle, itemStyle: the theme's tokens" {

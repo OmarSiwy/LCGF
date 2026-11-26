@@ -2320,7 +2320,7 @@ pub const Lowerer = struct {
         // A select's list and a tooltip name the widget they belong to.
         const owned = struct {
             fn is(k: ir.Kind) bool {
-                return k == .select_list or k == .tooltip or k == .popover;
+                return k == .select_list or k == .tooltip or k == .popover or k == .menu_list;
             }
         }.is;
         for (ids, 0..) |id, i| if (id.len > 0 and !owned(kinds[i])) for (ids[0..i], 0..) |o, j| if (!owned(kinds[j]) and std.mem.eql(u8, o, id)) {
@@ -2386,7 +2386,7 @@ pub const Lowerer = struct {
 
     /// The widget an element is, if any; true when `n` was lowered as one.
     fn widget(l: *Lowerer, n: u32, t: []const u8, parent: u32) bool {
-        if (l.attr(n, "popover") != null) return l.popover(n, parent);
+        if (l.attr(n, "popover") != null) return if (std.mem.eql(u8, t, "menu")) l.menuList(n, parent) else l.popover(n, parent);
         if (std.mem.eql(u8, t, "button")) {
             if (l.attr(n, "popovertarget") != null) return l.popoverButton(n, parent);
             if (l.attr(n, "aria-pressed") != null) return l.boolWidget(n, parent, .toggle, "pressed");
@@ -2847,7 +2847,7 @@ pub const Lowerer = struct {
         const at = l.attrLoc(n, "title");
         const i = l.ir_of[n];
         const ok_target = i != none and l.page.nodes.items(.id)[i].len > 0 and !l.inRepeat(i) and switch (l.page.nodes.items(.kind)[i]) {
-            .dialog, .image, .component, .popover => false,
+            .dialog, .image, .component, .popover, .menu_list => false,
             else => true,
         };
         if (!ok_target) {
@@ -2904,15 +2904,101 @@ pub const Lowerer = struct {
             l.ds.err(l.loc(n), "a popovertarget button inside lcgf-each is not lowered", .{});
             return true;
         }
-        var node: ir.Node = .{ .kind = .popover_button, .parent = parent, .loc = l.loc(n), .id = target, .bind = l.popoverField(p) };
+        const is_menu = l.doc.isElement(p, "menu");
+        var node: ir.Node = .{ .kind = .popover_button, .parent = parent, .loc = l.loc(n), .id = target, .bind = if (is_menu) l.menuField(p) else l.popoverField(p) };
+        if (is_menu) node.args = l.menuItems(p, false).names;
         l.caption(&node, collapse(l.arena, l.ownText(n)), l.loc(n));
         if (node.text_kind == .format or l.content(n).elements > 0) {
             l.ds.err(l.loc(n), "a button shows one literal or one field", .{});
             return true;
         }
-        node.kind = .popover_button;
+        node.kind = if (is_menu) .menu_button else .popover_button;
         node.name = l.accessibleName(n);
         l.ir_of[n] = l.addNode(node);
+        return true;
+    }
+
+    /// The `MenuState` field of `<menu popover>` `m`: `<id>_menu`.
+    fn menuField(l: *Lowerer, m: u32) []const u8 {
+        const f = ok(std.fmt.allocPrint(l.arena, "{s}_menu", .{l.attr(m, "id") orelse ""}));
+        l.field(f, .menu, l.attrLoc(m, "popover"), "<menu popover>");
+        return f;
+    }
+
+    const MenuItems = struct { names: []const []const u8, captions: []const []const u8, buttons: []const u32 };
+
+    /// The items of `<menu popover>` `m`: one per `<button>`, in `<li>` or not, named by its id
+    /// or its on:click handler, captioned by its text. With `report`, what else it holds is an
+    /// error.
+    fn menuItems(l: *Lowerer, m: u32, report: bool) MenuItems {
+        var names: std.ArrayList([]const u8) = .empty;
+        var captions: std.ArrayList([]const u8) = .empty;
+        var buttons: std.ArrayList(u32) = .empty;
+        for (m + 1..l.k.end[m]) |i_| {
+            const i: u32 = @intCast(i_);
+            if (l.doc.nodes.items(.kind)[i] != .element) continue;
+            if (l.doc.isElement(i, "li")) continue;
+            if (!l.doc.isElement(i, "button")) {
+                if (report) l.ds.err(l.loc(i), "a <menu popover> holds <button>s, in <li>s or not", .{});
+                continue;
+            }
+            const name = l.attr(i, "id") orelse l.attr(i, "on:click") orelse {
+                if (report) l.ds.err(l.loc(i), "a menu item needs an id or an on:click handler to name it", .{});
+                continue;
+            };
+            if (report and !l.identifier(name, l.loc(i))) continue;
+            ok(names.append(l.arena, name));
+            ok(captions.append(l.arena, collapse(l.arena, l.ownText(i))));
+            ok(buttons.append(l.arena, i));
+        }
+        return .{ .names = names.items, .captions = captions.items, .buttons = buttons.items };
+    }
+
+    /// `<menu id popover>`: a menu (`widgets_menu.ct.list`) that its `<button popovertarget>`
+    /// opens below itself, moved last into the root. Each item's on:click runs when it is
+    /// chosen, by a click or by the keys.
+    fn menuList(l: *Lowerer, n: u32, parent: u32) bool {
+        for (n + 1..l.k.end[n]) |i| l.skip[i] = true;
+        const id = l.attr(n, "id") orelse {
+            l.ds.err(l.loc(n), "a <menu popover> needs an id, which its popovertarget button names", .{});
+            return true;
+        };
+        if (!l.identifier(id, l.valueLoc(n, "id"))) return true;
+        if (l.attr(n, "bind:open") != null) l.ds.err(l.attrLoc(n, "bind:open"), "a <menu popover> keeps its state in <id>_menu; bind:open is for other popovers", .{});
+        if (l.inRepeat(parent)) {
+            l.ds.err(l.loc(n), "a menu inside lcgf-each is not lowered; put it at the page level", .{});
+            return true;
+        }
+        const has_button = for (0..l.doc.nodes.len) |i| {
+            if (l.doc.nodes.items(.kind)[i] == .element and std.mem.eql(u8, l.attr(@intCast(i), "popovertarget") orelse "", id)) break true;
+        } else false;
+        if (!has_button) {
+            l.ds.err(l.loc(n), "menu '{s}' needs a <button popovertarget=\"{s}\"> to open it", .{ id, id });
+            return true;
+        }
+        const items = l.menuItems(n, true);
+        if (items.names.len == 0 or items.names.len >= lcgf.widgets_menu.no_item) {
+            l.ds.err(l.loc(n), "a <menu popover> needs 1 to {d} items", .{lcgf.widgets_menu.no_item - 1});
+            return true;
+        }
+        const field_name = l.menuField(n);
+        for (items.buttons, 0..) |b, k| {
+            const first = l.doc.nodes.items(.attr_first)[b];
+            for (first..first + l.doc.nodes.items(.attr_count)[b]) |a_| {
+                const a: u32 = @intCast(a_);
+                const attr_name = l.doc.attrs.items(.name)[a];
+                if (!std.mem.startsWith(u8, attr_name, "on:")) continue;
+                const handler = l.doc.attrs.items(.value)[a];
+                if (!std.mem.eql(u8, attr_name, "on:click")) {
+                    l.ds.err(l.doc.attrLoc(a), "a menu item takes on:click, which runs when it is chosen", .{});
+                    continue;
+                }
+                if (!l.identifier(handler, l.doc.valueLoc(a))) continue;
+                ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .choose, .widget = id, .field = field_name, .item = @intCast(k), .loc = l.doc.valueLoc(a) }));
+            }
+        }
+        l.ir_of[n] = l.addNode(.{ .kind = .menu_list, .parent = parent, .loc = l.loc(n), .id = id, .bind = field_name, .args = items.names, .captions = items.captions });
+        ok(l.overlays.append(l.arena, l.ir_of[n]));
         return true;
     }
 

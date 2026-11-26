@@ -79,6 +79,12 @@ pub const Kind = enum(u8) {
     /// An element with `popover`: `widgets_popover.ct.popover(theme, .id, .bind, .{ children })`,
     /// moved last into the root.
     popover,
+    /// `<button popovertarget>` of a `<menu popover>`: `widgets_menu.ct.button(theme, .id,
+    /// .bind, def, caption)`, `bind` a `MenuState`, `args` the item names.
+    menu_button,
+    /// `<menu popover>`: `widgets_menu.ct.list(theme, .id, .bind, def, captions)`, moved
+    /// last into the root.
+    menu_list,
 };
 
 /// Where a caption's text comes from.
@@ -196,6 +202,8 @@ pub const FieldType = enum(u8) {
     select,
     /// `widgets_tooltip.Tip`.
     tip,
+    /// `widgets_menu.MenuState`.
+    menu,
 };
 
 pub const Field = struct {
@@ -212,7 +220,8 @@ pub const Field = struct {
 };
 
 /// `submit`: Enter in a one-line text control, Ctrl+Enter (Cmd+Enter) in a text area.
-pub const Event = enum(u8) { click, change, submit };
+/// `choose`: item `item` of a menu was chosen (a click, or Enter on it).
+pub const Event = enum(u8) { click, change, submit, choose };
 
 pub const Handler = struct {
     name: []const u8,
@@ -225,6 +234,8 @@ pub const Handler = struct {
     payload: ?FieldType = null,
     /// The run-time region the widget is repeated in (its handler also gets the item's index).
     each: []const u8 = "",
+    /// A menu's item, for `choose`.
+    item: u8 = 0,
     loc: diag.Loc,
 };
 
