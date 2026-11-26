@@ -155,6 +155,7 @@ const Rng = struct {
                 g.r.enumValueWithIndex(T, u32)
             else
                 @fromBackingInt(g.r.int(e.tag_type)),
+            .optional => |o| return if (g.r.boolean()) null else g.value(o.child),
             .array => |a| {
                 var out: T = undefined;
                 for (&out) |*x| x.* = g.value(a.child);
