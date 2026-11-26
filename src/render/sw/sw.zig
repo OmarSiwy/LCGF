@@ -1089,7 +1089,7 @@ inline fn len2(x: F, y: F) F {
 }
 
 /// The shader's `corner_radius`: the radius of p's quadrant, capped by the half size.
-inline fn cornerRadius(px: F, py: F, hx: f32, hy: f32, radii: [4]f32) F {
+pub inline fn cornerRadius(px: F, py: F, hx: f32, hy: f32, radii: [4]f32) F {
     const down = py > simd.f(0);
     const right = @select(f32, down, simd.f(radii[2]), simd.f(radii[1]));
     const left = @select(f32, down, simd.f(radii[3]), simd.f(radii[0]));
@@ -1097,7 +1097,7 @@ inline fn cornerRadius(px: F, py: F, hx: f32, hy: f32, radii: [4]f32) F {
 }
 
 /// The shader's `rounded_box`: signed distance to a box of half size (hx, hy) with radius r.
-inline fn roundedBox(px: F, py: F, hx: f32, hy: f32, r: F) F {
+pub inline fn roundedBox(px: F, py: F, hx: f32, hy: f32, r: F) F {
     const qx = @abs(px) - simd.f(hx) + r;
     const qy = @abs(py) - simd.f(hy) + r;
     return len2(@max(qx, simd.f(0)), @max(qy, simd.f(0))) + @min(@max(qx, qy), simd.f(0)) - r;

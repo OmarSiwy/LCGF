@@ -25,7 +25,8 @@ const B = simd.B;
 
 /// What every band of canvas command `k` shares: the node's pixels inside `scissor`, the
 /// view, and that area in world units from the origin, widened by the widest stroke the
-/// palette can give and a pixel of antialiasing (`slop`, in pixels).
+/// palette can give and a pixel of antialiasing (`slop`, in pixels). A node under a
+/// transformed parent or a rounded clip shades through `space` (`general`).
 const Prep = struct {
     c: draw_list.CanvasDraw,
     opacity: f32,
@@ -33,18 +34,72 @@ const Prep = struct {
     v: canvas.View,
     world: [4]i32,
     slop: f32,
+    red: u5 = 0,
+    general: bool,
+    transformed: bool,
+    space: Space,
+};
+
+/// A pixel in the node, as the quad shader maps one: `m` takes the pixel's centre (physical)
+/// to the node's own physical space, where `rect` is the node; `fwd` maps back. The clip and
+/// its corner radii are in logical screen units, tested as quads test theirs.
+const Space = struct {
+    m: [6]f32,
+    fwd: [6]f32,
+    rect: [4]f32,
+    clip_centre: [2]f32,
+    clip_half: [2]f32,
+    radii: [4]f32,
+    rounded: bool,
+    inv_scale: f32,
+    scale: f32,
+
+    /// `box` (physical, the node's space) on screen: its four corners' bounds.
+    fn screen(sp: *const Space, box: [4]f32) [4]f32 {
+        const f = sp.fwd;
+        var lo: @Vector(2, f32) = @splat(std.math.inf(f32));
+        var hi: @Vector(2, f32) = @splat(-std.math.inf(f32));
+        for ([_][2]f32{ .{ box[0], box[1] }, .{ box[2], box[1] }, .{ box[0], box[3] }, .{ box[2], box[3] } }) |c| {
+            const p: @Vector(2, f32) = .{ f[0] * c[0] + f[2] * c[1] + f[4], f[1] * c[0] + f[3] * c[1] + f[5] };
+            lo = @min(lo, p);
+            hi = @max(hi, p);
+        }
+        return .{ lo[0], lo[1], hi[0], hi[1] };
+    }
 };
 
 fn prep(list: *const DrawList, k: u32, scale: f32, scissor: [4]u32) ?Prep {
     if (!std.math.isFinite(scale) or scale <= 0) return null;
     const node = list.customs[k];
     const c = list.canvases[k];
-    const rect: @Vector(4, f32) = @as(@Vector(4, f32), node.rect) * @as(@Vector(4, f32), @splat(scale));
-    const clip: @Vector(4, f32) = @as(@Vector(4, f32), node.clip) * @as(@Vector(4, f32), @splat(scale));
+    const xf: [6]f32 = node.xform;
+    const transformed = !std.mem.eql(f32, &xf, &.{ 1, 0, 0, 1, 0, 0 });
+    const radii: [4]f32 = node.clip_radii;
+    const rounded = @reduce(.Or, @as(@Vector(4, f32), radii) > @as(@Vector(4, f32), @splat(0)));
+    const a, const b, const cc, const d, const tx, const ty = xf;
+    const det = a * d - b * cc;
+    if (transformed and (!std.math.isFinite(det) or det == 0)) return null;
+    const s4: @Vector(4, f32) = @splat(scale);
+    const rect: @Vector(4, f32) = @as(@Vector(4, f32), node.rect) * s4;
+    const clip: @Vector(4, f32) = @as(@Vector(4, f32), node.clip) * s4;
+    const space: Space = .{
+        .m = .{ d / det, -b / det, -cc / det, a / det, -(d * tx - cc * ty) * scale / det, -(a * ty - b * tx) * scale / det },
+        .fwd = .{ a, b, cc, d, tx * scale, ty * scale },
+        .rect = rect,
+        .clip_centre = .{ (node.clip[0] + node.clip[2]) * 0.5, (node.clip[1] + node.clip[3]) * 0.5 },
+        .clip_half = .{ (node.clip[2] - node.clip[0]) * 0.5, (node.clip[3] - node.clip[1]) * 0.5 },
+        .radii = radii,
+        .rounded = rounded,
+        .inv_scale = 1 / scale,
+        .scale = scale,
+    };
     const half: @Vector(4, f32) = @splat(0.5);
-    // Pixel x is drawn when its centre x + 0.5 is in [rect0, rect2) and in [clip0, clip2].
-    const lo = @max(@ceil(rect - half), @ceil(clip - half));
-    const hi = @min(@ceil(rect - half), @floor(clip - half) + @as(@Vector(4, f32), @splat(1)));
+    // Pixel x is drawn when its centre x + 0.5 is in [rect0, rect2) and in [clip0, clip2]. A
+    // transformed node is tested per pixel; its area is the bounds of its corners on screen.
+    const node_lo: @Vector(4, f32) = if (transformed) @floor(@as(@Vector(4, f32), space.screen(rect))) else @ceil(rect - half);
+    const node_hi: @Vector(4, f32) = if (transformed) @ceil(@as(@Vector(4, f32), space.screen(rect))) else @ceil(rect - half);
+    const lo = @max(node_lo, @ceil(clip - half));
+    const hi = @min(node_hi, @floor(clip - half) + @as(@Vector(4, f32), @splat(1)));
     const area = clampBox(pixels(.{ lo[0], lo[1], hi[2], hi[3] }), scissor);
     if (area[0] >= area[2] or area[1] >= area[3]) return null;
     const v = canvas.View.of(c.camera, c.palette, .{ node.rect[0], node.rect[1] }, scale);
@@ -52,12 +107,25 @@ fn prep(list: *const DrawList, k: u32, scale: f32, scissor: [4]u32) ?Prep {
     for (c.palette.layers) |l| widest = @max(widest, l.width);
     const slop = widest * 4 * v.line + 2;
     const limit: f32 = 2e9;
-    return .{ .c = c, .opacity = node.opacity, .area = area, .v = v, .slop = slop, .world = .{
-        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[0])) - v.base[0] - slop) / v.scale), -limit, limit)),
-        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[1])) - v.base[1] - slop) / v.scale), -limit, limit)),
-        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[2])) - v.base[0] + slop) / v.scale), -limit, limit)),
-        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[3])) - v.base[1] + slop) / v.scale), -limit, limit)),
-    } };
+    // The culled area in the node's own space: the area itself, or under a transform the
+    // node's rect (every band then culls against the whole node).
+    const box: [4]f32 = if (transformed) rect else .{ @floatFromInt(area[0]), @floatFromInt(area[1]), @floatFromInt(area[2]), @floatFromInt(area[3]) };
+    return .{
+        .c = c,
+        .opacity = node.opacity,
+        .area = area,
+        .v = v,
+        .slop = slop,
+        .general = transformed or rounded,
+        .transformed = transformed,
+        .space = space,
+        .world = .{
+            @intFromFloat(std.math.clamp(@floor((box[0] - v.base[0] - slop) / v.scale), -limit, limit)),
+            @intFromFloat(std.math.clamp(@floor((box[1] - v.base[1] - slop) / v.scale), -limit, limit)),
+            @intFromFloat(std.math.clamp(@ceil((box[2] - v.base[0] + slop) / v.scale), -limit, limit)),
+            @intFromFloat(std.math.clamp(@ceil((box[3] - v.base[1] + slop) / v.scale), -limit, limit)),
+        },
+    };
 }
 
 /// Draws canvas command `k` of `list` into `t`, `scale` physical pixels per logical one;
@@ -70,11 +138,11 @@ pub fn draw(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas: sw.I
 /// `draw`, with the rows `bin` holds for `t`'s band when it was built for this command and
 /// band; otherwise every row. The pixels are the same either way.
 pub fn drawBinned(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas: sw.Image, bin: ?*const Bin) void {
-    const p = prep(list, k, scale, t.scissor) orelse return;
+    var p = prep(list, k, scale, t.scissor) orelse return;
+    p.red = @as(u5, @intFromBool(t.fb.format == .bgra8)) * 16;
     const s = p.c.instances;
-    const red: u5 = @as(u5, @intFromBool(t.fb.format == .bgra8)) * 16;
     if (bin) |b| if (b.band(list, k, t.scissor)) |rows| {
-        for (rows) |i| instance(t, s, &p.c, p.v, p.area, red, p.opacity, atlas, i);
+        for (rows) |i| instance(t, &p, atlas, i);
         return;
     };
     const pos = s.c.pos;
@@ -95,7 +163,7 @@ pub fn drawBinned(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas
             }
             while (hits != 0) : (hits &= hits - 1) {
                 const i = base + @ctz(hits);
-                instance(t, s, &p.c, p.v, p.area, red, p.opacity, atlas, i);
+                instance(t, &p, atlas, i);
             }
         }
     }
@@ -152,6 +220,9 @@ pub const Bin = struct {
         b.list = null;
         const n = std.math.clamp(n_bands, 1, max_bands);
         const p = prep(list, k, scale, box) orelse return;
+        // ponytail: bands of a transformed node are not screen rows of its space; its
+        // bands walk the batch.
+        if (p.transformed) return;
         const s = p.c.instances;
         std.debug.assert(simd.padded(s.len) <= b.span.len);
         if (b.shapes != s or b.revision != s.revision) b.refresh(s);
@@ -239,31 +310,40 @@ pub const Bin = struct {
 };
 
 /// Decodes and shades row `i`.
-fn instance(t: sw.Target, s: *const canvas.Instances, c: *const draw_list.CanvasDraw, v: canvas.View, area: [4]u32, red: u5, opacity: f32, atlas: sw.Image, i: usize) void {
+fn instance(t: sw.Target, p: *const Prep, atlas: sw.Image, i: usize) void {
+    const s = p.c.instances;
     const look = s.c.look[i];
-    const layer = canvas.layerRow(c.palette, canvas.layerOf(look));
+    const layer = canvas.layerRow(p.c.palette, canvas.layerOf(look));
     if (!canvas.shown(look, layer)) return;
-    const sh = canvas.Shape.of(v, s.c.pos[i], look, layer);
-    const box = clampBox(pixels(.{ @floor(sh.box[0]), @floor(sh.box[1]), @ceil(sh.box[2]), @ceil(sh.box[3]) }), area);
+    const sh = canvas.Shape.of(p.v, s.c.pos[i], look, layer);
+    const on_screen = if (p.transformed) p.space.screen(sh.box) else sh.box;
+    const box = clampBox(pixels(.{ @floor(on_screen[0]), @floor(on_screen[1]), @ceil(on_screen[2]), @ceil(on_screen[3]) }), p.area);
     if (box[0] >= box[2] or box[1] >= box[3]) return;
-    const over = canvas.overrideOf(c.overrides, @intCast(i));
+    const over = canvas.overrideOf(p.c.overrides, @intCast(i));
     const ink: Ink = .{
         .fill = rgba(over orelse layer.fill),
         .stroke = rgba(over orelse layer.stroke),
         .filled = sh.filled and layer.flags & 1 != 0,
         .stroked = sh.stroked,
-        .opacity = opacity,
+        .opacity = p.opacity,
     };
+    // One branch per instance on the node's space: the plain loop for nearly every canvas.
+    if (p.general) kinds(true, t, p, box, &sh, ink, atlas, look) else kinds(false, t, p, box, &sh, ink, atlas, look);
+}
+
+fn kinds(comptime general: bool, t: sw.Target, p: *const Prep, box: [4]u32, sh: *const canvas.Shape, ink: Ink, atlas: sw.Image, look: [4]u32) void {
+    const s = p.c.instances;
+    const fb = t.fb;
     switch (sh.kind) {
         .polygon => {
             const first = @min(look[1], s.vert_len);
-            shade(.polygon, t.fb, red, box, &sh, ink, .{ .view = v, .verts = s.verts[first..][0..@min(look[2], s.vert_len - first)] });
+            shade(.polygon, general, fb, p, box, sh, ink, .{ .view = p.v, .verts = s.verts[first..][0..@min(look[2], s.vert_len - first)] });
         },
         .glyph => if (atlas.alpha8.len != 0)
-            shade(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = true })
+            shade(.glyph, general, fb, p, box, sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = true })
         else
-            shade(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = false }),
-        inline else => |kind| shade(kind, t.fb, red, box, &sh, ink, .{}),
+            shade(.glyph, general, fb, p, box, sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = false }),
+        inline else => |kind| shade(kind, general, fb, p, box, sh, ink, .{}),
     }
 }
 
@@ -280,7 +360,9 @@ const Extra = struct {
     alpha8: bool = false,
 };
 
-inline fn shade(comptime kind: canvas.Kind, fb: *sw.Framebuffer, red: u5, box: [4]u32, sh: *const canvas.Shape, ink: Ink, x: Extra) void {
+inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Framebuffer, p: *const Prep, box: [4]u32, sh: *const canvas.Shape, ink: Ink, x: Extra) void {
+    const red = p.red;
+    const sp = &p.space;
     const stroke: [4]F = .{ simd.f(ink.stroke[0]), simd.f(ink.stroke[1]), simd.f(ink.stroke[2]), simd.f(ink.stroke[3]) };
     // Inside an outline: the fill, or the stroke's colour at alpha 0 when unfilled, so the
     // stroke's inner edge fades out instead of darkening.
@@ -301,10 +383,25 @@ inline fn shade(comptime kind: canvas.Kind, fb: *sw.Framebuffer, red: u5, box: [
     const dv = (tv1 - tv0) / @max(sh.p[3], 1e-6);
     for (box[1]..box[3]) |y| {
         const row = fb.pixels[y * fb.stride ..][0..fb.stride];
-        const py = simd.f(@as(f32, @floatFromInt(y)) + 0.5);
+        const sy = simd.f(@as(f32, @floatFromInt(y)) + 0.5);
         var at = std.mem.alignBackward(u32, box[0], W);
         while (at < box[2]) : (at += W) {
-            const px = @as(F, @floatFromInt(simd.iota + simd.u(at))) + simd.f(0.5);
+            const sx = @as(F, @floatFromInt(simd.iota + simd.u(at))) + simd.f(0.5);
+            // The pixel in the node's own space, and how much of it the node and the clip's
+            // rounded corners keep (quad.wgsl's clip coverage).
+            const m = sp.m;
+            const px = if (general) simd.f(m[0]) * sx + simd.f(m[2]) * sy + simd.f(m[4]) else sx;
+            const py = if (general) simd.f(m[1]) * sx + simd.f(m[3]) * sy + simd.f(m[5]) else sy;
+            const keep: F = if (general) k: {
+                const r = sp.rect;
+                const in = (px >= simd.f(r[0])) & (px < simd.f(r[2])) & (py >= simd.f(r[1])) & (py < simd.f(r[3]));
+                const lx = sx * simd.f(sp.inv_scale) - simd.f(sp.clip_centre[0]);
+                const ly = sy * simd.f(sp.inv_scale) - simd.f(sp.clip_centre[1]);
+                const hx, const hy = sp.clip_half;
+                const corner = sw.roundedBox(lx, ly, hx, hy, sw.cornerRadius(lx, ly, hx, hy, sp.radii)) * simd.f(sp.scale);
+                const cov = @select(f32, @as(B, @splat(sp.rounded)), @min(@max(simd.f(0.5) - corner, simd.f(0)), simd.f(1)), simd.f(1));
+                break :k @select(f32, in, cov, simd.f(0));
+            } else simd.f(1);
             var color = stroke;
             const alpha: F = switch (kind) {
                 .segment => a: {
@@ -335,9 +432,9 @@ inline fn shade(comptime kind: canvas.Kind, fb: *sw.Framebuffer, red: u5, box: [
                         inline for (0..W) |lane| a8[lane] = x.atlas.alpha8[idx[lane]];
                         texel = .{ simd.f(1), simd.f(1), simd.f(1), @as(F, @floatFromInt(a8)) * simd.f(1.0 / 255.0) };
                     } else {
-                        var p: U = undefined;
-                        inline for (0..W) |lane| p[lane] = x.atlas.pixels[idx[lane]];
-                        inline for (0..4) |c| texel[c] = @as(F, @floatFromInt((p >> @splat(8 * c)) & simd.u(255))) * simd.f(1.0 / 255.0);
+                        var texels: U = undefined;
+                        inline for (0..W) |lane| texels[lane] = x.atlas.pixels[idx[lane]];
+                        inline for (0..4) |c| texel[c] = @as(F, @floatFromInt((texels >> @splat(8 * c)) & simd.u(255))) * simd.f(1.0 / 255.0);
                     }
                     inline for (0..4) |c| color[c] = stroke[c] * texel[c];
                     break :a @select(f32, inside, simd.f(1), simd.f(0));
@@ -345,7 +442,7 @@ inline fn shade(comptime kind: canvas.Kind, fb: *sw.Framebuffer, red: u5, box: [
             };
             const old: U = row[at..][0..W].*;
             const mask = sw.spanMask(at, box[0], box[2]);
-            row[at..][0..W].* = @select(u32, mask, sw.overColor(color, alpha * simd.f(ink.opacity), old, red), old);
+            row[at..][0..W].* = @select(u32, mask, sw.overColor(color, alpha * keep * simd.f(ink.opacity), old, red), old);
         }
     }
 }
@@ -550,4 +647,35 @@ test "sw canvas: bands drawn separately give the whole frame" {
     sc.rows[0].camera.origin = .{ 0, 0 };
     small.build(&sc.list, 0, 1, fb.all(), 3);
     try testing.expectEqual(null, small.band(&sc.list, 0, sw.tile(&fb, 0, 3)));
+}
+
+/// Every channel of `a` within `tol` of `b`'s.
+fn expectClose(a: []const u32, b: []const u32, tol: u8) !void {
+    for (a, b) |x, y| {
+        const u: @Vector(4, u8) = @bitCast(x);
+        const v: @Vector(4, u8) = @bitCast(y);
+        const d = @max(u, v) - @min(u, v);
+        if (@reduce(.Max, d) > tol) return error.TestExpectedEqual;
+    }
+}
+
+test "sw canvas: a turned node and a rounded clip shade as a quad with them does" {
+    const rot: [6]f32 = .{ @cos(0.3), @sin(0.3), -@sin(0.3), @cos(0.3), 14, -3 };
+    inline for (.{ .{ rot, [4]f32{ 0, 0, 0, 0 } }, .{ [6]f32{ 1, 0, 0, 1, 0, 0 }, [4]f32{ 10, 0, 6, 3 } }, .{ rot, [4]f32{ 8, 8, 8, 8 } } }) |case| {
+        var sc: Scene(4) = .{};
+        sc.init(.{ 8, 4, 40, 28 }, .{ 6, 2, 50, 30 });
+        sc.list.customs[0].xform = case[0];
+        sc.list.customs[0].clip_radii = case[1];
+        // A white box filling the node, in world units from its corner.
+        _ = sc.shapes.rect(.{ 0, 0 }, .{ 32, 24 }, .{ .layer = 1, .stroke = false });
+        var got: [sw.Framebuffer.len(64, 32)]u32 = undefined;
+        @memcpy(&got, sc.frame(.{}, .{ 0, 0, 64, 32 }, sw.Image.white).pixels);
+        var fb = sw.Framebuffer.init(&sc.px, 64, 32, .rgba8);
+        fb.clear(.black);
+        const q: @import("../../draw/draw_list.zig").Quad = .{ .rect = .{ 8, 4, 40, 28 }, .clip = .{ 6, 2, 50, 30 }, .params = @splat(0), .uv = .{ 0, 0, 1, 1 }, .radii = @splat(0), .fill = @bitCast(Color.white), .border_color = 0, .border = 0, .opacity = 1, .xform = case[0], .clip_radii = case[1] };
+        sw.shade(.solid, .{ .fb = &fb, .scissor = fb.all() }, &q, sw.Image.white, 1);
+        try expectClose(&got, fb.pixels, 1);
+        // Something was drawn, and something cut.
+        try testing.expect(std.mem.indexOfScalar(u32, &got, @bitCast(Color.white)) != null);
+    }
 }
