@@ -88,6 +88,7 @@
         .{ .kind = "attribute", .name = "class", .status = .mapped, .target = "cascade", .fixture = "counter" },
         .{ .kind = "attribute", .name = "style", .status = .mapped, .target = "cascade, inline origin", .fixture = "landmarks" },
         .{ .kind = "attribute", .name = "hidden", .status = .mapped, .target = "node not emitted", .fixture = "landmarks" },
+        .{ .kind = "attribute", .name = "aria-labelledby", .status = .mapped, .target = "the accessible name: the referenced elements' literal text, joined by spaces, read at build time (as aria-label)", .fixture = "landmarks" },
         .{ .kind = "attribute", .name = "aria-label", .status = .mapped, .target = "spec.named, exported by ComptimeUi.semantics; runtime: Ui.named rows and Ui.semantics(t, s, str) (Semantics.label)", .fixture = "landmarks" },
         .{ .kind = "attribute", .name = "on*", .status = .rejected, .diagnostic = "script attributes are not run; write on:click=\"save\"" },
         .{ .kind = "attribute", .name = "tabindex", .applies_to = "positive", .status = .rejected, .diagnostic = "positive tabindex is not supported; reorder the markup" },

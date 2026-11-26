@@ -521,7 +521,7 @@ pub const Lowerer = struct {
         for (first..first + doc.nodes.items(.attr_count)[n]) |a_| {
             const a: u32 = @intCast(a_);
             const name = doc.attrs.items(.name)[a];
-            const skipped = for ([_][]const u8{ "id", "class", "style", "aria-label", "slot" }) |x| {
+            const skipped = for ([_][]const u8{ "id", "class", "style", "aria-label", "aria-labelledby", "slot" }) |x| {
                 if (std.mem.eql(u8, x, name)) break true;
             } else std.mem.startsWith(u8, name, "on:");
             if (skipped) continue;
@@ -571,7 +571,7 @@ pub const Lowerer = struct {
             ok(props.append(l.arena, prop));
         }
         const id: []const u8 = if (l.attr(n, "id")) |x| (if (l.identifier(x, l.valueLoc(n, "id"))) x else "") else l.attr(n, "on:click") orelse "";
-        l.ir_of[n] = l.addNode(.{ .kind = .component, .parent = parent, .loc = l.loc(n), .text = t, .id = id, .props = props.items, .margin = margin, .name = l.attr(n, "aria-label") orelse "" });
+        l.ir_of[n] = l.addNode(.{ .kind = .component, .parent = parent, .loc = l.loc(n), .text = t, .id = id, .props = props.items, .margin = margin, .name = l.accessibleName(n) });
         l.handlers(n, id, "", null);
     }
 
@@ -592,6 +592,33 @@ pub const Lowerer = struct {
         l.runtimeToken(name[2..], r[0], r[1], at);
         for (l.page.tokens.items) |t| if (std.mem.eql(u8, t.css, name[2..])) return t.field;
         return null;
+    }
+
+    /// The accessible name of element `n`: its `aria-label`, else the text of the elements its
+    /// `aria-labelledby` names, joined by spaces, else "". The text is read at build time, so
+    /// it must be literal.
+    fn accessibleName(l: *Lowerer, n: u32) []const u8 {
+        if (l.attr(n, "aria-label")) |v| return v;
+        const ids = l.attr(n, "aria-labelledby") orelse return "";
+        const at = l.valueLoc(n, "aria-labelledby");
+        var out: std.ArrayList(u8) = .empty;
+        var it = std.mem.tokenizeScalar(u8, ids, ' ');
+        while (it.next()) |id| {
+            const e: u32 = for (0..l.doc.nodes.len) |i| {
+                if (l.doc.nodes.items(.kind)[i] == .element and std.mem.eql(u8, l.attr(@intCast(i), "id") orelse "", id)) break @intCast(i);
+            } else {
+                l.ds.err(at, "aria-labelledby names '{s}', which is no element's id", .{id});
+                return "";
+            };
+            const text = collapse(l.arena, l.allText(e));
+            if (std.mem.indexOfAny(u8, text, "{}") != null) {
+                l.ds.err(at, "aria-labelledby reads the text of '{s}' at build time; it cannot show a field", .{id});
+                return "";
+            }
+            if (out.items.len > 0) ok(out.append(l.arena, ' '));
+            ok(out.appendSlice(l.arena, text));
+        }
+        return out.items;
     }
 
     /// A `{f}` prop names a view-state field; something on the page must type it.
@@ -1101,7 +1128,7 @@ pub const Lowerer = struct {
             node.kind = .landmark;
             node.landmark = lm;
         }
-        node.name = l.attr(n, "aria-label") orelse "";
+        node.name = l.accessibleName(n);
         l.ir_of[n] = l.addNode(node);
     }
 
@@ -1151,7 +1178,7 @@ pub const Lowerer = struct {
             .text_style = l.text[n],
             .base_text = lcgf.widgets_label.labelText(th),
             .level = heading,
-            .name = l.attr(n, "aria-label") orelse "",
+            .name = l.accessibleName(n),
             .margin = margin,
         };
         l.caption(&node, if (pre) raw.items else breaks(l.arena, collapse(l.arena, raw.items)), l.loc(n));
@@ -1650,7 +1677,7 @@ pub const Lowerer = struct {
         node.style = l.boxStyle(n, base_style, l.parentDir(parent), &params, &margin);
         node.params_expr = params;
         node.margin = margin;
-        node.name = l.attr(n, "aria-label") orelse "";
+        node.name = l.accessibleName(n);
         // A control that shows no caption of its own is named by its <label>'s text.
         const captionless = switch (node.kind) {
             .textfield, .search, .textarea, .number, .slider, .progress => true,

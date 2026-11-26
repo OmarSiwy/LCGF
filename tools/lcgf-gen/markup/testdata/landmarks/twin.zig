@@ -13,7 +13,7 @@ const types = lcgf.types;
 pub const theme: w.Theme = .{};
 
 /// Accessible names the a11y export must carry (parity.zig).
-pub const names = .{ "Primary", "Settings" };
+pub const names = .{ "Primary", "Settings", "Side notes" };
 
 const item: types.Style = .{ .size = .{ .grow(2), .fit }, .min = .{ 100, 0 }, .shrink = true };
 
@@ -36,9 +36,11 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .gap = 12, .fill = theme.pa
             s.styled(label.ct.label(theme, "Card"), .{ .pad = .{ 8, 6, 8, 4 }, .border = 2, .border_color = .rgb(1, 2, 3), .params = lcgf.features.dashed(6, 6), .radii = .{ 1, 2, 3, 4 }, .role = .label }),
             separator.ct.separator(theme, .horizontal),
         }), "Settings"),
-        s.landmark(.complementary, .{ .participation = .{ .hit = false }, .max = .{ 200, types.inf }, .cross = .center }, .{
+        // aria-labelledby: the named elements' text, joined.
+        s.named(s.landmark(.complementary, .{ .participation = .{ .hit = false }, .max = .{ 200, types.inf }, .cross = .center }, .{
             label.ct.label(theme, "Side"),
-        }),
+            label.ct.label(theme, "notes"),
+        }), "Side notes"),
         // An unnamed section is no landmark.
         s.col(item, .{label.ct.label(theme, "Plain")}),
     }),
