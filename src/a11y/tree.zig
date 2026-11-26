@@ -278,15 +278,20 @@ pub fn names(t: *const Tree, s: *Semantics) void {
     const c = &t.c;
     const n = t.len;
     const first = s.c.first_text;
-    for (0..n) |k| first[k] = simd.selU(t.participation(@intCast(k)).semantics, c.text[k], none);
+    @memcpy(first[0..n], c.text[0..n]);
     // ponytail: the first run only; ARIA joins every text run of the content. Join spans in the
     // bridge if a name made of several runs is ever needed.
+    // A node without semantics has none below it either (participation is inherited), so its
+    // subtree's run is dropped as the sweep reaches it: no separate masking loop.
     var i = n;
     while (i > 1) {
         i -= 1;
         const p = c.parent[i];
-        first[p] = @min(first[p], first[i]);
+        const v = simd.selU(t.participation(@intCast(i)).semantics, first[i], none);
+        first[i] = v;
+        first[p] = @min(first[p], v);
     }
+    if (n != 0) first[0] = simd.selU(t.participation(0).semantics, first[0], none);
     const last = s.cap - 1;
     for (0..n) |k| {
         const content = from_content[c.role[k]];
