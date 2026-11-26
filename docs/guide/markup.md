@@ -303,6 +303,13 @@ lowered. Rows past the template are added for the children that need them. Not y
 `repeat(auto-fill)`, named lines, `%` tracks, a line on one axis only, and margins on a page
 with a grid. A control directly in a cell needs a `<div>` around it on runtime pages.
 
+A `<table>` is a grid of `fit` columns, one per cell of its widest row. Each `<tr>` is a row
+grid that shares the table's columns (`grid.Decl.subgrid`), so the cells line up and the row
+keeps its node. The roles are `table`, `row`, `cell` and `column_header` (`row_header` for
+`<th scope="row">`); `colspan` spans columns. `<thead>`, `<tbody>` and `<tfoot>` hand their
+rows to the table. Rows are static: `rowspan`, `<caption>`, `<col>` and a template among the
+rows are errors.
+
 Lengths are folded to px: `em` and `rem` from the resolved font size, `in`, `cm`, `mm`, `pt` and
 `pc` at 96 px per inch.
 

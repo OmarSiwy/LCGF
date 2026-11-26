@@ -1,0 +1,26 @@
+<!doctype html>
+<html lcgf-page="table">
+<head>
+  <title>Table</title>
+  <style>
+    table { column-gap: 12px; row-gap: 2px; padding: 4px; background-color: #26282e; }
+    th, td { padding: 2px 4px; }
+    th { color: #c0c8d0; }
+    .total { background-color: #303440; }
+  </style>
+</head>
+<body>
+  <table aria-label="Channels">
+    <thead>
+      <tr><th>Channel</th><th>Gain</th><th>Pan</th></tr>
+    </thead>
+    <tbody>
+      <tr><th scope="row">Kick</th><td>-3 dB</td><td>Centre</td></tr>
+      <tr><th scope="row">Overheads</th><td>-12 dB</td><td>Wide</td></tr>
+    </tbody>
+    <tfoot>
+      <tr class="total"><td colspan="2">Two channels</td><td>Stereo</td></tr>
+    </tfoot>
+  </table>
+</body>
+</html>

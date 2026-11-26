@@ -1318,6 +1318,10 @@ pub const Lowerer = struct {
             return;
         }
         if (disp == .contents) return; // children go to the nearest box
+        // Tables are grids (engine spec F7): the row groups hand their rows to the table.
+        if (std.mem.eql(u8, t, "thead") or std.mem.eql(u8, t, "tbody") or std.mem.eql(u8, t, "tfoot")) return;
+        if (std.mem.eql(u8, t, "table")) return l.table(n, parent);
+        if (std.mem.eql(u8, t, "tr")) return l.tableRow(n, parent);
         if (isComponent(t)) return l.appComponent(n, parent);
         if (l.widget(n, t, parent)) return l.tooltip(n);
         if (l.attr(n, "title") != null) l.ds.err(l.attrLoc(n, "title"), "title= is a tooltip, which only a widget shows (a button or a control)", .{});
@@ -1914,6 +1918,84 @@ pub const Lowerer = struct {
         if (areas.len > 0) ok(l.areas.put(l.arena, l.ir_of[n], areas));
     }
 
+    /// The `<table>` element `n` is in, or none.
+    fn tableOf(l: *const Lowerer, n: u32) u32 {
+        var p = l.doc.nodes.items(.parent)[n];
+        while (p != none) : (p = l.doc.nodes.items(.parent)[p]) if (l.doc.isElement(p, "table")) return p;
+        return none;
+    }
+
+    /// `<table>`: a grid of one `fit` column per cell of its widest row and one row per
+    /// `<tr>`, role `table`. Its rows are static: a template inside is an error.
+    fn table(l: *Lowerer, n: u32, parent: u32) void {
+        var rows: u32 = 0;
+        var cols: u32 = 0;
+        for (n + 1..l.k.end[n]) |i_| {
+            const i: u32 = @intCast(i_);
+            if (l.doc.nodes.items(.kind)[i] != .element or l.tableOf(i) != n) continue;
+            if (l.doc.isElement(i, "template")) l.ds.err(l.loc(i), "a table's rows are static; repeat rows with display: grid and lcgf-each instead", .{});
+            if (!l.doc.isElement(i, "tr")) continue;
+            rows += 1;
+            var width: u32 = 0;
+            for (i + 1..l.k.end[i]) |c_| {
+                const c: u32 = @intCast(c_);
+                if (l.doc.nodes.items(.parent)[c] != i or !(l.doc.isElement(c, "td") or l.doc.isElement(c, "th"))) continue;
+                width += l.cellSpan(c, "colspan");
+                if (l.cellSpan(c, "rowspan") > 1) l.ds.err(l.attrLoc(c, "rowspan"), "rowspan is not supported yet; a cell spans columns only (colspan)", .{});
+            }
+            cols = @max(cols, width);
+        }
+        var params: []const u8 = "";
+        var margin: ?[4]f32 = null;
+        var st = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
+        st.role = .table;
+        st.dir = .y;
+        var d: lcgf.grid.Decl = .{ .columns = l.padTracks(&.{}, @max(cols, 1)), .rows = l.padTracks(&.{}, rows) };
+        inline for (.{ Prop.@"column-gap", Prop.@"row-gap" }, 0..) |p, a| if (l.px(n, p)) |g| {
+            d.gap[a] = g;
+        };
+        var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = st, .params_expr = params, .margin = margin, .grid = d };
+        node.name = l.accessibleName(n);
+        l.ir_of[n] = l.addNode(node);
+    }
+
+    /// `<tr>`: a grid item across its table's columns at the next row, and a grid whose columns
+    /// are the table's (`Decl.subgrid`), so its cells line up with the other rows'; role `row`.
+    fn tableRow(l: *Lowerer, n: u32, parent: u32) void {
+        const nodes = l.page.nodes.slice();
+        if (parent == none or l.tableOf(n) == none or nodes.items(.grid)[parent] == null or nodes.items(.style)[parent].role != .table) {
+            l.ds.err(l.loc(n), "<tr> belongs in a <table>, <thead>, <tbody> or <tfoot>", .{});
+            l.skip[n] = true;
+            return;
+        }
+        const columns = nodes.items(.grid)[parent].?.columns;
+        var at: u32 = 0;
+        for (nodes.items(.parent)) |p| at += @intFromBool(p == parent);
+        var params: []const u8 = "";
+        var margin: ?[4]f32 = null;
+        var st = l.boxStyle(n, .{}, .y, &params, &margin);
+        if (st.pad[0] != 0 or st.pad[2] != 0) l.ds.err(l.loc(n), "padding on the sides of a table row is not supported; pad its cells", .{});
+        st.role = .row;
+        st.dir = .y;
+        l.ir_of[n] = l.addNode(.{
+            .kind = .container,
+            .parent = parent,
+            .loc = l.loc(n),
+            .style = st,
+            .params_expr = params,
+            .margin = margin,
+            .grid = .{ .columns = columns, .rows = &.{.fit}, .subgrid = .{ true, false } },
+            .cell = .{ .cell = .{ 0, at }, .span = .{ @intCast(columns.len), 1 } },
+            .name = l.accessibleName(n),
+        });
+    }
+
+    /// A cell's `colspan` or `rowspan`, at least 1.
+    fn cellSpan(l: *const Lowerer, n: u32, name: []const u8) u32 {
+        const v = l.attr(n, name) orelse return 1;
+        return @max(std.fmt.parseInt(u32, std.mem.trim(u8, v, " "), 10) catch 1, 1);
+    }
+
     /// `list` with `fit` tracks after it, up to `count`.
     fn padTracks(l: *Lowerer, list: []const lcgf.grid.Track, count: u32) []const lcgf.grid.Track {
         if (list.len >= count) return list;
@@ -2016,6 +2098,18 @@ pub const Lowerer = struct {
             const p = nodes.items(.parent)[i];
             if (p != none and nodes.items(.grid)[p] != null) {
                 if (l.gridItem(n, p)) |it| nodes.items(.cell)[i] = it;
+                const td = l.doc.isElement(n, "td");
+                if (td or l.doc.isElement(n, "th")) {
+                    // A table cell: its role, and colspan as its span across the row's columns.
+                    const scope = l.attr(n, "scope") orelse "";
+                    nodes.items(.style)[i].role = if (td) .cell else if (std.mem.eql(u8, scope, "row")) .row_header else .column_header;
+                    const cols = l.cellSpan(n, "colspan");
+                    if (cols > 1) {
+                        var it = nodes.items(.cell)[i] orelse lcgf.grid.Item{};
+                        it.span[0] = cols;
+                        nodes.items(.cell)[i] = it;
+                    }
+                }
             } else inline for (.{ Prop.@"grid-column", Prop.@"grid-row", Prop.@"grid-area", Prop.@"justify-self" }) |q| if (l.declared(n, q)) |v|
                 l.ds.err(v.loc, "{s} applies to a child of a display: grid box", .{@tagName(q)});
         }
