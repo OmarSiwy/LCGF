@@ -1156,7 +1156,29 @@ pub const Emit = struct {
             \\    paragraphs: struct { rows: [limits.texts]u32 = undefined, styles: [limits.texts]u16 = undefined, len: u32 = 0 } = .{},
             \\
         );
-        if (flex or paragraphs) e.print(
+        const regions = e.hasRegions();
+        if (regions) e.print(
+            \\    /// Tree rows of the page's regions as this frame built them (none for one it did not
+            \\    /// build): `end` rounds each one's content from the region's corner, as the comptime
+            \\    /// page does (`layout.snapSubtree`).
+            \\    regions: [{d}]u32 = @splat(lcgf.types.none),
+            \\
+            \\    /// Lays the frame out (with this page's {s}), puts each region's content on the
+            \\    /// grid from the region's snapped corner, and paints.
+            \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
+            \\        f.{s}(font{s}{s});
+            \\        for (ui.regions) |row| if (row != lcgf.types.none) lcgf.layout.snapSubtree(f.tree(), row);
+            \\        return f.finish();
+            \\    }}
+            \\
+            \\
+        , .{
+            e.regionCount(),
+            if (flex and paragraphs) "flex rules and paragraph styles" else if (flex) "flex rules" else if (paragraphs) "paragraph styles" else "font",
+            if (flex and paragraphs) "layoutFlexParagraphs" else if (flex) "layoutFlex" else if (paragraphs) "layoutParagraphs" else "layoutWith",
+            if (paragraphs) ", ui.paragraphs.rows[0..ui.paragraphs.len], ui.paragraphs.styles[0..ui.paragraphs.len], &paragraph_table" else "",
+            if (flex) ", &ui.flex.?" else "",
+        }) else if (flex or paragraphs) e.print(
             \\    /// Ends the frame with this page's {s} (`Frame.{s}`).
             \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
             \\        return f.{s}(font{s}{s});
@@ -1183,12 +1205,12 @@ pub const Emit = struct {
             \\
             \\
         );
-        const regions = e.hasRegions();
         e.write(if (regions) "    pub fn build(ui: *Ui, f: *lcgf.frame.Frame, data: anytype) void {\n" else "    pub fn build(ui: *Ui, f: *lcgf.frame.Frame) void {\n");
         e.write("        ui.events = .{};\n");
         for (0..e.page.nodes.len) |i| if (e.page.nodes.items(.kind)[i] == .each and e.regionEvents(@intCast(i)).len > 0)
             e.print("        ui.events_{s} = .{{}};\n", .{e.page.nodes.items(.id)[i]});
         e.write("        ui.before = ui.signals.state;\n");
+        if (regions) e.write("        ui.regions = @splat(lcgf.types.none);\n");
         if (paragraphs) e.write("        ui.paragraphs.len = 0;\n");
         // The app's components, checked against the markup before they are called.
         if (e.specComponents()) {
@@ -1209,6 +1231,10 @@ pub const Emit = struct {
         e.rtWalk(none, 0);
         e.write("    }\n\n");
         e.rtDispatch();
+    }
+
+    fn regionCount(e: *Emit) u32 {
+        return @intCast(std.mem.count(ir.Kind, e.page.nodes.items(.kind), &.{.each}));
     }
 
     fn hasRegions(e: *Emit) bool {
@@ -1497,7 +1523,7 @@ pub const Emit = struct {
             \\}}
             \\
             \\
-        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex()) "p.ui.end(&f, .{})" else "f.end(.{})" });
+        , .{ nodes, texts, strings, if (regions) ", data: anytype" else "", if (regions) ", data" else "", if (e.hasFlex() or regions) "p.ui.end(&f, .{})" else "f.end(.{})" });
         if (e.hasFlex()) e.write(
             \\/// The bytes of the runtime page's flex columns.
             \\const flex_bytes = blk: {
@@ -1747,6 +1773,9 @@ pub const Emit = struct {
         outer.cross = .start;
         // The comptime region clips its content to its rect.
         outer.clip = true;
+        var k: u32 = 0;
+        for (e.page.nodes.items(.kind)[0..each]) |kind| k += @intFromBool(kind == .each);
+        e.print("                ui.regions[{d}] = f.tree().len;\n", .{k});
         e.print("                _ = f.open(.from(\"{s}\"), {s});\n", .{ n.id, e.styleText(outer, n.params_expr) });
         e.write(e.eachLoop(each));
         e.write("                f.close();\n            }");

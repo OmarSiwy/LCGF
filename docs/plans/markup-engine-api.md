@@ -50,10 +50,12 @@ These need no engine change:
 
 Requests, by usage:
 - **E1 (landed, this branch):** `ct_interop.fitRegion(id, style)` and `setFit(ui, id, size)`. On a `fit` axis the region takes the size its owner last measured (kept in `ComptimeUi.keep`), one frame late. The page measures the content in its own viewport and sets `out.wake = 0` on a change. A layout that admits a region's measured content within the same frame would remove the lag.
-- **E3:** lay a region's content out at the region's unsnapped origin. The comptime page snaps
-  the region's rect and then lays its content out at (0, 0) in it, where the runtime page lays
-  the same content out in place, so at a fractional origin their edges can round 1 px apart
-  (parity.zig allows that inside regions; `testdata/components`).
+- **E3 (landed):** `layout.snapSubtree(t, node)` after finalize moves a subtree onto the grid
+  from its root's snapped corner and finalizes it again. The comptime page snaps a region's
+  rect and lays its content out at (0, 0) in it; the runtime page lays the same content out in
+  place and calls this on each region's node in `Ui.end`, so a region at a fractional origin
+  rounds alike in both (`testdata/components`). `Frame.layoutParagraphs` and
+  `layoutFlexParagraphs` are the layout halves of the paragraph `end`s, for this step.
 - **E2:** `compose` into several regions in one pass. Today the page composes them one after another into two draw lists it alternates between, so each region copies the commands before it; one pass would copy them once (a performance request, not a usage one).
 
 ### App components (M8.3)

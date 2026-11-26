@@ -106,21 +106,6 @@ test "the runtime page takes the twin's handlers" {
     ui.dispatch(&h);
 }
 
-/// `a` and `b` equal, but for their rect and clip edges, which may differ by the one pixel of
-/// rounding a region at a fractional origin gives: the comptime page snaps the region's rect
-/// and then its content in it, the runtime page snaps the content where it is (engine E3).
-fn expectSnapped(a: anytype, b: @TypeOf(a)) !void {
-    var y = b;
-    inline for (.{ "rect", "clip" }) |name| {
-        for (@field(a, name), @field(b, name)) |p, q| if (!(p == q or @abs(p - q) <= 1)) {
-            std.debug.print("{s} {any} against {any}\n", .{ name, @field(a, name), @field(b, name) });
-            return error.TestExpectedEqual;
-        };
-        @field(y, name) = @field(a, name);
-    }
-    try std.testing.expectEqualDeep(a, y);
-}
-
 /// The draw list `d`'s commands in paint order, one item each: a quad batch is its quads, so
 /// two lists that batch differently compare the same.
 fn expectSameCommands(a: *const lcgf.draw_list.DrawList, b: *const lcgf.draw_list.DrawList) !void {
@@ -137,7 +122,7 @@ fn expectSameCommands(a: *const lcgf.draw_list.DrawList, b: *const lcgf.draw_lis
                 const y = cb.quads;
                 try std.testing.expectEqual(x.texture, y.texture);
                 try std.testing.expectEqual(x.material, y.material);
-                try expectSnapped(a.quads[x.first + qa], b.quads[y.first + qb]);
+                try std.testing.expectEqualDeep(a.quads[x.first + qa], b.quads[y.first + qb]);
                 qa += 1;
                 qb += 1;
                 if (qa == x.count) {
@@ -156,7 +141,7 @@ fn expectSameCommands(a: *const lcgf.draw_list.DrawList, b: *const lcgf.draw_lis
                 try std.testing.expectEqualStrings(a.strings[ra.start..][0..ra.bytes], b.strings[rb.start..][0..rb.bytes]);
                 ra.start = 0;
                 rb.start = 0;
-                try expectSnapped(ra, rb);
+                try std.testing.expectEqualDeep(ra, rb);
             },
             .custom, .canvas => |x| try std.testing.expectEqualDeep(a.customs[x], b.customs[cb.custom]),
         }

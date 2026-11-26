@@ -164,9 +164,10 @@ A page with `lcgf-each` regions takes the items in both, as `Ui.build(ui, frame,
 `Page(H).frame(p, ctx, h, input, data)`.
 
 Both keep the same `State` and handlers, because `ui.signals` is the same store in both.
-Every fixture draws identical frames in the two frontends. The one exception is inside a region
-whose origin falls between pixels: there its content's edges can round 1 px apart (engine
-request E3).
+Every fixture draws identical frames in the two frontends. A comptime page snaps a region's
+rect and lays its content out on the pixel grid from that corner; the runtime page rounds a
+region's content the same way (`lcgf.layout.snapSubtree` in its `Ui.end`), so the two agree
+when a region's origin falls between pixels.
 
 ### Run-time theme tokens
 
