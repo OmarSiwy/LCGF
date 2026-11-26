@@ -1913,6 +1913,7 @@ pub const Lowerer = struct {
         if (std.mem.eql(u8, t, "textarea")) return l.textInput(n, parent, .textarea);
         if (std.mem.eql(u8, t, "select")) return l.selectWidget(n, parent);
         if (std.mem.eql(u8, t, "dialog")) return l.dialog(n, parent);
+        if (std.mem.eql(u8, t, "img")) return l.img(n, parent);
         if (std.mem.eql(u8, t, "progress")) {
             l.progress(n, parent);
             return true;
@@ -2281,6 +2282,70 @@ pub const Lowerer = struct {
         };
         l.ir_of[n] = l.addNode(node);
         ok(l.overlays.append(l.arena, l.ir_of[n]));
+        return true;
+    }
+
+    /// Asset `src` as named at `at` (an `<img src>`), resolved against
+    /// the file that names it; one entry per file. Null after reporting a remote or non-PNG one.
+    fn asset(l: *Lowerer, src: []const u8, at: Loc) ?u32 {
+        for ([_][]const u8{ "http:", "https:", "//", "data:" }) |p| if (std.mem.startsWith(u8, src, p)) {
+            l.ds.err(at, "{s}", .{manifest.refusal("value", "remote-url", "").?});
+            return null;
+        };
+        if (!std.ascii.endsWithIgnoreCase(src, ".png")) {
+            l.ds.err(at, "only PNG images are decoded so far; '{s}' is not one", .{src});
+            return null;
+        }
+        const dir = std.fs.path.dirname(l.ds.files.items[at.file].path) orelse ".";
+        const path = ok(std.fs.path.join(l.arena, &.{ dir, src }));
+        for (l.page.assets.items, 0..) |a, k| if (std.mem.eql(u8, a.path, path)) return @intCast(k);
+        if (l.page.assets.items.len + 1 >= std.math.maxInt(u16)) {
+            l.ds.err(at, "too many images on one page", .{});
+            return null;
+        }
+        ok(l.page.assets.append(l.arena, .{ .src = src, .path = path, .loc = at }));
+        return @intCast(l.page.assets.items.len - 1);
+    }
+
+    /// `<img src alt>`: a local PNG from the asset table, at its size or in the box its CSS
+    /// width and height (else its attributes) give, a side left out following the other by
+    /// the picture's shape; `object-fit` fill (the default), contain or cover. CSS gives it
+    /// only its size, margins and corner radius (0 unless set, as in a browser).
+    fn img(l: *Lowerer, n: u32, parent: u32) bool {
+        const src = l.attr(n, "src") orelse {
+            l.ds.err(l.loc(n), "<img> needs src", .{});
+            return true;
+        };
+        const k = l.asset(src, l.valueLoc(n, "src")) orelse return true;
+        const alt = l.attr(n, "alt") orelse {
+            l.ds.err(l.loc(n), "<img> needs alt: the picture's text, or alt=\"\" when it only decorates", .{});
+            return true;
+        };
+        var params: []const u8 = "";
+        var margin: ?[4]f32 = null;
+        const st = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
+        if (params.len > 0) l.ds.err(l.loc(n), "<img> takes no gradient or dashed border", .{});
+        var box: [2]f32 = .{ 0, 0 };
+        inline for (.{ "width", "height" }, 0..) |name, a| switch (st.size[a].kind) {
+            .px => box[a] = st.size[a].v,
+            .fit => box[a] = l.numberAttr(n, name) orelse 0,
+            else => l.ds.err(l.loc(n), "<img>: give its " ++ name ++ " in px", .{}),
+        };
+        var fit: lcgf.widgets_image.Fit = .stretch;
+        if (l.keyword(n, .@"object-fit")) |kw| {
+            if (css.eq(kw, "contain")) fit = .contain else if (css.eq(kw, "cover")) fit = .cover else if (!css.eq(kw, "fill"))
+                l.ds.err(l.declared(n, .@"object-fit").?.loc, "object-fit: {s} is not lowered; use fill, contain or cover", .{kw});
+        }
+        const node: ir.Node = .{
+            .kind = .image,
+            .parent = parent,
+            .loc = l.loc(n),
+            .asset = k,
+            .image = .{ .box = if (box[0] + box[1] > 0) box else null, .fit = fit, .radius = st.radius },
+            .name = alt,
+            .margin = margin,
+        };
+        l.ir_of[n] = l.addNode(node);
         return true;
     }
 

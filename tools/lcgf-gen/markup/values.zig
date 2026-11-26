@@ -86,6 +86,7 @@ pub const Prop = enum(u8) {
     @"grid-template-areas",
     @"grid-auto-flow",
     @"text-decoration",
+    @"object-fit",
 
     /// Inherited properties take the parent's computed value when nothing is declared.
     pub fn inherited(p: Prop) bool {

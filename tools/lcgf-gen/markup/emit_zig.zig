@@ -367,6 +367,11 @@ pub const Emit = struct {
                 e.selectOptions(n);
                 e.write(")");
             },
+            .image => {
+                e.print("{s}.ct.image(theme, assets[{d}].picture(), ", .{ e.use("image"), n.asset });
+                e.structure(n.image, lcgf.widgets_image.Options{});
+                e.write(")");
+            },
             .dialog => {
                 e.print("{s}.ct.dialog(theme, .{f}, .{f}, .{{", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
@@ -398,6 +403,20 @@ pub const Emit = struct {
             return "";
         }
         return all.items;
+    }
+
+    /// The asset table: each image the page draws, decoded at build time, asset k as texture
+    /// k + 1.
+    fn assetsDecl(e: *Emit) void {
+        const assets = e.page.assets.items;
+        if (assets.len == 0) return;
+        e.write("/// The page's images, decoded by lcgf-gen. Before the first frame, upload each\n/// `assets[k].image.pixels` (premultiplied RGBA8 rows, `w` by `h`) as texture `assets[k].texture`.\npub const assets = [_]lcgf.widgets_image.Asset{\n");
+        for (assets, 1..) |a, k| {
+            e.print("    .{{ .texture = @fromBackingInt({d}), .image = .{{ .w = {d}, .h = {d}, .pixels = \"", .{ k, a.w, a.h });
+            for (a.pixels) |b| e.print("\\x{x:0>2}", .{b});
+            e.print("\" }} }}, // {s}\n", .{a.src});
+        }
+        e.write("};\n\n");
     }
 
     /// A select's `widgets_select.Options`: its captions and group headers.
@@ -559,6 +578,7 @@ pub const Emit = struct {
             }
             e.write("};\n\n");
         }
+        e.assetsDecl();
         e.tokensDecl();
         e.write(body.items);
         if (e.runtime) {
@@ -777,6 +797,12 @@ pub const Emit = struct {
                     e.componentCall(n, true, list_depth, false);
                     e.write(";");
                 }
+                return "";
+            },
+            .image => {
+                e.print("_ = {s}.image(f, &theme, assets[{d}].picture(), ", .{ e.use("image"), n.asset });
+                e.structure(n.image, lcgf.widgets_image.Options{});
+                e.write(");");
                 return "";
             },
             .select => {

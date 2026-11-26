@@ -10,6 +10,7 @@
 const std = @import("std");
 const lcgf = @import("lcgf");
 const diag = @import("diag.zig");
+const ir = @import("ir.zig");
 const html = @import("html.zig");
 const css = @import("css.zig");
 const cascade = @import("cascade.zig");
@@ -277,6 +278,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     };
     if (runtime) l.checkRuntime();
     l.checkTokens();
+    loadAssets(io, arena, ds, deps, &l.page);
     if (explain) ds.note(.{ .file = file, .off = 0 }, "{s}", .{if (runtime) "runtime frontend: the page is a build(ui, frame) of Frame and widget calls" else "spec frontend: every construct on this page lowers to a comptime Spec"});
     if (ds.errors > 0) return null;
     var e: emit_zig.Emit = .{ .arena = arena, .ds = ds, .page = &l.page, .runtime = runtime };
@@ -285,6 +287,34 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     var tree = std.zig.Ast.parse(arena, raw, .{}) catch @panic("out of memory");
     if (tree.errors.len > 0) return raw; // a bug in the emitter: let the Zig compiler point at it
     return tree.renderAlloc(arena) catch @panic("out of memory");
+}
+
+/// Reads and decodes each image the page draws (`ir.Asset`), each a dependency of the output.
+/// Pixels are embedded in the generated module, so one image is at most 512 x 512.
+fn loadAssets(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std.ArrayList([]const u8), page: *ir.Page) void {
+    const png = lcgf.png;
+    for (page.assets.items) |*a| {
+        deps.append(arena, a.path) catch @panic("out of memory");
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, a.path, arena, .limited(16 << 20)) catch |e| {
+            ds.err(a.loc, "cannot read {s}: {s}", .{ a.path, @errorName(e) });
+            continue;
+        };
+        const i = png.info(bytes) catch |e| {
+            ds.err(a.loc, "{s} is not a decodable PNG: {s}", .{ a.src, @errorName(e) });
+            continue;
+        };
+        if (@as(u64, i.w) * i.h > 512 * 512) {
+            ds.err(a.loc, "{s} is {d} x {d}; an embedded image is at most 512 x 512 pixels: decode a larger one at run time (lcgf.png.decode)", .{ a.src, i.w, i.h });
+            continue;
+        }
+        const pixels = arena.alloc(u8, i.pixelBytes()) catch @panic("out of memory");
+        const scratch = arena.alloc(u8, i.scratchBytes()) catch @panic("out of memory");
+        _ = png.decode(bytes, pixels, scratch) catch |e| {
+            ds.err(a.loc, "{s} is not a decodable PNG: {s}", .{ a.src, @errorName(e) });
+            continue;
+        };
+        a.* = .{ .src = a.src, .path = a.path, .loc = a.loc, .w = i.w, .h = i.h, .pixels = pixels };
+    }
 }
 
 /// Which lowering `--frontend` asks for; `auto` takes the page's `lcgf-frontend`, else spec.

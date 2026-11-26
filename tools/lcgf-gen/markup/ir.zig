@@ -63,6 +63,8 @@ pub const Kind = enum(u8) {
     /// `<dialog bind:open>`: `widgets_dialog.ct.dialog(theme, .id, .bind, .{ children })`,
     /// moved last into the root.
     dialog,
+    /// `<img>`: `widgets_image.ct.image(theme, assets[asset].picture(), image)`.
+    image,
 };
 
 /// Where a caption's text comes from.
@@ -98,6 +100,9 @@ pub const Node = struct {
     range: [3]f32 = .{ 0, 1, 0 },
     /// Radio and select captions.
     captions: []const []const u8 = &.{},
+    /// An image's entry in `Page.assets`, and how it is shown.
+    asset: u32 = none,
+    image: lcgf.widgets_image.Options = .{},
     /// A select's group headers (`<optgroup label>`), each before the option at `at`.
     groups: []const lcgf.widgets_select.Group = &.{},
     /// A list's maximum copy count.
@@ -209,6 +214,19 @@ pub const ItemField = struct {
     writes: bool = false,
 };
 
+/// A local image the page draws (`<img src>`, `background-image: url()`): asset k is
+/// texture k + 1. Lowering finds it; the driver (main.zig) reads and decodes it.
+pub const Asset = struct {
+    /// As written, and resolved against the file that names it.
+    src: []const u8,
+    path: []const u8,
+    loc: diag.Loc,
+    w: u32 = 0,
+    h: u32 = 0,
+    /// Premultiplied RGBA8 rows, `w * h * 4` bytes.
+    pixels: []const u8 = "",
+};
+
 pub const Page = struct {
     /// `<html lcgf-page>`, or the file's stem.
     name: []const u8,
@@ -219,6 +237,7 @@ pub const Page = struct {
     handlers: std.ArrayList(Handler) = .empty,
     tokens: std.ArrayList(Token) = .empty,
     item_fields: std.ArrayList(ItemField) = .empty,
+    assets: std.ArrayList(Asset) = .empty,
     theme: Theme = .{},
     /// The font table from `@font-face`: row k is `Font` k + 1 (0 is the theme's font). Paths
     /// are relative to the page's directory.
