@@ -4018,6 +4018,7 @@ Link: inline text in the accent colour that reports activation, as a page link d
 - `fn linkStyle(th: *const Theme) Style`: The target: a breadcrumb link's padded, rounded row, role link.
 - `fn activated(clicked: bool, focused: bool, in: *const Input) bool`: Whether the link fires this frame: clicked, or focused and Enter went down (the WAI-ARIA APG link pattern: links take Enter, not Space).
 - `fn link(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response`: A link named `id` showing `str`; `clicked` is set the frame it fires (`activated`).
+- `fn linkFace(f: *Frame, th: *const Theme, id: Id, str: []const u8, face: Style) Response`: `link` with its target laid out by `face` instead of `linkStyle(th)`, as `spec.styled` restyles `ct.link` (CSS on an `<a href>`); the fill still follows hover and held.
 - `fn Comptime(comptime name: [:0]const u8) type`: The comptime link named `name` (`Spec.widget`): the same rows as `link`, and Enter on it while focused turned into its event, as `link` sets `clicked`.
 
 ### `ct` (struct)
@@ -4118,6 +4119,7 @@ Radio group: a set of options of which exactly one is selected.
 - `fn ringStyle(th: *const Theme) Style`: The 16 px ring, outlined in the control's hot colour; it centres the dot.
 - `fn dotStyle(th: *const Theme, selected: bool) Style`: The dot inside the ring, picked by table index from whether the option is selected: transparent (it paints nothing) or the accent.
 - `fn radio(f: *Frame, th: *const Theme, id: Id, value: *u32, captions: []const []const u8) Response`: A radio group named `id` over `value`, the selected index, one option per caption.
+- `fn radioFace(f: *Frame, th: *const Theme, id: Id, value: *u32, captions: []const []const u8, face: Style) Response`: `radio` with its group laid out by `face` instead of `groupStyle(th)`, as `spec.styled` restyles `ct.radio`; the options are the theme's.
 - `fn paintSelection(t: *Tree, th: *const Theme, group: u32, value: u32, n: u32) void`: Writes the dots' fills, the options' value column (1 selected, 0 not) and the roles for the group at tree row `group` with `n` options, selection `value`: the group is a radio group and each option a radio, roles past `types.Role` written to the column directly.
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime n: u32) type`: The comptime radio group named `name` over field `bind`, with `n` options (`Spec.widget`): the same rows as `radio`, and the same input (`step`) applied to the comptime front end's state and focus.
 
@@ -4661,6 +4663,7 @@ Progress bar (tier 2): how far a task has come, as a filled part of a track, in 
 - `fn setRole(t: *Tree, track: u32) void`: The track is a progress bar (`a11y.Role.progress_bar`, past `types.Role`).
 - `fn setName(s: *a11y.Semantics, track: u32, label: u32) void`: Names the bar after the text of `label` (a caption's row), as `aria-labelledby`: a progress bar does not take its name from its content.
 - `fn progress(f: *Frame, th: *const Theme, value: f32) Node`: A progress bar showing `value` (0 to 1).
+- `fn progressFace(f: *Frame, th: *const Theme, value: f32, face: Style) Node`: `progress` with its track laid out by `face` instead of `trackStyle(th)`, as `spec.styled` restyles `ct.progress` (CSS on a `<progress>`); the bar is the theme's.
 - `fn Example(comptime th: Theme) type`: The example page: two captioned progress bars on a panel (a download 40% done, an install finished), in both front ends, in theme `th`.
 
 ### `ct` (struct)
@@ -4859,6 +4862,7 @@ Separator (tier 2): a thin rule between groups of widgets, across its parent.
 - `role: u8 = @backingInt(a11y.Role.separator)`: What assistive technology sees: a `separator` (not focusable, so it has no value), with no name and no states.
 - `replay = @embedFile("testdata/separator.replay")`: Input for `Page(.default)` at 320 x 200, one commented line per frame.
 - `fn separator(f: *Frame, th: *const Theme, orientation: Orientation) Node`: A rule across the parent, `orientation` picking which way.
+- `fn separatorFace(f: *Frame, face: Style) Node`: A rule laid out by `face` instead of `style(th, orientation)`, as `spec.styled` restyles `ct.separator` (CSS on an `<hr>`).
 - `fn style(th: *const Theme, orientation: Orientation) Style`: The rule's node: it fills its parent along its length and is 1 px thick, painted in the theme's outline colour (`control_hot`, as a group box's frame and a checkbox's box).
 - `fn Page(comptime th: Theme) type`: The example page: two labels split by a horizontal rule, then a row of two labels split by a vertical one, in both front ends, in theme `th`.
 

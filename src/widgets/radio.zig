@@ -106,7 +106,13 @@ pub const option_rows = 4;
 /// along. The response is every option's, OR'd; `clicked` is set when the selection was
 /// chosen this frame.
 pub fn radio(f: *Frame, th: *const Theme, id: Id, value: *u32, captions: []const []const u8) Response {
-    const group = f.open(id, groupStyle(th));
+    return radioFace(f, th, id, value, captions, groupStyle(th));
+}
+
+/// `radio` with its group laid out by `face` instead of `groupStyle(th)`, as `spec.styled`
+/// restyles `ct.radio`; the options are the theme's.
+pub fn radioFace(f: *Frame, th: *const Theme, id: Id, value: *u32, captions: []const []const u8, face: Style) Response {
+    const group = f.open(id, face);
     var all: u8 = 0;
     var clicked: u32 = none;
     var focused: u32 = none;

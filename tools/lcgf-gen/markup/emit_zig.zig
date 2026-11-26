@@ -729,11 +729,12 @@ pub const Emit = struct {
             },
             .button, .link => {
                 const h = e.clickHandler(n.id);
-                // A link has no Face function; lower.checkRuntime refuses CSS on it.
-                const face = if (n.kind == .button) e.rtFace(n) else "";
-                e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), if (face.len > 0) "buttonFace" else @tagName(n.kind), e.rtId(n.id, list_depth) });
+                const face = e.rtFace(n);
+                e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), e.faced(@tagName(n.kind), face), e.rtId(n.id, list_depth) });
                 e.rtCaption(n.text_kind, n.text);
-                if (face.len > 0) e.print(", {s}.labelText(&theme){s}", .{ e.use("label"), face });
+                // A button's Face takes its caption's text style first.
+                if (face.len > 0 and n.kind == .button) e.print(", {s}.labelText(&theme)", .{e.use("label")});
+                e.write(face);
                 if (h == null) e.write(");") else if (e.eachOf(i) != none)
                     e.print(").clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) })
                 else
@@ -770,11 +771,16 @@ pub const Emit = struct {
                 return "";
             },
             .progress => {
-                e.print("_ = {s}.progress(f, &theme, {s});", .{ e.use("progress"), e.stateRef(n.bind) });
+                const face = e.rtFace(n);
+                e.print("_ = {s}.{s}(f, &theme, {s}{s});", .{ e.use("progress"), e.faced("progress", face), e.stateRef(n.bind), face });
                 return "";
             },
             .separator => {
-                e.print("_ = {s}.separator(f, &theme, .{s});", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" });
+                const face = e.rtFace(n);
+                if (face.len > 0)
+                    e.print("_ = {s}.separatorFace(f{s});", .{ e.use("separator"), face })
+                else
+                    e.print("_ = {s}.separator(f, &theme, .{s});", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" });
                 return "";
             },
             .number => {
@@ -786,12 +792,15 @@ pub const Emit = struct {
                 return "";
             },
             .radio => {
-                e.print("_ = {s}.radio(f, &theme, {s}, &{s}, &.{{", .{ e.use("radio"), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                const face = e.rtFace(n);
+                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, &.{{", .{ e.use("radio"), e.faced("radio", face), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 for (n.captions, 0..) |c, k| {
                     e.write(if (k == 0) " " else ", ");
                     e.string(c);
                 }
-                e.write(" });");
+                e.write(" }");
+                e.write(face);
+                e.write(");");
                 return "";
             },
             .textfield, .search, .textarea => if (e.eachOf(i) != none) {

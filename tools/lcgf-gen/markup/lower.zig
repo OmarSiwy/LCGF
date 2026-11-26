@@ -1794,7 +1794,7 @@ pub const Lowerer = struct {
             // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
             // rules (margins) go on the row a widget pushes first, its root.
             const faced = switch (kind) {
-                .button, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number => true,
+                .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio => true,
                 else => false,
             };
             const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;
@@ -2424,8 +2424,7 @@ pub const Lowerer = struct {
         if (!l.identifier(f, l.valueLoc(n, "value"))) return;
         l.field(f, .f32, l.valueLoc(n, "value"), "<progress value>");
         var node: ir.Node = .{ .kind = .progress, .parent = parent, .loc = l.loc(n), .bind = f };
-        _ = th;
-        l.widgetStyle(n, parent, .{ .dir = .x }, &node);
+        l.widgetStyle(n, parent, lcgf.widgets_progress.trackStyle(&th), &node);
         l.skip[n] = true;
         l.ir_of[n] = l.addNode(node);
     }

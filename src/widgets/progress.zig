@@ -75,7 +75,13 @@ pub fn setName(s: *a11y.Semantics, track: u32, label: u32) void {
 
 /// A progress bar showing `value` (0 to 1). Anonymous and insensitive: it takes no input.
 pub fn progress(f: *Frame, th: *const Theme, value: f32) Node {
-    var s = trackStyle(th);
+    return progressFace(f, th, value, trackStyle(th));
+}
+
+/// `progress` with its track laid out by `face` instead of `trackStyle(th)`, as `spec.styled`
+/// restyles `ct.progress` (CSS on a `<progress>`); the bar is the theme's.
+pub fn progressFace(f: *Frame, th: *const Theme, value: f32, face: Style) Node {
+    var s = face;
     s.value = progressValue(value);
     const track = f.open(.none, s);
     _ = f.leaf(.none, barStyle(th, value));
@@ -90,8 +96,7 @@ pub const ct = struct {
     /// A progress bar showing the f32 field `value`. No id: it is not a widget, so it is not in
     /// the comptime front end's `Widget` enum, hit table or focus order.
     pub fn progress(comptime th: Theme, comptime value: @EnumLiteral()) Spec {
-        _ = th;
-        var s = spec_zig.row(.{}, .{Spec{ .kind = .col }});
+        var s = spec_zig.row(trackStyle(&th), .{Spec{ .kind = .col }});
         s.bind = @tagName(value);
         s.widget = ProgressWidget(@tagName(value));
         return s;
@@ -109,7 +114,7 @@ fn ProgressWidget(comptime value: []const u8) type {
             const tb = &ui.tables;
             next.* += comptime flatten.count(n);
             const v: f32 = @field(ui.signals.state, value);
-            var s = trackStyle(th);
+            var s = n.style;
             s.value = progressValue(v);
             const track = tb.t.push(parent, .none, &s);
             _ = tb.t.push(track, .none, &barStyle(th, v));

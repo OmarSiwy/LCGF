@@ -13,13 +13,17 @@ const toggle = lcgf.widgets_toggle;
 const checkbox = lcgf.widgets_checkbox;
 const switch_ = lcgf.widgets_switch;
 const slider = lcgf.widgets_slider;
+const progress = lcgf.widgets_progress;
+const separator = lcgf.widgets_separator;
+const radio = lcgf.widgets_radio;
+const link = lcgf.widgets_link;
 const label = lcgf.widgets_label;
 const Frame = lcgf.frame.Frame;
 const Style = lcgf.types.Style;
 
 pub const theme: w.Theme = .{};
 
-pub const State = struct { bold: bool = false, done: bool = false, wifi: bool = false, level: f32 = 0 };
+pub const State = struct { bold: bool = false, done: bool = false, wifi: bool = false, level: f32 = 0, size: u32 = 0 };
 
 const red: lcgf.types.Color = .rgb(192, 48, 48);
 const body: Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
@@ -36,6 +40,20 @@ const lit_face: Style = blk: {
     st.size = @splat(.fill);
     break :blk st;
 };
+/// `progress { width: 160px; height: 4px }`, `hr { width: 100px; background-color: #c03030 }`,
+/// `#size { width: 200px }`, `a { padding: 6px }`.
+const bar: Style = blk: {
+    var st = progress.trackStyle(&theme);
+    st.size = .{ .px(160), .px(4) };
+    break :blk st;
+};
+const rule: Style = .{ .size = .{ .px(100), .px(1) }, .fill = red };
+const group: Style = .{ .size = .{ .px(200), .fit }, .gap = theme.gap };
+const target: Style = blk: {
+    var st = link.linkStyle(&theme);
+    st.pad = @splat(6);
+    break :blk st;
+};
 const track: Style = .{ .dir = .x, .size = .{ .px(160), .px(12) }, .min = .{ 40, 0 }, .fill = theme.control, .radius = theme.radius, .role = .slider };
 
 pub const spec = s.col(body, .{
@@ -45,19 +63,27 @@ pub const spec = s.col(body, .{
     s.styled(switch_.ct.@"switch"(theme, .wifi, .wifi, ""), wifi_row),
     s.styled(slider.ct.slider(theme, .level, .level, .{}), track),
     s.col(lit_box, .{ s.col(lit_shadow, .{}), s.col(lit_ring, .{}), s.styled(button.ct.button(theme, .lit, "Lit"), lit_face) }),
+    s.styled(progress.ct.progress(theme, .level), bar),
+    s.styled(separator.ct.separator(theme, .horizontal), rule),
+    s.styled(radio.ct.radio(theme, .size, .size, .{ "Small", "Large" }), group),
+    s.styled(link.ct.link(theme, .docs, "Docs"), target),
 });
 
 pub fn Handlers(comptime Ui: type) type {
     return struct {
         gone: u32 = 0,
+        read_count: u32 = 0,
 
         pub fn go(h: *@This(), _: *Ui) void {
             h.gone += 1;
         }
+        pub fn read(h: *@This(), _: *Ui) void {
+            h.read_count += 1;
+        }
     };
 }
 
-pub const limits: lcgf.context.Limits = .{ .nodes = 32, .texts = 8, .strings = 1024, .depth = 8 };
+pub const limits: lcgf.context.Limits = .{ .nodes = 64, .texts = 16, .strings = 1024, .depth = 8 };
 
 /// The page in the runtime front end, by hand.
 pub const App = struct {
@@ -65,6 +91,7 @@ pub const App = struct {
     done: bool = false,
     wifi: bool = false,
     level: f32 = 0,
+    size: u32 = 0,
     /// The toggle's margin is a flex rule on its root, the row it pushes first.
     flex_buf: [flex_bytes]u8 align(lcgf.mem.column_align) = undefined,
     flex: ?lcgf.flex.Flex = null,
@@ -96,6 +123,10 @@ pub const App = struct {
         _ = f.leaf(.none, lit_ring);
         _ = button.buttonFace(f, &theme, .from("lit"), "Lit", label.labelText(&theme), lit_face);
         f.close();
+        _ = progress.progressFace(f, &theme, app.level, bar);
+        _ = separator.separatorFace(f, rule);
+        _ = radio.radioFace(f, &theme, .from("size"), &app.size, &.{ "Small", "Large" }, group);
+        _ = link.linkFace(f, &theme, .from("docs"), "Docs", target);
         f.close();
     }
 };
@@ -137,6 +168,18 @@ pub const replay =
     \\buttons
     \\frame
     \\pointer 60 130
+    \\frame
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\pointer 10 194
+    \\frame
+    \\buttons left
+    \\frame
+    \\buttons
+    \\frame
+    \\pointer 20 215
     \\frame
     \\buttons left
     \\frame

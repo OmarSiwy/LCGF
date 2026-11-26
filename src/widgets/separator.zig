@@ -25,7 +25,13 @@ pub const Orientation = enum(u1) { horizontal, vertical };
 
 /// A rule across the parent, `orientation` picking which way.
 pub fn separator(f: *Frame, th: *const Theme, orientation: Orientation) Node {
-    const n = f.leaf(.none, style(th, orientation));
+    return separatorFace(f, style(th, orientation));
+}
+
+/// A rule laid out by `face` instead of `style(th, orientation)`, as `spec.styled` restyles
+/// `ct.separator` (CSS on an `<hr>`).
+pub fn separatorFace(f: *Frame, face: Style) Node {
+    const n = f.leaf(.none, face);
     f.tree().c.role[n.ix()] = role;
     return n;
 }

@@ -52,7 +52,13 @@ pub fn activated(clicked: bool, focused: bool, in: *const Input) bool {
 
 /// A link named `id` showing `str`; `clicked` is set the frame it fires (`activated`).
 pub fn link(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
-    const node = f.open(id, linkStyle(th));
+    return linkFace(f, th, id, str, linkStyle(th));
+}
+
+/// `link` with its target laid out by `face` instead of `linkStyle(th)`, as `spec.styled`
+/// restyles `ct.link` (CSS on an `<a href>`); the fill still follows hover and held.
+pub fn linkFace(f: *Frame, th: *const Theme, id: Id, str: []const u8, face: Style) Response {
+    const node = f.open(id, face);
     var r = f.interact(node, .button);
     r.clicked = activated(r.clicked, r.focused, f.in);
     f.setFill(node, linkFill(th, r));
