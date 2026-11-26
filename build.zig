@@ -838,15 +838,17 @@ pub fn build(b: *std.Build) void {
             // (bindings/check/d3d12_record.c), the projection translated for Linux against them
             // (src/render/d3d12/c_linux.h), and the Zig side's frame. DirectX-Headers' include
             // paths are installed beside lcgf.h for the C++ and Rust sides.
-            if (b.lazyDependency("directx_headers", .{})) |dxh| {
-                // The pinned Zig strips the archive's top directory.
-                const dx_root = "";
-                const dx_include = [_]std.Build.LazyPath{ dxh.path(dx_root ++ "include"), dxh.path(dx_root ++ "include/wsl/stubs"), dxh.path(dx_root ++ "include/directx") };
+            // A directory path rather than a build.zig.zon dependency: the pinned Zig fetches every
+            // lazy dependency on every build, whatever its step, and only the bindings gate needs
+            // these headers (ci/jobs/bindings.sh downloads them).
+            if (b.option([]const u8, "directx-headers", "A DirectX-Headers v1.620.2 checkout, for the bindings gate's D3D12 recorder")) |dx_dir| {
+                const dx: std.Build.LazyPath = .{ .cwd_relative = dx_dir };
+                const dx_include = [_]std.Build.LazyPath{ dx.path(b, "include"), dx.path(b, "include/wsl/stubs"), dx.path(b, "include/directx") };
                 const d3d12_record = b.addLibrary(.{ .name = "lcgf_d3d12_record", .linkage = .static, .root_module = b.createModule(.{ .target = target, .optimize = optimize, .pic = true, .link_libc = true }) });
                 d3d12_record.root_module.addCSourceFile(.{ .file = b.path("bindings/check/d3d12_record.c") });
                 for (dx_include) |inc| d3d12_record.root_module.addIncludePath(inc);
                 abi_step.dependOn(&b.addInstallArtifact(d3d12_record, .{}).step);
-                abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = dxh.path(dx_root ++ "include"), .install_dir = .header, .install_subdir = "directx-headers" }).step);
+                abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = dx.path(b, "include"), .install_dir = .header, .install_subdir = "directx-headers" }).step);
                 const d3d12_linux_h = b.addTranslateC(.{ .root_source_file = b.path("src/render/d3d12/c_linux.h"), .target = target, .optimize = optimize, .link_libc = true });
                 for (dx_include) |inc| d3d12_linux_h.addIncludePath(inc);
                 const d3d12_dump_shaders = addGpuShaders(b, .d3d12, .{ .prebuilt = b.path("src/render/shaders/gen") }, repo_gpu_shaders(b));
