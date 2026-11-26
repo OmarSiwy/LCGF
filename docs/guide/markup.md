@@ -304,8 +304,10 @@ named lines, `%` tracks and a line on one axis only. `repeat(auto-fill | auto-fi
 whole column list makes as many columns as the grid's laid-out width fits (at most 64). Flex rules
 (margins, wrap, align-self) apply around and inside grids. A control directly in a cell needs a `<div>` around it on runtime pages.
 `columns: N` (or `column-count`) on a block is a grid of N equal columns that fills each column
-in turn (`column-gap` defaults to 1em). Children are never split, so the columns balance by
-child, not by height; text directly inside, a template among the children and a column width
+in turn (`column-gap` defaults to 1em). `columns: W` (or `column-width`) makes as many
+`minmax(W, 1fr)` columns as the box's laid-out width fits, at most N with `columns: N W`, and
+shares the children out evenly over them. Columns don't fragment: a child is never split, so the
+columns balance by child, not by height. Text directly inside and a template among the children
 are errors.
 
 Positioning: `relative` is a translate (`right` and `bottom` move the other way). `absolute`

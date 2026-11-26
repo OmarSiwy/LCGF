@@ -10,9 +10,9 @@ grid.html:3:79: error: grid-template-columns: give a track in px, em, rem or fr
 grid.html:3:115: error: every row of grid-template-areas needs the same number of cells (2, not 1)
   .g { display: grid; grid-template-columns: repeat(auto-fill, 40px) 10px [a] 10% 1fr; grid-template-areas: "a b" "c"; }
                                                                                                                   ^
-grid.html:8:18: error: a column width is not lowered; give a column count (columns: 3), or tiles with display: grid and repeat(auto-fill, minmax(W, 1fr))
-  .cw { columns: 120px; }
-                 ^
+grid.html:8:23: error: column-width takes a length in px, em or rem
+  .cw { column-width: 3; }
+                      ^
 grid.html:9:9: error: columns lays out child boxes and does not split text across columns; put the text in <p> elements
   .ct { column-count: 2; }
         ^

@@ -1,6 +1,6 @@
 //! grid, written by hand: display: grid with tracks (px, fr, auto, minmax, repeat), named
 //! areas, gaps, placed and spanning cells, implicit rows, column dense flow and alignment
-//! (`spec.grid`, `spec.cell`), and multi-column layout (`columns: N`) as a column-flow grid.
+//! (`spec.grid`, `spec.cell`), and multi-column layout (`columns: N`, `columns: W`) as a column-flow grid.
 
 const lcgf = @import("lcgf");
 const s = lcgf.spec;
@@ -44,6 +44,16 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         label.ct.label(theme, "n3"),
         label.ct.label(theme, "n4"),
         label.ct.label(theme, "n5"),
+    }),
+    // columns: 50px 8 in 230 px: four columns over seven children, two rows, each column in turn.
+    s.grid(.{ .size = .{ .px(230), .fit } }, .{ .gap = .{ 10, 0 }, .flow = .column, .repeat = .{ .mode = .auto_fill, .track = .minmaxFr(50, 1, lcgf.types.inf), .max = 8 } }, .{
+        label.ct.label(theme, "c1"),
+        label.ct.label(theme, "c2"),
+        label.ct.label(theme, "c3"),
+        label.ct.label(theme, "c4"),
+        label.ct.label(theme, "c5"),
+        label.ct.label(theme, "c6"),
+        label.ct.label(theme, "c7"),
     }),
     s.grid(.{}, .{ .rows = &.{ .fit, .fit }, .flow = .column_dense, .distribution = .{ .space_between, .start } }, .{
         label.ct.label(theme, "1"),

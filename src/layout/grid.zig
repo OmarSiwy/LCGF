@@ -282,9 +282,11 @@ pub const Grids = struct {
         extra[g] = @max(extra[g], implicit);
         var auto = decl.auto;
         if (decl.repeat) |r| {
-            std.debug.assert(decl.columns.len == 0 and g == 1 and r.max > 0);
+            std.debug.assert(decl.columns.len == 0 and r.max > 0 and (g == 1 or decl.rows.len == 0));
             extra[0] = r.max;
             auto[0] = r.track;
+            // Column flow (multi-column layout) has up to one row per item, in one column.
+            if (g == 0) extra[1] = @max(extra[1], implicit);
         }
         const k = gs.pushGrid(node, .{ decl.columns, decl.rows }, extra, auto);
         if (decl.repeat) |r| {
@@ -544,6 +546,16 @@ fn placeGrid(gs: *Grids, k: u32) void {
     if (gs.g.repeat_count[k] != 0) {
         gs.g.count[0][k] = gs.g.repeat_count[k];
         gs.g.explicit[0][k] = gs.g.repeat_count[k];
+        if (gs.g.flow[k] & 1 != 0) {
+            // Column flow over repeat columns (CSS multi-column): as many rows as share the
+            // items' cells out evenly, so each column fills in turn.
+            var area: u32 = 0;
+            var it = gs.g.first_item[k];
+            while (it != none) : (it = gs.it.next[it]) area += gs.it.span[0][it] * gs.it.span[1][it];
+            const rows = @min(std.math.divCeil(u32, area, gs.g.repeat_count[k]) catch unreachable, gs.g.reserved[1][k]);
+            gs.g.count[1][k] = rows;
+            gs.g.explicit[1][k] = rows;
+        }
     }
     defer trim(gs, k);
     const cols = gs.g.count[0][k];
@@ -1356,4 +1368,35 @@ test "Decl.repeat: auto-fill makes as many columns as fit the width, auto-fit no
     // auto-fit: two items, two columns sharing the width.
     try testing.expectEqual(2, s.gs.g.count[0][1]);
     try testing.expectEqual(@as(f32, 110), s.t.rect(nodes[6]).x1 - s.t.rect(nodes[6]).x0);
+}
+
+test "Decl.repeat with column flow: as many columns as fit, filled in turn, rows balanced" {
+    var s: Scene = .{};
+    s.init();
+    var raw: [16 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    s.gs = Grids.init(&carver, .{ .grids = 1, .tracks = 32, .items = 8, .cells = 64 });
+    const root = s.t.push(0, .none, &.{});
+    // CSS `columns: 50px` with a 10 px gap in 230 px: four columns over seven items, two rows.
+    const decl: Decl = .{ .repeat = .{ .mode = .auto_fill, .track = .minmaxFr(50, 1, std.math.inf(f32)), .max = 8 }, .gap = .{ 10, 0 }, .flow = .column };
+    const box = s.t.push(root, .none, &.{ .size = .{ .px(230), .fit } });
+    const items: [7]Item = @splat(.{});
+    const k = s.gs.declare(box, decl, implicitTracks(decl, &items));
+    var nodes: [7]u32 = undefined;
+    for (&nodes) |*n| {
+        _ = s.gs.place(k, s.t.len, .{});
+        n.* = s.t.push(box, .none, &.{ .float = true, .size = .{ .fit, .px(10) } });
+        s.t.seal(n.*);
+    }
+    s.t.seal(box);
+    s.t.seal(root);
+    run(&s.t, &s.tx, &s.gs, .{ 400, 300 });
+    try testing.expectEqual(4, s.gs.g.count[0][0]);
+    try testing.expectEqual(2, s.gs.g.count[1][0]);
+    // Down the first column, then the next: item 1 under item 0, item 2 at the top of column 2.
+    try testing.expectEqual(rect(0, 0, 50, 10), s.t.rect(nodes[0]));
+    try testing.expectEqual(rect(0, 10, 50, 20), s.t.rect(nodes[1]));
+    try testing.expectEqual(rect(60, 0, 110, 10), s.t.rect(nodes[2]));
+    try testing.expectEqual(rect(180, 0, 230, 10), s.t.rect(nodes[6]));
+    try testing.expectEqual(@as(f32, 20), s.t.rect(box).y1);
 }

@@ -1915,9 +1915,9 @@ pub const Lowerer = struct {
         var s = l.boxStyle(n, .{}, pdir, &params, &margin);
         s.dir = dir;
         if (disp == .grid) return l.gridContainer(n, parent, s, params, margin, null);
-        if (l.columnCount(n)) |count| {
-            if (disp != .block) l.ds.err(l.declared(n, .@"column-count").?.loc, "columns applies to a block box, not display: {s}", .{@tagName(disp)});
-            return l.gridContainer(n, parent, s, params, margin, count);
+        if (l.columnsOf(n)) |cols| {
+            if (disp != .block) l.ds.err(cols.at, "columns applies to a block box, not display: {s}", .{@tagName(disp)});
+            return l.gridContainer(n, parent, s, params, margin, cols);
         }
         if (disp == .flex) if (l.keyword(n, .@"flex-wrap")) |kw| {
             const at = l.declared(n, .@"flex-wrap").?.loc;
@@ -2002,48 +2002,70 @@ pub const Lowerer = struct {
         return p != none and l.page.nodes.items(.placed)[p].grid != null;
     }
 
-    /// `columns: N` or `column-count: N` on `n`, or null for none (`auto`). A column width is
-    /// an error: the columns are a grid of N equal tracks (`multicolDecl`).
-    fn columnCount(l: *Lowerer, n: u32) ?u32 {
-        const v = l.declared(n, .@"column-count") orelse return null;
-        var count: ?u32 = null;
-        var r: values.Reader = .init(l.c, v.first, v.end);
-        while (r.next()) |t| {
-            const num = l.c.toks.items(.num)[t];
-            if (values.isIdent(l.c, t, "auto")) continue;
-            if (l.c.toks.items(.type)[t] == .number and num >= 1 and num <= 64 and num == @floor(num)) {
-                count = @intFromFloat(num);
-            } else if (l.c.toks.items(.type)[t] == .dimension) {
-                l.ds.err(l.c.tokLoc(t), "a column width is not lowered; give a column count (columns: 3), or tiles with display: grid and repeat(auto-fill, minmax(W, 1fr))", .{});
-            } else l.ds.err(l.c.tokLoc(t), "columns takes a column count from 1 to 64", .{});
-        }
-        return count;
+    /// Multi-column layout on a box: a column count, a column width in px, or both (the count
+    /// is then the most columns), from `columns`, `column-count` and `column-width`.
+    const Columns = struct { count: ?u32 = null, width: ?f32 = null, at: Loc };
+
+    /// `n`'s columns, or null for none (`auto`).
+    fn columnsOf(l: *Lowerer, n: u32) ?Columns {
+        const cv = l.declared(n, .@"column-count");
+        const wv = l.declared(n, .@"column-width");
+        const first = cv orelse wv orelse return null;
+        var cols: Columns = .{ .at = first.loc };
+        // `columns` sets both longhands from one value: each takes its own kind of token.
+        inline for (.{ cv, wv }, 0..) |value, w| if (value) |v| {
+            var r: values.Reader = .init(l.c, v.first, v.end);
+            while (r.next()) |t| {
+                const ty = l.c.toks.items(.type)[t];
+                const num = l.c.toks.items(.num)[t];
+                if (values.isIdent(l.c, t, "auto")) continue;
+                if (ty == .number) {
+                    if (w == 1) {
+                        if (v.shorthand == none) l.ds.err(l.c.tokLoc(t), "column-width takes a length in px, em or rem", .{});
+                    } else if (num >= 1 and num <= 64 and num == @floor(num)) {
+                        cols.count = @intFromFloat(num);
+                    } else l.ds.err(l.c.tokLoc(t), "a column count is a whole number from 1 to 64", .{});
+                } else if (ty == .dimension or ty == .percentage) {
+                    if (w == 0) {
+                        if (v.shorthand == none) l.ds.err(l.c.tokLoc(t), "column-count takes a whole number from 1 to 64", .{});
+                    } else if (l.lengthAt(n, t, t + 1, .@"column-width")) |len| switch (len) {
+                        .px => |width| cols.width = width,
+                        else => l.ds.err(l.c.tokLoc(t), "a column width is a length in px, em or rem", .{}),
+                    };
+                } else l.badValue(t, if (w == 0) .@"column-count" else .@"column-width", v.end);
+            }
+        };
+        return if (cols.count == null and cols.width == null) null else cols;
     }
 
-    /// Multi-column layout as a grid: `count` equal columns, filled down each one in turn
-    /// with as many rows as the children need (`Decl.flow = .column`). A child is never split
-    /// across columns, so the columns balance by child, not by height.
-    fn multicolDecl(l: *Lowerer, n: u32, count: u32) lcgf.grid.Decl {
+    /// Multi-column layout as a column-flow grid (`Decl.flow = .column`), each column filled
+    /// in turn: `count` equal columns with as many rows as the children need, or, with a
+    /// width, as many `minmax(width, 1fr)` columns as fit (at most `count`), the rows shared
+    /// out evenly by `grid` once it knows the columns. A child is never split across columns,
+    /// so the columns balance by child, not by height.
+    fn multicolDecl(l: *Lowerer, n: u32, cols: Columns) lcgf.grid.Decl {
         const kids = l.content(n);
-        const at = l.declared(n, .@"column-count").?.loc;
-        if (kids.text) l.ds.err(at, "columns lays out child boxes and does not split text across columns; put the text in <p> elements", .{});
-        if (l.hasChild(n, "template")) l.ds.err(at, "columns are laid out from a fixed number of children; a template's copies can't fill them", .{});
+        if (kids.text) l.ds.err(cols.at, "columns lays out child boxes and does not split text across columns; put the text in <p> elements", .{});
+        if (l.hasChild(n, "template")) l.ds.err(cols.at, "columns are laid out from a fixed number of children; a template's copies can't fill them", .{});
+        // column-gap: normal is 1em in multi-column layout.
+        var d: lcgf.grid.Decl = .{ .flow = .column, .gap = .{ l.px(n, .@"column-gap") orelse l.text[n].px, l.px(n, .@"row-gap") orelse 0 } };
+        if (cols.width) |w| {
+            d.repeat = .{ .mode = .auto_fill, .track = .minmaxFr(@max(w, 1), 1, lcgf.types.inf), .max = cols.count orelse 64 };
+            return d;
+        }
+        const count = cols.count.?;
         const columns = ok(l.arena.alloc(lcgf.grid.Track, count));
         @memset(columns, .fr(1));
         const rows = ok(l.arena.alloc(lcgf.grid.Track, (kids.elements + count - 1) / count));
         @memset(rows, .fit);
-        return .{
-            .columns = columns,
-            .rows = rows,
-            .flow = .column,
-            // column-gap: normal is 1em in multi-column layout.
-            .gap = .{ l.px(n, .@"column-gap") orelse l.text[n].px, l.px(n, .@"row-gap") orelse 0 },
-        };
+        d.columns = columns;
+        d.rows = rows;
+        return d;
     }
 
-    /// A `display: grid` box, or a multi-column one (`multicol` columns, `multicolDecl`):
+    /// A `display: grid` box, or a multi-column one (`multicol`, `multicolDecl`):
     /// `spec.grid(style, decl, children)`.
-    fn gridContainer(l: *Lowerer, n: u32, parent: u32, style: Style, params: []const u8, margin: ?[4]f32, multicol: ?u32) void {
+    fn gridContainer(l: *Lowerer, n: u32, parent: u32, style: Style, params: []const u8, margin: ?[4]f32, multicol: ?Columns) void {
         const G = lcgf.grid;
         var d: G.Decl = .{};
         l.repeat = null;
@@ -2115,7 +2137,7 @@ pub const Lowerer = struct {
                 break :blk .stretch;
             };
         };
-        if (multicol) |count| d = l.multicolDecl(n, count);
+        if (multicol) |cols| d = l.multicolDecl(n, cols);
         var node: ir.Node = .{ .kind = .container, .parent = parent, .loc = l.loc(n), .style = style, .params_expr = params, .margin = margin, .placed = .{ .grid = d } };
         node.style.dir = .y;
         node.style.gap = 0;
