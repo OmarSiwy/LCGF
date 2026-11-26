@@ -128,8 +128,18 @@ const QuadInputs = extern struct { rect: [4]f32, vis: [4]f32, look: Look, border
 /// node identically give it the same hash. `out` has at least `t.len` rows. `strings` is the
 /// storage `tx`'s spans index, as passed to `paint.emit`.
 pub fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, out: []u32) void {
+    hashInto(t, tx, cu, strings, out, null);
+}
+
+/// `hashNodes`, also writing each node's paint bounds into `bounds` (`[4][]f32`, or null for
+/// none) in the same row loop.
+inline fn hashInto(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, out: []u32, bounds: anytype) void {
     const c = &t.c;
     for (0..t.len) |i| {
+        if (@TypeOf(bounds) != @TypeOf(null)) {
+            const b = geometry.nodeBounds(t, i);
+            inline for (0..4) |k| bounds[k][i] = b[k];
+        }
         const x = &t.x;
         const own = c.extra[i];
         const row: QuadInputs = .{
@@ -213,7 +223,7 @@ pub const Damage = struct {
         const now = &dm.gen[dm.cur];
         const last = &dm.gen[dm.cur ^ 1];
         now.len = t.len;
-        hashNodes(t, tx, cu, strings, now.hash);
+        hashInto(t, tx, cu, strings, now.hash, &now.vis);
         const both = simd.u(@min(now.len, last.len));
         const either = simd.u(@max(now.len, last.len));
         var count: simd.U = @splat(0);
@@ -226,12 +236,9 @@ pub const Damage = struct {
             count += d;
         }
 
-        // The dirty rows as a list, then their rects into the region. A row that exists in one
-        // frame only adds that frame's rect; the other is masked to an empty box.
-        for (0..t.len) |r| {
-            const bounds = geometry.nodeBounds(t, r);
-            inline for (0..4) |k| now.vis[k][r] = bounds[k];
-        }
+        // The dirty rows as a list, then their rects (`now.vis`, written by `hashInto`) into the
+        // region. A row that exists in one frame only adds that frame's rect; the other is
+        // masked to an empty box.
         var w: u32 = 0;
         for (0..@max(now.len, last.len)) |r| w = simd.emit(u32, dm.list, w, @intCast(r), dm.dirty[r] != 0);
         dm.dirty_len = w;
