@@ -61,7 +61,13 @@ pub fn toggleFill(th: *const Theme, pressed: bool, r: Response) Color {
 /// button does (`button.activated`: a click, or Enter or Space while focused; WAI-ARIA APG
 /// button pattern, toggle button) and sets `clicked` then.
 pub fn toggle(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
-    const node = f.open(id, button_zig.buttonStyle(th));
+    return toggleFace(f, th, id, value, str, button_zig.buttonStyle(th));
+}
+
+/// `toggle` laid out by `face` instead of the button's style, as `spec.styled` restyles
+/// `ct.toggle`; the fill still follows the value, hover and held.
+pub fn toggleFace(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8, face: Style) Response {
+    const node = f.open(id, face);
     var r = f.interact(node, .button);
     r.clicked = button_zig.activated(r.clicked, r.focused, f.in);
     value.* = base.toggle(value.*, r.clicked);
@@ -339,4 +345,39 @@ test "Page: the toggle replay flips by click, Enter and Space, in both front end
 test {
     testing.refAllDecls(@This());
     testing.refAllDecls(ct);
+}
+
+test "toggleFace: restyled as spec.styled restyles ct.toggle, in both front ends" {
+    const S = struct {
+        const th = Theme.default;
+        const face: Style = blk: {
+            var st = button_zig.buttonStyle(&th);
+            st.size = .{ .px(120), .px(40) };
+            st.border = 2;
+            st.border_color = .rgb(200, 10, 10);
+            break :blk st;
+        };
+        const App = struct {
+            on: bool = false,
+            clicks: u32 = 0,
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, .{ .dir = .x });
+                app.clicks += @intFromBool(toggleFace(f, &th, .from("on"), &app.on, "On", face).clicked);
+                f.close();
+            }
+        };
+        const Ui = base.ComptimeUi(struct { on: bool = false }, spec_zig.row(.{}, .{spec_zig.styled(ct.toggle(th, .on, .on, "On"), face)}), th);
+        var h: base.Harness(App, Ui, .{ .nodes = 8, .texts = 2, .customs = 1, .strings = 64, .depth = 8 }) = .{};
+    };
+    S.h.init();
+    var in: Input = .{ .viewport = .{ 200, 60 } };
+    const out = try S.h.frame(&in);
+    try testing.expectEqual(@as(f32, 120), out.runtime.tree.rect(2).w());
+    // Hover, press and release over it: both draw the same frames, and it fires.
+    in.pointer = .{ 60, 20 };
+    for ([_]bool{ false, true, false }) |down| {
+        in.buttons.left = down;
+        _ = try S.h.frame(&in);
+    }
+    try testing.expectEqual(1, S.h.app.clicks);
 }

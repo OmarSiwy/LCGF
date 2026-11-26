@@ -3969,6 +3969,7 @@ Button: a caption on a face that reports a click.
 - `fn activated(clicked: bool, focused: bool, in: *const Input) bool`: Whether the button fires this frame: clicked, or focused and Enter went down or Space came up (the WAI-ARIA APG button pattern; Space on release, as native buttons do, so holding it does not repeat).
 - `fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response`: A button named `id` showing `str`; `clicked` is set the frame it fires (`activated`): the left button goes up over it after going down on it, or, while it has focus, Enter or Space.
 - `fn buttonStyled(f: *Frame, th: *const Theme, id: Id, str: []const u8, ts: TextStyle) Response`: `button` with its caption drawn in `ts` instead of the theme's label text.
+- `fn buttonFace(f: *Frame, th: *const Theme, id: Id, str: []const u8, ts: TextStyle, face: Style) Response`: `buttonStyled` with its face laid out by `face` instead of `buttonStyle(th)`, as `spec.styled` restyles `ct.button` (CSS on a `<button>`); the fill still follows hover and held.
 - `fn Comptime(comptime name: [:0]const u8) type`: The comptime button named `name` (`Spec.widget`): it builds the same rows as `button`, with the comptime front end's hover and held, and turns Enter and Space on it while focused into its event, as `button` sets `clicked`.
 
 ### `ct` (struct)
@@ -4053,6 +4054,7 @@ Checkbox: a box and a caption; a click toggles it.
 - `fn checkboxBox(th: *const Theme, value: Check) Style`: The 16 px box, outlined, filled by `boxFills`; it centres the dash.
 - `fn checkboxDash(th: *const Theme, value: Check) Style`: The mixed state's dash across the box: always there, transparent (so it paints nothing) unless the value is mixed, so the look is picked by table index and the rows never change.
 - `fn checkbox(f: *Frame, th: *const Theme, id: Id, value: anytype, str: []const u8) Response`: A checkbox named `id` over `value` (a `*bool` or a `*Check`), captioned by `str`.
+- `fn checkboxFace(f: *Frame, th: *const Theme, id: Id, value: anytype, str: []const u8, face: Style) Response`: `checkbox` with its row laid out by `face` instead of `checkboxStyle(th)`, as `spec.styled` restyles `ct.checkbox`.
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type`: The comptime checkbox named `name` over field `bind` (`Spec.widget`): the same rows as `checkbox`, and the same input (`toggled`, `flip`) applied to the comptime front end's state; Space on it while focused is also its event, as `checkbox` sets `clicked`.
 
 ### `Check` (enum)
@@ -4156,6 +4158,7 @@ Switch: an on/off control drawn as a knob on a track, with a caption.
 - `fn switchStyle(th: *const Theme) Style`: The row: track, then caption, centred across, `gap` apart.
 - `fn trackStyle(th: *const Theme, on: bool) Style`: The 32 x 18 pill.
 - `fn knobStyle(th: *const Theme) Style`: The 14 px knob, in the text colour.
+- `fn switchFace(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8, face: Style) Response`: `switch` with its row laid out by `face` instead of `switchStyle(th)`, as `spec.styled` restyles `ct.switch`.
 - `fn expose(t: *Tree, row: u32, on: bool) void`: Writes what assistive technology reads of the switch at tree row `row`: role switch (past `types.Role`, so written to the column directly) and the value, 1 on and 0 off.
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type`: The comptime switch named `name` over field `bind` (`Spec.widget`): the same rows as `switch`, and the same input (`checkbox.toggled`, `base.toggle`) applied to the comptime front end's state; Space on it while focused is also its event.
 
@@ -4197,6 +4200,7 @@ Toggle button: a button that stays pressed until it is pressed again (bold, mute
 - `fn toggleFills(th: *const Theme) [2]base.StateColors`: The face's colours: released, the control fills; pressed, the accent at rest and under the pointer and the held colour while held.
 - `fn toggleFill(th: *const Theme, pressed: bool, r: Response) Color`: The face's colour, picked by table index from whether it is pressed and from hover and held.
 - `fn toggle(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response`: A toggle button named `id` over `value`, captioned by `str`.
+- `fn toggleFace(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8, face: Style) Response`: `toggle` laid out by `face` instead of the button's style, as `spec.styled` restyles `ct.toggle`; the fill still follows the value, hover and held.
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8) type`: The comptime toggle button named `name` over field `bind` (`Spec.widget`): the same rows as `toggle`, and the same input (`button.activated`, `base.toggle`) applied to the comptime front end's state; Enter and Space on it while focused are also its event.
 
 ### `ct` (struct)
@@ -4243,6 +4247,7 @@ Slider: a value between two ends, set by dragging along a track.
 - `fn sliderTrack(th: *const Theme) Style`: The track: as wide as it is given (at least 40), 8 tall, rounded, the control colour; role slider.
 - `fn sliderThumb(th: *const Theme, frac: f32) Style`: The filled part of the track, `frac` of its width, in the accent.
 - `fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32) Response`: A slider named `id` over `value`, from `lo` at the left end to `hi` at the right.
+- `fn sliderFace(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32, face: Style) Response`: `slider` with its track laid out by `face` instead of `sliderTrack(th)`, as `spec.styled` restyles `ct.slider`; the thumb is the theme's.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, id: Id, lo: f32, hi: f32) void`: The range of the slider named `id` in `t`, for assistive technology: `lo` to `hi`, stepped by a hundredth of it as its arrow keys are (`keyed`).
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime range: Range) type`: The comptime slider named `name` over field `bind`, running `range` (`Spec.widget`): the same rows as `slider`, and the same input applied to the comptime front end's state: while held the value follows the pointer across the track's last rect (`base.slide`), while focused the keys move it (`keyed`).
 

@@ -104,7 +104,13 @@ pub fn checkboxDash(th: *const Theme, value: Check) Style {
 /// A checkbox named `id` over `value` (a `*bool` or a `*Check`), captioned by `str`. A click,
 /// or Space while it has focus, toggles it (`toggled`, `flip`) and sets `clicked`.
 pub fn checkbox(f: *Frame, th: *const Theme, id: Id, value: anytype, str: []const u8) Response {
-    const row = f.open(id, checkboxStyle(th));
+    return checkboxFace(f, th, id, value, str, checkboxStyle(th));
+}
+
+/// `checkbox` with its row laid out by `face` instead of `checkboxStyle(th)`, as
+/// `spec.styled` restyles `ct.checkbox`.
+pub fn checkboxFace(f: *Frame, th: *const Theme, id: Id, value: anytype, str: []const u8, face: Style) Response {
+    const row = f.open(id, face);
     var r = f.interact(row, .button);
     r.clicked = toggled(r.clicked, r.focused, f.in);
     value.* = flip(value.*, r.clicked);
@@ -439,4 +445,39 @@ test "Page: the checkbox replay toggles by click and Space, mixed first to on, i
 test {
     testing.refAllDecls(@This());
     testing.refAllDecls(ct);
+}
+
+test "checkboxFace: restyled as spec.styled restyles ct.checkbox, in both front ends" {
+    const S = struct {
+        const th = Theme.default;
+        const face: Style = blk: {
+            var st = checkboxStyle(&th);
+            st.size = .{ .px(120), .px(40) };
+            st.border = 2;
+            st.border_color = .rgb(200, 10, 10);
+            break :blk st;
+        };
+        const App = struct {
+            done: bool = false,
+            clicks: u32 = 0,
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, .{ .dir = .x });
+                app.clicks += @intFromBool(checkboxFace(f, &th, .from("done"), &app.done, "Done", face).clicked);
+                f.close();
+            }
+        };
+        const Ui = base.ComptimeUi(struct { done: bool = false }, spec_zig.row(.{}, .{spec_zig.styled(ct.checkbox(th, .done, .done, "Done"), face)}), th);
+        var h: base.Harness(App, Ui, .{ .nodes = 8, .texts = 2, .customs = 1, .strings = 64, .depth = 8 }) = .{};
+    };
+    S.h.init();
+    var in: Input = .{ .viewport = .{ 200, 60 } };
+    const out = try S.h.frame(&in);
+    try testing.expectEqual(@as(f32, 120), out.runtime.tree.rect(2).w());
+    // Hover, press and release over it: both draw the same frames, and it fires.
+    in.pointer = .{ 60, 20 };
+    for ([_]bool{ false, true, false }) |down| {
+        in.buttons.left = down;
+        _ = try S.h.frame(&in);
+    }
+    try testing.expectEqual(1, S.h.app.clicks);
 }

@@ -58,7 +58,14 @@ pub fn button(f: *Frame, th: *const Theme, id: Id, str: []const u8) Response {
 
 /// `button` with its caption drawn in `ts` instead of the theme's label text.
 pub fn buttonStyled(f: *Frame, th: *const Theme, id: Id, str: []const u8, ts: TextStyle) Response {
-    const node = f.open(id, buttonStyle(th));
+    return buttonFace(f, th, id, str, ts, buttonStyle(th));
+}
+
+/// `buttonStyled` with its face laid out by `face` instead of `buttonStyle(th)`, as
+/// `spec.styled` restyles `ct.button` (CSS on a `<button>`); the fill still follows hover and
+/// held.
+pub fn buttonFace(f: *Frame, th: *const Theme, id: Id, str: []const u8, ts: TextStyle, face: Style) Response {
+    const node = f.open(id, face);
     var r = f.interact(node, .button);
     r.clicked = activated(r.clicked, r.focused, f.in);
     f.setFill(node, buttonFill(th, r));
@@ -390,4 +397,38 @@ test "Page: the button replay fires on click, Enter and Space up, in both front 
 test {
     testing.refAllDecls(@This());
     testing.refAllDecls(ct);
+}
+
+test "buttonFace: restyled as spec.styled restyles ct.button, in both front ends" {
+    const S = struct {
+        const th = Theme.default;
+        const face: Style = blk: {
+            var st = buttonStyle(&th);
+            st.size = .{ .px(120), .px(40) };
+            st.border = 2;
+            st.border_color = .rgb(200, 10, 10);
+            break :blk st;
+        };
+        const App = struct {
+            clicks: u32 = 0,
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, .{ .dir = .x });
+                app.clicks += @intFromBool(buttonFace(f, &th, .from("go"), "Go", label_zig.labelText(&th), face).clicked);
+                f.close();
+            }
+        };
+        const Ui = base.ComptimeUi(struct {}, spec_zig.row(.{}, .{spec_zig.styled(ct.button(th, .go, "Go"), face)}), th);
+        var h: base.Harness(App, Ui, .{ .nodes = 8, .texts = 2, .customs = 1, .strings = 64, .depth = 8 }) = .{};
+    };
+    S.h.init();
+    var in: Input = .{ .viewport = .{ 200, 60 } };
+    const out = try S.h.frame(&in);
+    try testing.expectEqual(@as(f32, 120), out.runtime.tree.rect(2).w());
+    // Hover, press and release over it: both draw the same frames, and it fires.
+    in.pointer = .{ 60, 20 };
+    for ([_]bool{ false, true, false }) |down| {
+        in.buttons.left = down;
+        _ = try S.h.frame(&in);
+    }
+    try testing.expectEqual(1, S.h.app.clicks);
 }

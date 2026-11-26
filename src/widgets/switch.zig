@@ -68,7 +68,13 @@ pub fn knobStyle(th: *const Theme) Style {
 /// A switch named `id` over `value`, captioned by `str`. A click, or Space while it has
 /// focus, flips it (WAI-ARIA APG switch pattern; `checkbox.toggled`) and sets `clicked`.
 pub fn @"switch"(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response {
-    const row = f.open(id, switchStyle(th));
+    return switchFace(f, th, id, value, str, switchStyle(th));
+}
+
+/// `switch` with its row laid out by `face` instead of `switchStyle(th)`, as `spec.styled`
+/// restyles `ct.switch`.
+pub fn switchFace(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8, face: Style) Response {
+    const row = f.open(id, face);
     var r = f.interact(row, .button);
     r.clicked = checkbox_zig.toggled(r.clicked, r.focused, f.in);
     value.* = base.toggle(value.*, r.clicked);
@@ -363,4 +369,39 @@ test "Page: the switch replay flips by click and Space, in both front ends" {
 test {
     testing.refAllDecls(@This());
     testing.refAllDecls(ct);
+}
+
+test "switchFace: restyled as spec.styled restyles ct.switch, in both front ends" {
+    const S = struct {
+        const th = Theme.default;
+        const face: Style = blk: {
+            var st = switchStyle(&th);
+            st.size = .{ .px(120), .px(40) };
+            st.border = 2;
+            st.border_color = .rgb(200, 10, 10);
+            break :blk st;
+        };
+        const App = struct {
+            on: bool = false,
+            clicks: u32 = 0,
+            pub fn build(app: *App, f: *Frame) void {
+                _ = f.open(.none, .{ .dir = .x });
+                app.clicks += @intFromBool(switchFace(f, &th, .from("on"), &app.on, "On", face).clicked);
+                f.close();
+            }
+        };
+        const Ui = base.ComptimeUi(struct { on: bool = false }, spec_zig.row(.{}, .{spec_zig.styled(ct.@"switch"(th, .on, .on, "On"), face)}), th);
+        var h: base.Harness(App, Ui, .{ .nodes = 8, .texts = 2, .customs = 1, .strings = 64, .depth = 8 }) = .{};
+    };
+    S.h.init();
+    var in: Input = .{ .viewport = .{ 200, 60 } };
+    const out = try S.h.frame(&in);
+    try testing.expectEqual(@as(f32, 120), out.runtime.tree.rect(2).w());
+    // Hover, press and release over it: both draw the same frames, and it fires.
+    in.pointer = .{ 60, 20 };
+    for ([_]bool{ false, true, false }) |down| {
+        in.buttons.left = down;
+        _ = try S.h.frame(&in);
+    }
+    try testing.expectEqual(1, S.h.app.clicks);
 }
