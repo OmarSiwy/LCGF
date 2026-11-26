@@ -635,6 +635,16 @@ test "roleName: every role byte names its role; others are unknown" {
     try testing.expectEqualStrings("unknown", roleName(255));
 }
 
+test "types.Role: every tag a front end writes reads back as the a11y role of its name" {
+    inline for (@typeInfo(types.Role).@"enum".field_names) |name| {
+        try testing.expectEqualStrings(name, roleName(@backingInt(@field(types.Role, name))));
+    }
+    // The document and widget roles the markup compiler emits (markup-engine-api.md F1).
+    inline for (.{ .link, .separator, .list, .list_item, .table, .row, .cell, .column_header, .row_header, .dialog, .status }) |r| {
+        try testing.expectEqual(@backingInt(@as(Role, r)), @backingInt(@as(types.Role, r)));
+    }
+}
+
 test "tree export: every role fits the tree's role column and the core roles keep their values" {
     try testing.expectEqual(1, @sizeOf(Role));
     try testing.expectEqual(@as(u8, 0), @backingInt(Role.none));

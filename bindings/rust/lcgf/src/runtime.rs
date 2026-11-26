@@ -246,7 +246,7 @@ impl Default for Limits {
 }
 
 /// The layout hash of the rows this crate makes (`LCGF_RT_LAYOUT` in lcgf.h).
-pub const RT_LAYOUT: u32 = 0x1878_28df;
+pub const RT_LAYOUT: u32 = 0x6645_151e;
 
 /// A node's row as the library stores it (`lcgf_row`, Zig's `Template`). `Row::from` is
 /// `Template.from`, run here (at compile time in a `const`), so only the row crosses the seam.

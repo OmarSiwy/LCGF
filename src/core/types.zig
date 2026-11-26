@@ -311,8 +311,18 @@ pub const Role = enum(u8) {
     image,
     text_input,
     // Keep the existing accessibility wire bytes; a11y/tree.zig verifies every field.
+    link = 8,
+    separator = 16,
     heading = 17,
     article = 18,
+    list = 20,
+    list_item = 21,
+    table = 38,
+    row = 40,
+    cell = 41,
+    column_header = 42,
+    row_header = 43,
+    dialog = 44,
     region = 48,
     banner = 49,
     navigation = 50,
@@ -321,6 +331,7 @@ pub const Role = enum(u8) {
     content_info = 53,
     form = 54,
     search = 55,
+    status = 56,
 };
 
 test "Role: one byte, none is the zero default" {

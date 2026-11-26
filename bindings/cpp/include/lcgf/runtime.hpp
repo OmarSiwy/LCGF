@@ -65,7 +65,7 @@ inline constexpr float inf = std::numeric_limits<float>::infinity();
 
 enum class Dir : std::uint32_t { x = 0, y = 1 };
 enum class Align : std::uint32_t { start = 0, center = 1, end = 2 };
-enum class Role : std::uint32_t { none, group, label, button, checkbox, slider, image, text_input, heading = 17, article = 18, region = 48, banner, navigation, main, complementary, content_info, form, search };
+enum class Role : std::uint32_t { none, group, label, button, checkbox, slider, image, text_input, link, separator = 16, heading, article, list = 20, list_item, table = 38, row = 40, cell, column_header, row_header, dialog, region = 48, banner, navigation, main, complementary, content_info, form, search, status };
 
 /// A length: `Size::Fit()`, `Fill()`, `Px(8)`, `Pct(0.5f)`, `Grow(2)`.
 struct Size {

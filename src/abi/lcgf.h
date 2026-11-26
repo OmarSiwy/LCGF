@@ -239,7 +239,7 @@ typedef struct {
 
 /* The layout of lcgf_style, lcgf_text_style, lcgf_row and lcgf_view the library reads:
  * compare with lcgf_rt_layout() before making a context. */
-#define LCGF_RT_LAYOUT 0x187828dfu
+#define LCGF_RT_LAYOUT 0x6645151eu
 
 /* What a widget reports: bit 0 hovered, 1 held, 2 pressed, 3 released, 4 clicked, 5 focused. */
 typedef uint8_t lcgf_response;
