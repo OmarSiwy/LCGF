@@ -467,6 +467,23 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             return t.pushRow(parent, id, &Template.from(s));
         }
 
+        /// The layout inputs a collapsed node (`Participation.layout` off) has zeroed.
+        fn collapses(comptime name: []const u8) bool {
+            const names = .{ "min", "max", "grow", "pct", "pad_lo", "pad_hi", "flow", "gap" };
+            inline for (names) |n| if (comptime std.mem.eql(u8, n, name)) return true;
+            return false;
+        }
+
+        /// `v` of column `name`, or its collapsed value (`pct` -1, the others 0) when the node
+        /// takes no layout. Bit masks: a select on the loaded style value compiled to jumps.
+        inline fn collapse(comptime name: []const u8, v: anytype, layout: bool) @TypeOf(v) {
+            if (comptime !collapses(name)) return v;
+            const U = @Vector(@typeInfo(@TypeOf(v)).vector.len, u32);
+            const off: U = @splat(@bitCast(@as(f32, if (comptime std.mem.eql(u8, name, "pct")) -1 else 0)));
+            const keep: U = @splat(0 -% @as(u32, @intFromBool(layout)));
+            return @bitCast((@as(U, @bitCast(v)) & keep) | (off & ~keep));
+        }
+
         /// `push` from a style already turned into its row (`Template.from`, once per style
         /// rather than once per node): the row is copied as it is, one store per column.
         /// `row` is a `*const Template` or a `*const FlatRow`.
@@ -483,12 +500,6 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             c.id[i] = @backingInt(id);
             c.parent[i] = parent;
             c.end[i] = i + 1;
-            inline for (Template.node_fields) |name| {
-                const v = rowField(row, name);
-                if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
-                    inline for (0..2) |a| @field(c, name)[a][i] = v[a];
-                } else @field(c, name)[i] = v;
-            }
             // The root reads its own `scope` as its parent's, so it is 0 before the read: row 0
             // of `x` holds the defaults (`.all`, no cursor), with no `i == 0` test.
             c.scope[i] = 0;
@@ -496,20 +507,19 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             const up_cursor = t.x.row[c.scope[parent]].active_cursor;
             const active_in: u8 = @as(u8, @bitCast(rowField(row, "participation"))) & @as(u8, @bitCast(up));
             // No layout collapses the node: every domain off (`.collapsed` is 0) and its
-            // layout inputs zeroed, by masks rather than a branch on the style.
+            // layout inputs zeroed as they are stored, by selects rather than a branch.
             const layout = @as(types.Participation, @bitCast(active_in)).layout;
             const m8 = 0 -% @as(u8, @intFromBool(layout));
             const active: types.Participation = @bitCast(active_in & m8);
-            inline for (0..2) |axis| {
-                c.min[axis][i] = simd.selF(layout, c.min[axis][i], 0);
-                c.max[axis][i] = simd.selF(layout, c.max[axis][i], 0);
-                c.grow[axis][i] = simd.selF(layout, c.grow[axis][i], 0);
-                c.pct[axis][i] = simd.selF(layout, c.pct[axis][i], -1);
-                c.pad_lo[axis][i] = simd.selF(layout, c.pad_lo[axis][i], 0);
-                c.pad_hi[axis][i] = simd.selF(layout, c.pad_hi[axis][i], 0);
+            inline for (Template.node_fields) |name| {
+                const v = rowField(row, name);
+                if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
+                    const kept = collapse(name, @as(@Vector(2, f32), v), layout);
+                    inline for (0..2) |a| @field(c, name)[a][i] = kept[a];
+                } else if (comptime collapses(name)) {
+                    @field(c, name)[i] = collapse(name, @as(@Vector(1, f32), @splat(v)), layout)[0];
+                } else @field(c, name)[i] = v;
             }
-            c.flow[i] = simd.selF(layout, c.flow[i], 0);
-            c.gap[i] = simd.selF(layout, c.gap[i], 0);
             c.role[i] &= 0 -% @as(u8, @intFromBool(active.semantics));
             c.sense[i] &= 0 -% @as(u8, @intFromBool(active.hit));
             // Count this node in its parent, then clear its own count. The root is its own
