@@ -8,7 +8,7 @@
 <style>body { margin: 0; background: #000; } canvas { display: block; width: 160px; height: 120px; }</style>
 <canvas id="c" width="160" height="120"></canvas>
 <script type="module">
-import { load, webgpu, canvas2d } from "./lcgf.js";
+import { load, webgpu, gpuProjection, canvas2d } from "./lcgf.js";
 
 const canvas = document.getElementById("c");
 const params = new URLSearchParams(location.search);
@@ -23,18 +23,9 @@ async function gpuDevice() {
 window.lcgfTest = (async () => {
     const errors = [];
     const device = await gpuDevice();
-    let scene = null; // host pipeline of the scene being drawn (WebGPU)
-    const host = (ui) => ({
-        host_custom(p, x0, y0, x1, y1) {
-            const pass = ui.gpu.get(p);
-            pass.setPipeline(scene.pipe);
-            pass.setScissorRect(x0, y0, x1 - x0, y1 - y0);
-            pass.draw(3);
-            pass.setScissorRect(0, 0, 160, 120);
-        },
-    });
     // Without WebGPU, the 2D part owns the canvas; a canvas has one kind of context for life.
-    const ui = await load("scenes.wasm", webgpu, canvas2d(device ? document.createElement("canvas") : canvas), host);
+    // Custom commands are drawn inside scenes.wasm, through lcgf_render.gpu (gpuProjection).
+    const ui = await load("scenes.wasm", webgpu, gpuProjection, canvas2d(device ? document.createElement("canvas") : canvas));
     const x = ui.exports;
     let draw;
     if (device) {
@@ -52,12 +43,6 @@ window.lcgfTest = (async () => {
         const atlas = new Uint8Array(64 * 64 * 4); // glyphs show as blocks, as in the goldens
         for (let b = 33; b < 127; b++) for (let y = 1; y < 4; y++) for (let x = 1; x < 3; x++) atlas.fill(255, (((b >> 4) * 4 + y) * 64 + (b & 15) * 4 + x) * 4, (((b >> 4) * 4 + y) * 64 + (b & 15) * 4 + x) * 4 + 4);
         x.lcgf_webgpu_init(put(device), put(device.queue), format === "bgra8unorm" ? 1 : 0, put(texture(1, 1, new Uint8Array([255, 255, 255, 255]))), put(sampler), put(texture(64, 64, atlas)));
-        const module = device.createShaderModule({ code: `
-@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
-  return vec4f(f32(i & 1u) * 4.0 - 1.0, f32(i >> 1u) * 4.0 - 1.0, 0.0, 1.0); }
-@fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-  return vec4f(p.x / 160.0 * 0.5, 0.25, p.y / 120.0 * 0.6, 1.0); }` });
-        scene = { pipe: device.createRenderPipeline({ layout: "auto", vertex: { module, entryPoint: "vs" }, fragment: { module, entryPoint: "fs", targets: [{ format }] } }) };
         draw = (i) => {
             x.lcgf_scene_prepare(i);
             const encoder = device.createCommandEncoder();

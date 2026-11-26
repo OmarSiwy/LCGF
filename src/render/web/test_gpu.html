@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>lcgf: lcgf_render.gpu checks</title>
+<!-- The projection's own checks (src/render/gpu/check.zig) in a browser: scenes.wasm records a
+     render-to-texture pass and a compute dispatch through lcgf_render.gpu (web/gpu.zig, calling
+     WebGPU through lcgf.js gpuProjection) into this page's encoder; the page submits, reads the
+     8 x 8 texture and the storage buffer back into the module's memory, and the module verifies
+     both. The same checks run natively on every back end (zig build test). -->
+<script type="module">
+import { load, webgpu, gpuProjection, canvas2d } from "./lcgf.js";
+import { readback, standInAtlas } from "./test_util.js";
+
+window.lcgfTest = (async () => {
+    const adapter = await navigator.gpu.requestAdapter();
+    const device = await adapter.requestDevice();
+    const errors = [];
+    device.addEventListener("uncapturederror", (e) => errors.push(e.error.message));
+
+    const ui = await load("scenes.wasm", webgpu, gpuProjection, canvas2d(document.createElement("canvas")));
+    const { put, get, release } = ui.gpu;
+    const x = ui.exports;
+    const texture = (w, h, px) => {
+        const t = device.createTexture({ size: [w, h], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        device.queue.writeTexture({ texture: t }, px, { bytesPerRow: w * 4 }, [w, h]);
+        return t.createView();
+    };
+    const sampler = device.createSampler({ magFilter: "nearest", minFilter: "nearest" });
+    x.lcgf_webgpu_init(put(device), put(device.queue), 0, put(texture(1, 1, new Uint8Array([255, 255, 255, 255]))), put(sampler), put(texture(64, 64, standInAtlas())));
+
+    const encoder = device.createCommandEncoder();
+    const e = put(encoder);
+    const tex = x.lcgf_check_record(e);
+    release(e);
+    device.queue.submit([encoder.finish()]);
+
+    // The render-to-texture result, 8 x 8 RGBA8.
+    ui.u8(x.lcgf_check_pixels(), 8 * 8 * 4).set(await readback(device, get(tex), 8, 8));
+
+    // The compute result: 200 u32 values.
+    const size = 200 * 4;
+    const read = device.createBuffer({ size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const copy = device.createCommandEncoder();
+    copy.copyBufferToBuffer(get(x.lcgf_check_buffer()), 0, read, 0, size);
+    device.queue.submit([copy.finish()]);
+    await read.mapAsync(GPUMapMode.READ);
+    ui.u8(x.lcgf_check_values(), size).set(new Uint8Array(read.getMappedRange()));
+    read.destroy();
+
+    const verified = x.lcgf_check_verify();
+    if (!(verified & 1)) errors.push("render-to-texture: the pixels read back are not the expected ones");
+    if (!(verified & 2)) errors.push("compute: the storage buffer read back is not the expected one");
+    return { ok: errors.length === 0, errors, adapter: adapter.info?.description || adapter.info?.vendor };
+})();
+</script>

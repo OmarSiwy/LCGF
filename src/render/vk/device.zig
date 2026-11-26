@@ -139,6 +139,15 @@ pub const DeviceFns = struct {
     vkCmdSetScissor: c.PFN_vkCmdSetScissor,
     vkCmdPushConstants: c.PFN_vkCmdPushConstants,
     vkCmdDraw: c.PFN_vkCmdDraw,
+    // lcgf_render.gpu (gpu.zig): writes in the upload phase, compute, indexed draws.
+    vkCmdUpdateBuffer: c.PFN_vkCmdUpdateBuffer,
+    vkCmdCopyBuffer: c.PFN_vkCmdCopyBuffer,
+    vkResetDescriptorPool: c.PFN_vkResetDescriptorPool,
+    vkCreateComputePipelines: c.PFN_vkCreateComputePipelines,
+    vkCmdDispatch: c.PFN_vkCmdDispatch,
+    vkCmdBindIndexBuffer: c.PFN_vkCmdBindIndexBuffer,
+    vkCmdDrawIndexed: c.PFN_vkCmdDrawIndexed,
+    vkCmdSetBlendConstants: c.PFN_vkCmdSetBlendConstants,
 };
 
 /// Swapchain functions, loaded when the device was created for a surface.

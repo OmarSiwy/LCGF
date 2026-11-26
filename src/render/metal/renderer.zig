@@ -26,7 +26,6 @@ const mtl = @import("mtl.zig");
 const msl = @import("msl.zig");
 const pipeline = @import("pipeline.zig");
 const texture = @import("texture.zig");
-const custom = @import("custom.zig");
 const types = lcgf.types;
 const draw_list = lcgf.draw_list;
 const quad_shader = lcgf.quad_shader;
@@ -87,7 +86,7 @@ pub fn RendererOver(comptime Encoder: type) type {
         pub const Queue = void;
         /// The render command encoder of the host's pass (`mtl.RenderEncoder.id` is the raw
         /// MTLRenderCommandEncoder). At a custom command the host records its own draws into it
-        /// (custom.zig); the next UI draw rebinds every piece of state it uses.
+        /// (src/render/gpu/gradient.zig); the next UI draw rebinds every piece of state it uses.
         pub const Pass = Encoder;
 
         pub fn init(device: Id, desc: Desc) Error!Self {
@@ -206,9 +205,11 @@ pub fn RendererOver(comptime Encoder: type) type {
         }
 
         /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
-        /// physical pixels of the last `prepare`, inside the target (custom.zig `scissor`).
+        /// physical pixels of the last `prepare`, inside the target (lcgf.gpu_desc.scissor, the
+        /// arithmetic every back end shares).
         pub fn customScissor(r: *const Self, c: draw_list.CustomDraw) mtl.ScissorRect {
-            return custom.scissor(r.extent, r.scale, c);
+            const s = lcgf.gpu_desc.scissor(c.rect, c.clip, r.scale, r.extent[0], r.extent[1]);
+            return .{ .x = s.x, .y = s.y, .width = s.width, .height = s.height };
         }
 
         /// Diagonal: the whole list, skipping custom draws.

@@ -15,7 +15,8 @@ pub const pipeline = @import("pipeline.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
 pub const frame = @import("frame.zig");
-pub const custom = @import("custom.zig");
+/// lcgf_render.gpu on Direct3D 12: WebGPU's object model projected onto this back end (gpu.zig).
+pub const gpu = @import("gpu.zig");
 pub const scenes = @import("scenes.zig");
 
 test {
@@ -26,6 +27,6 @@ test {
     std.testing.refAllDecls(pipeline);
     std.testing.refAllDecls(renderer);
     std.testing.refAllDecls(frame);
-    std.testing.refAllDecls(custom);
+    std.testing.refAllDecls(gpu);
     std.testing.refAllDecls(scenes);
 }

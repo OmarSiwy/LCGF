@@ -8,7 +8,9 @@
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas. Custom
-//! commands are drawn by the host's own program between the UI's draws (custom.zig).
+//! commands are drawn between the UI's draws: on GL ES 3 through lcgf_render.gpu
+//! (src/render/gpu/gradient.zig, the same code every back end runs), on GL ES 2, which has no
+//! uniform buffers, by the host's own program (custom.zig).
 const std = @import("std");
 const lcgf = @import("lcgf");
 const gles = @import("gles.zig");
@@ -16,6 +18,8 @@ const gl = gles.gl;
 const host = gles.host;
 const conformance = lcgf.render_conformance;
 const iface = lcgf.render_iface;
+const gpu = gles.gpu;
+const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 
 var st: conformance.Storage = .{};
 
@@ -37,21 +41,38 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("gles-play: {s}, {s}\n", .{ h.gl.glGetString(gl.RENDERER).?, h.gl.glGetString(gl.VERSION).? });
     const atlas = h.texture(64, 64, &standInAtlas());
     defer h.deleteTexture(atlas);
-    var gradient = try gles.custom.Gradient.init(&h.gl);
-    defer gradient.deinit();
     if (es2) {
+        var gradient = try gles.custom.Gradient.init(&h.gl);
+        defer gradient.deinit();
         const scratch = try gpa.alignedAlloc(u8, .of(lcgf.draw_list.Quad), gles.es2.scratchBytes(.{}));
         var gfx = try gles.es2.Renderer.init(&h.gl, .{}, scratch);
         defer gfx.deinit();
         try drawScenes(io, gpa, out, &h, &gfx, &gradient, gfx.addTexture(atlas, 64, 64));
     } else {
+        const dev: gpu.Device = .wrap(&h.gl, &h.gl3, if (h.gl31) |*f| f else null);
+        var arena: gpu.Arena = try .init(dev, .{ .bytes = 0 });
+        defer arena.deinit();
+        var gradient: Gradient = try .init(dev, &arena, .{ .format = .rgba8_unorm });
+        defer gradient.deinit(dev);
         var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{});
         defer gfx.deinit();
         try drawScenes(io, gpa, out, &h, &gfx, &gradient, gfx.addTexture(atlas));
     }
 }
 
-fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, gfx: anytype, gradient: *const gles.custom.Gradient, atlas: lcgf.types.Texture) !void {
+/// The custom command's draw on either path: the projection's on GL ES 3, the hand-written
+/// program on GL ES 2.
+fn drawCustom(h: *host.Host, gfx: anytype, gradient: anytype, k: lcgf.draw_list.CustomDraw) void {
+    if (@TypeOf(gradient) == *Gradient) {
+        const w = gfx.extent[0];
+        const ht = gfx.extent[1];
+        const dev: gpu.Device = .wrap(&h.gl, &h.gl3, null);
+        var pass: gpu.RenderPass = .wrap(dev, {}, w, ht);
+        gradient.draw(&pass, gpu.scissor(k.rect, k.clip, gfx.scale, w, ht), w, ht);
+    } else gradient.draw(gfx.customScissor(k), gfx.extent);
+}
+
+fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, gfx: anytype, gradient: anytype, atlas: lcgf.types.Texture) !void {
     for (&conformance.scenes) |*s| {
         st.load(s);
         const w: u32 = @intFromFloat(s.viewport[0]);
@@ -61,11 +82,17 @@ fn drawScenes(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host
         var glyphs = st.glyphs();
         glyphs.texture = atlas;
         gfx.prepare({}, &st.draw, glyphs, s.viewport, 1);
+        if (@TypeOf(gradient) == *Gradient) {
+            // The frame's upload phase: the gradient's target size.
+            var up: gpu.Upload = .begin(.wrap(&h.gl, &h.gl3, null), {});
+            gradient.upload(&up, gfx.extent[0], gfx.extent[1]);
+            _ = up.finish();
+        }
         target.begin(h, .{ 0, 0, 0, 1 });
-        // The host's loop: UI draws up to each custom command, its own program there.
+        // The host's loop: UI draws up to each custom command, the custom draw there.
         var i = iface.drawUntilCustom(gfx, {}, &st.draw, 0);
         while (i < st.draw.cmd_len) : (i = iface.drawUntilCustom(gfx, {}, &st.draw, i + 1)) {
-            gradient.draw(gfx.customScissor(st.draw.customs[st.draw.command(i).custom]), gfx.extent);
+            drawCustom(h, gfx, gradient, st.draw.customs[st.draw.command(i).custom]);
         }
         const px = try gpa.alloc(u8, @as(usize, w) * ht * 4);
         h.readback(w, ht, px);

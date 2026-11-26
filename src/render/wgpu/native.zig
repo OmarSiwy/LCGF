@@ -15,6 +15,8 @@ pub const c = @import("wgpu_c");
 pub const host = @import("host.zig");
 pub const surface = @import("surface.zig");
 pub const glyphs = @import("glyphs.zig");
+/// lcgf_render.gpu on wgpu-native: the identity projection (gpu.zig).
+pub const gpu = @import("gpu.zig");
 const wgpu = lcgf.render_wgpu;
 
 /// The wgpu back end over wgpu-native.
@@ -200,6 +202,7 @@ const testing = std.testing;
 
 test {
     testing.refAllDecls(@This());
+    testing.refAllDecls(gpu);
 }
 
 /// Draws `scene` into a fresh `width` x `height` target (viewport the same, scale 1) and reads

@@ -1,4 +1,5 @@
-"""Time the same scene in four states. Select one Vulkan ICD in the environment."""
+"""Time the same scene in four states with the custom-draw probes (src/render/vk/probe_projection.zig).
+Select one Vulkan ICD in the environment."""
 import argparse
 import csv
 import os
@@ -14,7 +15,7 @@ if args.rounds < 1:
     parser.error("rounds must be positive")
 
 # Rotate and reverse to distribute warm caches and load drift across cases.
-cases = [("native", "native"), ("webgpu", "native"), ("webgpu", "cached"), ("webgpu", "guest")]
+cases = [("native", "native"), ("projection", "native"), ("projection", "cached"), ("projection", "projection")]
 writer = csv.writer(sys.stdout, delimiter="\t", lineterminator="\n")
 writer.writerow(["round", "binary", "mode", "load1", "frames", "redraws",
                  "cpu_us", "frame_us", "thread_us", "app_us"])
@@ -29,7 +30,7 @@ for r in range(args.rounds):
         if fields[:2] != ["ready", mode]:
             raise ValueError(result.stdout)
         data = dict(field.split("=", 1) for field in fields[2:])
-        expected = 2000 if mode == "guest" else 0
+        expected = 2000 if mode == "projection" else 0
         if int(data["frames"]) != 2000 or int(data["redraws"]) != expected:
             raise ValueError(result.stdout)
         writer.writerow([r, binary, mode, f"{load:.2f}", *[data[key] for key in

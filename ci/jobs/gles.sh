@@ -3,8 +3,9 @@
 # The GL ES back end (src/render/gles/) on Mesa llvmpipe: its tests run on a real GL ES driver
 # through the platform's EGL (libglvnd dispatching to Mesa, surfaceless, in this shell), and
 # gles-play draws the render conformance scenes with the instanced GL ES 3 renderer and the
-# GL ES 2 path, each compared with its golden image. `custom` is drawn by the host's own
-# program between the UI's draws (custom.zig).
+# GL ES 2 path, each compared with its golden image. `custom` is drawn between the UI's draws,
+# through lcgf_render.gpu on GL ES 3 (src/render/gpu/gradient.zig) and by the host's own program
+# on GL ES 2 (custom.zig).
 golden_build gles gles-play --summary all
 for mode in es3 es2; do
     out=zig-out/gles/$mode; rm -rf "$out"

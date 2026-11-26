@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Golden-image check: compare a rendered PNG against a checked-in reference.
 
-    python3 tools/golden/golden.py actual.png reference.png [--tol 2] [--max-bad 0]
+    python3 tools/golden/golden.py actual.png reference.png [--tol 2] [--max-bad 0] [--scissor-ring x0,y0,x1,y1]
     python3 tools/golden/golden.py --self-test
 
 Tolerance: a pixel is bad when any of its R, G, B, A channels differs from the reference by more
 than --tol (default 2, the same bound as prototype/render.py). The images match when they have
 the same size and at most --max-bad pixels are bad (default 0). Exit 0 on match, 1 on mismatch.
+
+--scissor-ring (multisampled images, repeatable): a pixel in the row just above or the column just
+left of that scissor rectangle is not bad when every channel lies between the reference and the
+rendered pixel just inside the rectangle. Mesa lavapipe (seen with LLVM 20) tests multisampled
+fragments against a scissor's top and left edges half a pixel early, so those pixels come out half
+covered; src/render/vk/scenes.zig's `pixelsOffMultisampled` applies the same rule.
 
 Standard library only (zlib). Reads 8-bit RGB or RGBA, non-interlaced PNGs, every filter type;
 writes RGBA with filter 0.
@@ -83,16 +89,34 @@ def read_png(path):
     return w, h, bytes(out)
 
 
-def compare(actual, reference, tol=2, max_bad=0):
+def ring(rects, w):
+    """The pixels just above and left of each scissor rectangle, each with the pixel just inside."""
+    out = {}
+    for x0, y0, x1, y1 in rects:
+        if x0 == 0 or y0 == 0:
+            continue
+        for x in range(x0 - 1, x1):
+            out[(y0 - 1) * w + x] = y0 * w + max(x, x0)
+        for y in range(y0, y1):
+            out[y * w + x0 - 1] = y * w + x0
+    return out
+
+
+def compare(actual, reference, tol=2, max_bad=0, rings=()):
     """Compare two PNG files. Print a one-line verdict; return True when they match."""
     aw, ah, a = read_png(actual)
     rw, rh, r = read_png(reference)
     if (aw, ah) != (rw, rh):
         print(f"FAIL {actual}: size {aw}x{ah}, reference {reference} is {rw}x{rh}")
         return False
+    blends = ring(rings, aw)
     bad, first, worst = 0, None, 0
     for i in range(0, len(a), 4):
         d = max(abs(a[i + k] - r[i + k]) for k in range(4))
+        j = blends.get(i // 4)
+        if d > tol and j is not None and all(
+                min(r[i + k], a[j * 4 + k]) - tol <= a[i + k] <= max(r[i + k], a[j * 4 + k]) + tol for k in range(4)):
+            continue
         if d > tol:
             bad += 1
             worst = max(worst, d)
@@ -127,6 +151,16 @@ def self_test():
         assert main([off, ref]) == 1, "a mismatch must exit non-zero"
         assert compare(off, ref, max_bad=1)
         assert not compare(small, ref), "a size difference must fail"
+        # A half-covered pixel above a scissor's top edge passes only with its ring.
+        ringed = bytearray(img)
+        inside, above = (2 * w + 3) * 4, (1 * w + 3) * 4
+        for k in range(4):
+            ringed[above + k] = (img[above + k] + img[inside + k]) // 2
+        if any(abs(ringed[above + k] - img[above + k]) > 2 for k in range(4)):
+            write_png(f"{d}/ringed.png", w, h, bytes(ringed))
+            assert not compare(f"{d}/ringed.png", ref)
+            assert compare(f"{d}/ringed.png", ref, rings=[(3, 2, 6, 5)])
+            assert not compare(f"{d}/ringed.png", ref, rings=[(3, 3, 6, 5)]), "only the row just above"
         # Every filter type and RGB input decode to the same pixels.
         stride = w * 3
         rgb = bytes(b for i in range(w * h) for b in img[i * 4:i * 4 + 3])
@@ -155,17 +189,19 @@ def main(argv):
     if argv == ["--self-test"]:
         self_test()
         return 0
-    args, opts = [], {"--tol": 2, "--max-bad": 0}
+    args, opts, rings = [], {"--tol": 2, "--max-bad": 0}, []
     it = iter(argv)
     for a in it:
         if a in opts:
             opts[a] = int(next(it))
+        elif a == "--scissor-ring":
+            rings.append(tuple(int(v) for v in next(it).split(",")))
         else:
             args.append(a)
     if len(args) != 2:
         print(__doc__, file=sys.stderr)
         return 2
-    return 0 if compare(args[0], args[1], opts["--tol"], opts["--max-bad"]) else 1
+    return 0 if compare(args[0], args[1], opts["--tol"], opts["--max-bad"], rings) else 1
 
 
 if __name__ == "__main__":

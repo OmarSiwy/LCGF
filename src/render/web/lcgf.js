@@ -148,6 +148,115 @@ export function webgpu(ui) {
     };
 }
 
+/// lcgf_render.gpu in the browser (src/render/web/gpu.zig): one WebGPU call per import, over
+/// the handle table of `webgpu` (link it first: `load(url, webgpu, gpuProjection)`). Descriptors
+/// arrive as u32 words; these tables name their values in the order of src/render/gpu/desc.zig's
+/// enums.
+export function gpuProjection(ui) {
+    const formats = ["r8unorm", "rg8unorm", "rgba8unorm", "rgba8unorm-srgb", "bgra8unorm", "bgra8unorm-srgb", "r16float", "rgba16float", "r32float", "rg32float", "rgba32float", "r32uint", "depth32float"];
+    const vertexFormats = ["float32", "float32x2", "float32x3", "float32x4", "uint32", "uint32x2", "uint32x4", "sint32", "unorm8x4"];
+    const topologies = ["point-list", "line-list", "line-strip", "triangle-list", "triangle-strip"];
+    const indexFormats = ["uint16", "uint32"];
+    const frontFaces = ["ccw", "cw"];
+    const cullModes = ["none", "front", "back"];
+    const factors = ["zero", "one", "src", "one-minus-src", "src-alpha", "one-minus-src-alpha", "dst", "one-minus-dst", "dst-alpha", "one-minus-dst-alpha", "constant", "one-minus-constant"];
+    const operations = ["add", "subtract", "reverse-subtract", "min", "max"];
+    const addressModes = ["clamp-to-edge", "repeat", "mirror-repeat"];
+    const filters = ["nearest", "linear"];
+    const compares = ["never", "less", "equal", "less-equal", "greater", "not-equal", "greater-equal", "always"];
+    const get = (h) => ui.gpu.get(h);
+    const put = (o) => ui.gpu.put(o);
+    const f32 = (bits) => new Float32Array(new Uint32Array([bits]).buffer)[0];
+    return {
+        gpup_create_buffer: (d, size, usage) => put(get(d).createBuffer({ size, usage })),
+        gpup_create_texture: (d, w, h, layers, format, usage, mips, samples) =>
+            put(get(d).createTexture({ size: [w, h, layers], format: formats[format], usage, mipLevelCount: mips, sampleCount: samples })),
+        gpup_create_view: (t) => put(get(t).createView()),
+        gpup_create_sampler(d, ptr) {
+            const w = ui.u32(ptr, 9);
+            const desc = {
+                addressModeU: addressModes[w[0]], addressModeV: addressModes[w[1]], addressModeW: addressModes[w[2]],
+                magFilter: filters[w[3]], minFilter: filters[w[4]], mipmapFilter: filters[w[5]],
+                lodMinClamp: f32(w[6]), lodMaxClamp: f32(w[7]),
+            };
+            if (w[8]) desc.compare = compares[w[8] - 1];
+            return put(get(d).createSampler(desc));
+        },
+        gpup_create_render_pipeline(d, wgsl, wgsl_len, ptr, len) {
+            const device = get(d);
+            const w = ui.u32(ptr, len);
+            let i = 0;
+            const next = () => w[i++];
+            const module = device.createShaderModule({ code: ui.str(wgsl, wgsl_len) });
+            const vs = ui.str(next(), next());
+            const fsPtr = next(), fsLen = next();
+            const primitive = { topology: topologies[next()] };
+            const strip = next();
+            if (strip) primitive.stripIndexFormat = indexFormats[strip - 1];
+            primitive.frontFace = frontFaces[next()];
+            primitive.cullMode = cullModes[next()];
+            const multisample = { count: next(), mask: next(), alphaToCoverageEnabled: next() !== 0 };
+            const buffers = [];
+            for (let b = 0, nb = next(); b < nb; b++) {
+                const arrayStride = next(), stepMode = next() ? "instance" : "vertex", attributes = [];
+                for (let a = 0, na = next(); a < na; a++) attributes.push({ format: vertexFormats[next()], offset: next(), shaderLocation: next() });
+                buffers.push({ arrayStride, stepMode, attributes });
+            }
+            const targets = [];
+            for (let t = 0, nt = next(); t < nt; t++) {
+                const format = formats[next()], blended = next();
+                const color = { operation: operations[next()], srcFactor: factors[next()], dstFactor: factors[next()] };
+                const alpha = { operation: operations[next()], srcFactor: factors[next()], dstFactor: factors[next()] };
+                const mask = next();
+                // Zig's ColorWriteMask is red, green, blue, alpha from bit 0; WebGPU's is the same.
+                targets.push(blended ? { format, blend: { color, alpha }, writeMask: mask } : { format, writeMask: mask });
+            }
+            const desc = { layout: "auto", vertex: { module, entryPoint: vs, buffers }, primitive, multisample };
+            if (fsLen) desc.fragment = { module, entryPoint: ui.str(fsPtr, fsLen), targets };
+            return put(device.createRenderPipeline(desc));
+        },
+        gpup_create_compute_pipeline(d, wgsl, wgsl_len, entry, entry_len) {
+            const device = get(d);
+            const module = device.createShaderModule({ code: ui.str(wgsl, wgsl_len) });
+            return put(device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: ui.str(entry, entry_len) } }));
+        },
+        gpup_create_bind_group(d, p, group, ptr, count) {
+            const w = ui.u32(ptr, count * 3);
+            const entries = [];
+            for (let i = 0; i < count; i++) {
+                const [binding, kind, h] = [w[i * 3], w[i * 3 + 1], w[i * 3 + 2]];
+                entries.push({ binding, resource: kind === 0 ? { buffer: get(h) } : get(h) });
+            }
+            return put(get(d).createBindGroup({ layout: get(p).getBindGroupLayout(group), entries }));
+        },
+        gpup_write_texture(q, t, ptr, len, bytesPerRow, w, h) {
+            get(q).writeTexture({ texture: get(t) }, ui.u8(ptr, len), { bytesPerRow, rowsPerImage: h }, [w, h]);
+        },
+        gpup_begin_render_pass(e, ptr, count) {
+            const w = ui.u32(ptr, count * 8);
+            const colorAttachments = [];
+            for (let i = 0; i < count; i++) {
+                const o = i * 8;
+                const a = { view: get(w[o]), loadOp: w[o + 2] ? "clear" : "load", storeOp: w[o + 3] ? "discard" : "store", clearValue: [f32(w[o + 4]), f32(w[o + 5]), f32(w[o + 6]), f32(w[o + 7])] };
+                if (w[o + 1]) a.resolveTarget = get(w[o + 1]);
+                colorAttachments.push(a);
+            }
+            return put(get(e).beginRenderPass({ colorAttachments }));
+        },
+        gpup_end_pass(p) {
+            get(p).end();
+            ui.gpu.release(p);
+        },
+        gpup_set_index_buffer: (p, b, format, offset) => get(p).setIndexBuffer(get(b), indexFormats[format], offset),
+        gpup_set_viewport: (p, x, y, w, h, min, max) => get(p).setViewport(x, y, w, h, min, max),
+        gpup_set_scissor: (p, x, y, w, h) => get(p).setScissorRect(x, y, w, h),
+        gpup_set_blend_constant: (p, r, g, b, a) => get(p).setBlendConstant([r, g, b, a]),
+        gpup_draw_indexed: (p, n, instances, first, base, firstInstance) => get(p).drawIndexed(n, instances, first, base, firstInstance),
+        gpup_begin_compute_pass: (e) => put(get(e).beginComputePass()),
+        gpup_dispatch: (p, x, y, z) => get(p).dispatchWorkgroups(x, y, z),
+    };
+}
+
 /// The 2D-canvas fallback for canvas.zig: `load(url, canvas2d(canvasElement))`. `present`
 /// copies the module's framebuffer onto the canvas, resizing the canvas to it. The 2D context
 /// is taken on the first present, so a page that draws with WebGPU instead can link this too.

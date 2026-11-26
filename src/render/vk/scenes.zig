@@ -4,7 +4,7 @@
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: a target
 //! cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas, and the custom
-//! command drawn inline by the host's own pipeline (custom.zig).
+//! command drawn inline by the host through lcgf_render.gpu (src/render/gpu/gradient.zig).
 //!
 //!   offscreen  an RGBA8 image, read back after the frame.
 //!   present    a headless swapchain image through the frame loop (frame.zig: acquire, submit,
@@ -19,7 +19,8 @@ const swapchain = @import("swapchain.zig");
 const frame = @import("frame.zig");
 const pass = @import("pass.zig");
 const host = @import("host.zig");
-const custom = @import("custom.zig");
+const gpu = @import("gpu.zig");
+const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 const Renderer = @import("renderer.zig").Renderer;
 const c = loader.c;
 const conformance = lcgf.render_conformance;
@@ -44,7 +45,9 @@ pub const Player = struct {
     msaa: ?device_mod.Image,
     format: c.VkFormat,
     gfx: Renderer,
-    gradient: custom.Gradient,
+    // The custom command's draw, written once against lcgf_render.gpu (src/render/gpu/gradient.zig).
+    arena: gpu.Arena,
+    gradient: Gradient,
     atlas_handle: lcgf.types.Texture,
     st: conformance.Storage,
 
@@ -78,13 +81,16 @@ pub const Player = struct {
         }
         p.gfx = try Renderer.init(d, .{ .format = p.format, .samples = samples, .frames = 2 }, p.white.view, p.sampler);
         p.atlas_handle = try p.gfx.addTexture(d, p.atlas.view, p.sampler);
-        p.gradient = try custom.Gradient.init(d, p.format, samples);
+        const dev: gpu.Device = .wrap(d);
+        p.arena = try .init(dev, .{ .bytes = 64 * 1024, .bind_groups = 4 });
+        p.gradient = try .init(dev, &p.arena, .{ .format = gpu.fromVkFormat(p.format), .samples = samples });
     }
 
     pub fn deinit(p: *Player) void {
         const d = &p.h.device;
         _ = d.fns.vkDeviceWaitIdle.?(d.handle);
-        p.gradient.deinit(d);
+        p.gradient.deinit(.wrap(d));
+        p.arena.deinit();
         p.gfx.deinit(d);
         if (p.mode == .present) {
             if (p.msaa) |*m| d.destroyImage(m);
@@ -114,6 +120,7 @@ pub const Player = struct {
                 defer target.deinit(d);
                 p.gfx.prepare(0, &p.st.draw, glyphs, s.viewport, 1);
                 const cmd = try p.h.once.begin(d);
+                p.upload(cmd);
                 pass.begin(d, cmd, target.begin(.{ 0, 0, 0, 1 }));
                 p.drawCommands(cmd);
                 pass.end(d, cmd, .{ .image = target.image.handle, .layout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL });
@@ -125,6 +132,7 @@ pub const Player = struct {
                 defer d.destroyBuffer(&staging);
                 const f = try p.frames.begin(d, &p.chain);
                 p.gfx.prepare(f.slot, &p.st.draw, glyphs, s.viewport, 1);
+                p.upload(f.cmd);
                 pass.begin(d, f.cmd, if (p.msaa) |m|
                     .{ .image = m.handle, .view = m.view, .extent = p.chain.extent, .resolve = .{ .image = f.image, .view = f.view } }
                 else
@@ -148,11 +156,23 @@ pub const Player = struct {
 
     /// The host's loop: UI draws up to each custom command, the host's own pipeline there, in
     /// the same command buffer.
+    /// The frame's upload phase: the gradient's target size, before the pass begins.
+    fn upload(p: *const Player, cmd: c.VkCommandBuffer) void {
+        var up: gpu.Upload = .begin(.wrap(&p.h.device), cmd);
+        p.gradient.upload(&up, p.gfx.extent.width, p.gfx.extent.height);
+        _ = up.finish();
+    }
+
     fn drawCommands(p: *const Player, cmd: c.VkCommandBuffer) void {
         const dl = &p.st.draw;
+        const w = p.gfx.extent.width;
+        const h = p.gfx.extent.height;
+        // The UI's own pass, seen through the projection for the custom draws.
+        var gp: gpu.RenderPass = .wrap(.wrap(&p.h.device), cmd, w, h);
         var i = iface.drawUntilCustom(&p.gfx, cmd, dl, 0);
         while (i < dl.cmd_len) : (i = iface.drawUntilCustom(&p.gfx, cmd, dl, i + 1)) {
-            p.gradient.draw(&p.h.device, cmd, p.gfx.customScissor(dl.customs[dl.command(i).custom]), p.gfx.extent);
+            const k = dl.customs[dl.command(i).custom];
+            p.gradient.draw(&gp, gpu.scissor(k.rect, k.clip, p.gfx.scale, w, h), w, h);
         }
     }
 };
@@ -187,6 +207,52 @@ pub fn pixelsOff(got: []const u8, want: []const u8) u32 {
     return off;
 }
 
+/// `pixelsOff` at 4x: the pixels just above and left of a custom draw's scissor may also be a
+/// blend of the golden and the draw's colour just inside it. Mesa lavapipe (seen with LLVM 20)
+/// tests multisampled fragments against the scissor's top and left edges half a pixel early, so
+/// the two samples of the row and column outside it whose positions lie past the pixel centre
+/// pass: those pixels come out 50% covered (25% at the corner), and nothing else changes. The
+/// scissor itself is the same at 1x and 4x (the projection's `scissor`, which 1x checks exactly).
+pub fn pixelsOffMultisampled(got: []const u8, want: []const u8, customs: []const lcgf.draw_list.CustomDraw) u32 {
+    var off = pixelsOff(got, want);
+    const w: usize = size.width;
+    for (customs) |k| {
+        const x0: usize = @intFromFloat(k.rect[0]);
+        const y0: usize = @intFromFloat(k.rect[1]);
+        const x1: usize = @intFromFloat(k.rect[2]);
+        const y1: usize = @intFromFloat(k.rect[3]);
+        if (x0 == 0 or y0 == 0) continue;
+        // The row above (with the corner) and the column left of the scissor, each with the
+        // pixel just inside that it may be blended with.
+        var ring: [2][2]usize = undefined;
+        for (x0 - 1..x1) |x| {
+            ring = .{ .{ x, y0 - 1 }, .{ @max(x, x0), y0 } };
+            off -= @intFromBool(blended(got, want, ring, w));
+        }
+        for (y0..y1) |y| {
+            ring = .{ .{ x0 - 1, y }, .{ x0, y } };
+            off -= @intFromBool(blended(got, want, ring, w));
+        }
+    }
+    return off;
+}
+
+/// Whether the pixel at `p[0]` is off the golden but between it and the pixel at `p[1]`, on
+/// every channel (2 of slack, as `pixelsOff`).
+fn blended(got: []const u8, want: []const u8, p: [2][2]usize, w: usize) bool {
+    const a = (p[0][1] * w + p[0][0]) * 4;
+    const b = (p[1][1] * w + p[1][0]) * 4;
+    var off = false;
+    for (0..4) |k| {
+        const g: i32 = got[a + k];
+        const lo: i32 = @min(want[a + k], got[b + k]);
+        const hi: i32 = @max(want[a + k], got[b + k]);
+        if (g < lo - 2 or g > hi + 2) return false;
+        off = off or @abs(g - @as(i32, want[a + k])) > 2;
+    }
+    return off;
+}
+
 const testing = std.testing;
 
 test "conformance: every scene matches its golden image, offscreen and presented, 1x and 4x" {
@@ -207,7 +273,7 @@ test "conformance: every scene matches its golden image, offscreen and presented
             defer testing.allocator.free(scratch);
             _ = try lcgf.png.decode(png, want, scratch);
             try p.draw(s, px);
-            const off = pixelsOff(px, want);
+            const off = if (samples > 1) pixelsOffMultisampled(px, want, s.customs) else pixelsOff(px, want);
             if (off != 0) std.debug.print("{s} {t} x{d}: {d} pixels off\n", .{ s.name, mode, samples, off });
             try testing.expectEqual(@as(u32, 0), off);
         }
@@ -255,6 +321,31 @@ test "conformance: 4x multisampling resolves, changing only edges that cut pixel
     var edge_differs = false;
     for (9..23) |x| edge_differs = edge_differs or at(px[0], x, 20) != at(px[1], x, 20) or at(px[0], 20, x) != at(px[1], 20, x);
     try testing.expect(edge_differs);
+}
+
+test "pixelsOffMultisampled forgives only blends just outside a scissor's top and left" {
+    const n = @as(usize, size.width) * size.height * 4;
+    const want = try testing.allocator.alloc(u8, n);
+    defer testing.allocator.free(want);
+    const got = try testing.allocator.alloc(u8, n);
+    defer testing.allocator.free(got);
+    @memset(want, 30);
+    @memcpy(got, want);
+    const k: lcgf.draw_list.CustomDraw = .{ .rect = .{ 8, 8, 20, 20 }, .clip = .{ -1e6, -1e6, 1e6, 1e6 }, .data = 0, .id = 1, .node = 0 };
+    const at = struct {
+        fn f(b: []u8, x: usize, y: usize) *[4]u8 {
+            return b[(y * size.width + x) * 4 ..][0..4];
+        }
+    }.f;
+    at(got, 10, 8).* = .{ 200, 200, 200, 200 }; // inside, as the draw would make it
+    at(want, 10, 8).* = .{ 200, 200, 200, 200 };
+    at(got, 10, 7).* = .{ 115, 115, 115, 115 }; // half covered, above the top edge
+    try testing.expectEqual(@as(u32, 0), pixelsOffMultisampled(got, want, &.{k}));
+    at(got, 10, 7).* = .{ 250, 115, 115, 115 }; // not a blend
+    try testing.expectEqual(@as(u32, 1), pixelsOffMultisampled(got, want, &.{k}));
+    at(got, 10, 7).* = .{ 115, 115, 115, 115 };
+    at(got, 10, 20).* = .{ 115, 115, 115, 115 }; // below the bottom edge: never forgiven
+    try testing.expectEqual(@as(u32, 1), pixelsOffMultisampled(got, want, &.{k}));
 }
 
 test "pixelsOff counts pixels with any channel more than 2 away" {
