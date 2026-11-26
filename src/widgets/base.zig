@@ -1838,6 +1838,33 @@ test "fitRegion: the comptime layout gives a region the size its owner last meas
     try testing.expectEqual(1, S.ui.frame(&in).draw.custom_len);
 }
 
+test "ComptimeUi.rebuild: a grid page with side tables lays out again around a measured region" {
+    const interop = @import("../comptime/interop.zig");
+    // A fit column holding a fit region and a label anchored to its right edge, then a
+    // fraction column, in a 200 px grid.
+    const page = comptime spec_zig.grid(.{ .size = .{ .px(200), .fit } }, .{ .columns = &.{ .fit, .fr(1) }, .gap = .{ 4, 0 } }, .{
+        spec_zig.col(.{}, .{
+            interop.fitRegion(.menu, .{ .size = .{ .fit, .px(20) } }),
+            spec_zig.layer(spec_zig.anchored(spec_zig.styled(spec_zig.label("n"), .{ .float = true }), .{ .at = .top_right, .pivot = .top_right }), 1),
+        }),
+        spec_zig.label("b"),
+    });
+    const S = struct {
+        var ui: ComptimeUi(struct {}, page, .default) = .{};
+    };
+    const in: Input = .{};
+    _ = S.ui.frame(&in);
+    try testing.expect(interop.setFit(&S.ui, .menu, .{ 50, 30 }));
+    const again = S.ui.rebuild(&in).tree;
+    // root, grid, col, region, anchored label, label
+    try testing.expectEqual(50, again.rect(2).x1 - again.rect(2).x0);
+    try testing.expectEqual(50, again.rect(4).x1);
+    try testing.expectEqual(54, again.rect(5).x0);
+    // The next frame lays the page out as the rebuild did.
+    const next = S.ui.frame(&in).tree;
+    for (0..6) |row| try testing.expectEqual(again.rect(@intCast(row)), next.rect(@intCast(row)));
+}
+
 test "ComptimeUiTokens: rows read the token table when pushed; a change lays out again" {
     const Tokens = struct { space: f32 = 4, size: f32 = 14, ink: Color = .rgb(1, 2, 3) };
     const page = comptime spec_zig.col(.{}, .{
