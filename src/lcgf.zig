@@ -219,6 +219,8 @@ pub const i18n_pseudo = @import("i18n/pseudo.zig");
 pub const ct_interop = @import("comptime/interop.zig");
 /// The comptime front end's tables as data, and the prebuilt frame that reads them behind the
 /// C seam (C++ and Rust bindings: bindings/, tools/lcgf-gen/).
+pub const abi = @import("abi/abi.zig");
+pub const abi_words = @import("abi/words.zig");
 pub const abi_plan = @import("abi/plan.zig");
 pub const abi_seam = @import("abi/seam.zig");
 pub const abi_zon = @import("abi/zon.zig");
