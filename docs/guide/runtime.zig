@@ -61,6 +61,46 @@ fn swatch(f: *Frame, id: Id, color: *lcgf.types.Color, other: lcgf.types.Color) 
 }
 // -- end
 
+// -- kit
+const Mixer = struct {
+    theme: w.Theme = .default,
+    gain: f32 = 1,
+    count: lcgf.runtime_signals.Cell(u32) = .of(0),
+    doubled: lcgf.runtime_signals.Derived(u32) = .of(0),
+    box: lcgf.types.Rect = .{ .x1 = 40, .y1 = 10 },
+
+    fn build(app: *Mixer, f: *Frame) void {
+        const sig = &f.ctx.signals;
+        const ui = lcgf.widgets.on(f, &app.theme);
+        if (ui.button(.add, .{ .label = "Add" }).clicked) app.count.set(sig, app.count.get() + 1);
+        _ = ui.slider(.gain, &app.gain, .{ .min = 0, .max = 4 });
+        const twice = app.doubled.update(sig, &.{app.count.signal}, double, .{app.count.get()});
+        _ = ui.text("{d} added, {d} doubled, gain {d:.1}", .{ app.count.get(), twice, app.gain });
+        // Any value made of numbers moves on springs, one per number.
+        const r = f.animate(.from("box"), app.box, .{});
+        _ = f.leaf(.from("swatch"), .{ .size = .{ .px(r.x1 - r.x0), .px(r.y1 - r.y0) }, .fill = th_accent });
+    }
+
+    fn double(n: u32) u32 {
+        return 2 * n;
+    }
+    const th_accent: lcgf.types.Color = .rgb(90, 140, 255);
+};
+// -- end
+
+test "the kit: options by name, text formatted in place, state that sets itself up" {
+    const S = struct {
+        var buf: [Context.requiredBytes(.{ .nodes = 32, .texts = 8, .customs = 1 })]u8 align(lcgf.mem.column_align) = undefined;
+    };
+    var ctx = try Context.init(&S.buf, .{ .nodes = 32, .texts = 8, .customs = 1 });
+    var app: Mixer = .{};
+    const in: lcgf.input.Input = .{ .viewport = .{ 300, 100 } };
+    var f = ctx.begin(&in);
+    app.build(&f);
+    const out = f.end(.{});
+    try testing.expect(std.mem.indexOf(u8, out.draw.strings, "0 added, 0 doubled, gain 1.0") != null);
+}
+
 fn center(r: lcgf.types.Rect) [2]f32 {
     return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
 }

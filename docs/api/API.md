@@ -26,6 +26,8 @@ simd: vector width, column access and branch-free scalar selects.
 - `fn bits(m: B) Mask`
 - `fn selU(c: bool, a: u32, b: u32) u32`: `c ? a : b` without a branch.
 - `fn selF(c: bool, a: f32, b: f32) f32`: `c ? a : b` without a branch.
+- `fn maxF(a: anytype, b: @TypeOf(a)) @TypeOf(a)`: `a > b ? a : b`, for f32 or a vector of f32: a tie or a NaN `a` gives `b`, the same on every target.
+- `fn minF(a: anytype, b: @TypeOf(a)) @TypeOf(a)`: `a < b ? a : b`: as `maxF`, a tie or a NaN `a` gives `b`.
 - `fn b2f(c: bool) f32`: 1.0 or 0.0, built from the bit pattern so that it stays a mask operation instead of becoming a compare-and-jump.
 - `fn andB(a: bool, b: bool) bool`: `a and b` as one bitwise AND, with no short-circuit jump.
 - `fn orB(a: bool, b: bool) bool`: `a or b` as one bitwise OR.
@@ -227,6 +229,12 @@ Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `ma
 
 - `fn from(s: *const Style) Template`
 
+### `FlatRow` (struct)
+A `Template` as the C ABI lays it out (`lcgf_row` in src/abi/lcgf.h): one 32-bit word per field, `look` spelled out.
+
+Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `params`, `fill`, `border_color`, `radius`, `texture`, `material`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`
+
+
 ### `Storage` (union)
 Where the columns live: slices carved from a caller's buffer (`init`), or arrays inside the tree value itself for a capacity known at compile time (`empty`), as the comptime front end keeps its tables.
 
@@ -244,7 +252,7 @@ Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`
 - `fn initSharing(carver: *mem.Carver, cap: u32, other: *const Self) Self`: `init`, except the `scratch` columns are `other`'s, not carved: two trees that are never laid out at the same time (the runtime front end's two generations) share them.
 - `fn reset(t: *Self) void`: Empties the tree for the next frame.
 - `fn push(t: *Self, parent: Index, id: Id, noalias s: *const Style) Index`: Appends a node as the last child of `parent` and returns its row.
-- `fn pushRow(t: *Self, parent_in: Index, id: Id, row: *const Template) Index`: `push` from a style already turned into its row (`Template.from`, once per style rather than once per node): the row is copied as it is, one store per column.
+- `fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index`: `push` from a style already turned into its row (`Template.from`, once per style rather than once per node): the row is copied as it is, one store per column.
 - `fn border(t: *const Self, i: u32) f32`: Border width of node `i` (`Style.border`).
 - `fn seal(t: *Self, i: Index) void`: Closes node `i`: everything pushed since belongs to its subtree.
 - `fn rect(t: *const Self, i: u32) Rect`
@@ -277,8 +285,46 @@ Strings: frame-lifetime byte storage for text, so callers may pass temporaries.
 Fields: `buf`, `len`, `overflow`
 
 - `fn add(s: *Strings, bytes: []const u8) Span`: Copies `bytes` to the end of the buffer and returns where they landed.
+- `fn print(s: *Strings, comptime fmt: []const u8, args: anytype) Span`: Formats `args` (`std.fmt`) straight into the end of the buffer, as `add` would copy the result: no caller buffer.
 - `fn get(s: *const Strings, span: Span) []const u8`
 - `fn reset(s: *Strings) void`: Empties the storage for the next frame.
+
+## `lcgf.text_format` (src/core/fmt.zig)
+
+fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`, a `.zon` `.text`), one meaning in every engine: Zig's front ends and seam, and the C++ and Rust native engines (bindings/cpp/include/lcgf/ct.hpp, bindings/rust/lcgf/src/ct.rs), which port the writers below and must give the same bytes.
+
+### Top level
+
+- `Kind = enum(u8) { literal = 0, str = 1, bool = 2, u32 = 3, u8 = 4, f32 = 5 }`: What a segment writes.
+- `Seg = struct { kind: Kind, prec: u8 = 0, arg: u32 = 0, start: u32 = 0, len: u32 = 0 }`: A piece of the output: format text (`start`, `len` into it), or argument `arg` written as `kind` (with `prec` decimals, an f32).
+- `max_prec = 6`
+- `fn maxSegs(text: []const u8) usize`: An upper bound on the segments of `text`: one per placeholder or brace, one per text run.
+- `fn parse(text: []const u8, args: []const Kind, out: []Seg) Error!usize`: The segments of `text` for arguments of kinds `args`, into `out` (at least `maxSegs` long); returns how many.
+- `fn kindOf(comptime T: type) ?Kind`: The kind a field of Zig type `T` formats as, or null when it cannot be an argument.
+- `fn write(segs: []const Seg, text: []const u8, args: anytype, sink: *Sink) void`: Writes `segs` of `text` to `sink`, reading argument values from `args`, anything with `str(i) []const u8`, `boolean(i) bool`, `uint(i) u64` and `float(i) f32` for argument i.
+- `fn Fields(comptime State: type, comptime names: []const []const u8) type`: The arguments of a format as fields of a Zig value: argument i is field `names[i]` of `state`.
+- `fn kindsOf(comptime State: type, comptime names: []const []const u8) [names.len]Kind`: The arguments' kinds for fields `names` of `State`; a compile error naming a field that is missing or cannot be an argument.
+- `fn compile(comptime State: type, comptime text: []const u8, comptime names: []const []const u8) []const Seg`: The segments of `text` over fields `names` of `State`, checked while compiling.
+
+### `Sink` (struct)
+Where formatted bytes go: the rest of a buffer.
+
+Fields: `buf`, `len`, `cut`
+
+- `fn put(s: *Sink, bytes: []const u8) void`
+- `fn putBool(s: *Sink, v: bool) void`
+- `fn putUint(s: *Sink, v: u64) void`
+- `fn putF32(s: *Sink, v: f32, prec: u8) void`: `v` with `prec` decimals, as the header says.
+
+### `Fields(..)` (generic struct)
+The arguments of a format as fields of a Zig value: argument i is field `names[i]` of `state`.
+
+Fields: `state`
+
+- `fn str(a: Self, i: u32) []const u8`
+- `fn boolean(a: Self, i: u32) bool`
+- `fn uint(a: Self, i: u32) u64`
+- `fn float(a: Self, i: u32) f32`
 
 ## `lcgf.texts` (src/core/texts.zig)
 
@@ -904,11 +950,14 @@ Spec: a UI declared as a compile-time value.
 ### Top level
 
 - `Kind = enum(u8) { col, row, label, checkbox, slider }`: What a spec node is.
+- `Format = struct { text: []const u8, args: []const []const u8 }`: A formatted label's text (src/core/fmt.zig's language) and its arguments, state fields.
 - `fn col(comptime style: Style, comptime children: anytype) Spec`: A vertical container.
 - `fn row(comptime style: Style, comptime children: anytype) Spec`: A horizontal container; as `col`, with `dir` always `.x`.
 - `fn label(comptime bind: @EnumLiteral()) Spec`: Text showing the state field `bind`: `label(.title)`.
-- `fn checkbox(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec`: A checkbox named `id`, showing and toggling the bool field `bind`: `checkbox(.mute, .muted)`.
-- `fn slider(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec`: A slider named `id`, showing and setting the f32 field `bind`: `slider(.volume, .volume)`.
+- `fn text(comptime format: []const u8, comptime args: anytype) Spec`: Text of the state fields `args` written into `format`: `text("Volume {.1} dB", .{.volume})`.
+- `fn checkbox(comptime id: @EnumLiteral(), comptime bind_or_options: anytype) Spec`: A checkbox named `id`, showing and toggling a bool field.
+- `fn slider(comptime id: @EnumLiteral(), comptime bind_or_options: anytype) Spec`: A slider named `id`, showing and setting an f32 field, 0 to 1: `slider(.volume, .volume)`, or with options as `checkbox`'s, `slider(.volume, .{ .name = "Volume" })`.
+- `fn styled(comptime s: Spec, comptime style: Style) Spec`: `s` laid out by `style`: `styled(slider(.volume, .{ .name = "Volume" }), .{ .size = .{ .px(80), .px(10) } })`.
 - `fn named(comptime s: Spec, comptime name: []const u8) Spec`: `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 - `fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec`: A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which the first `count` are live, `count` being the run-time value of the integer state field bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`.
 - `fn virtualList(comptime count: @EnumLiteral(), comptime scroll: @EnumLiteral(), comptime visible: u32, comptime height: f32, comptime template: Spec) Spec`: A clipped vertical list of `visible` fixed-height items.
@@ -918,8 +967,9 @@ Spec: a UI declared as a compile-time value.
 ### `Spec` (struct)
 One node of the declaration.
 
-Fields: `kind`, `id`, `bind`, `style`, `children`, `widget`, `name`, `region`
+Fields: `kind`, `id`, `bind`, `style`, `children`, `widget`, `name`, `region`, `format`
 
+- `fn shows(s: Spec, field: []const u8) bool`: The state fields this node shows: its `bind`, or a formatted label's arguments.
 
 ### `Region` (struct)
 What makes a node's rows dynamic, and the state field that decides which are live.
@@ -1086,7 +1136,7 @@ Layout of `spec` over its own columns, every row through every pass (see the fil
 - `fn runText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void`: Lays the UI out in a `viewport`-sized area, `Frame.end`'s sequence: `font` measures the labels' text (`spans[k]` is label k's bytes in the caller's strings), the passes run with the text extents, `font` wraps, then finalize, and the kept outputs go to `ram`.
 - `fn runLive(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection) void`: Geometry-only layout with a selection for this frame.
 - `fn runLiveText(scratch: *Scratch, ram: *C.Dynamic, viewport: [2]f32, sel: D.Selection, spans: *const [label_count]Span, font: anytype) void`: Measures every declared label and lays out the selected rows.
-- `fn dirtySpan(comptime field: []const u8) ?[2]u32`: The rows to lay out again when the state field `field` changes: the subtree of the common boundary of every label bound to it.
+- `fn dirtySpan(comptime field: []const u8) ?[2]u32`: The rows to lay out again when the state field `field` changes: the subtree of the common boundary of every label bound to it (`tables.dirtySpan`).
 - `fn relayout(comptime field: []const u8, scratch: *Scratch, ram: *C.Dynamic, spans: *const [label_count]Span, font: anytype) void`: Lays out again only what the state field `field` moves, after a frame of `run` with the same `scratch` (it keeps last frame's layout): the partial routine for that field's dirty mask, decided while compiling (`dirtySpan`).
 - `fn passes(scratch: *Scratch, viewport: [2]f32) void`
 - `fn passesText(scratch: *Scratch, viewport: [2]f32, spans: *const [label_count]Span, font: anytype) void`: Every pass but `finalize`, which leaves sizes and positions in `scratch`.
@@ -1103,6 +1153,7 @@ Which optional passes this UI runs, decided while compiling.
 ### `FoldPlan(..)` (generic struct)
 Which rows of a UI fold: `root[j]` is true for a row whose subtree is laid out while compiling.
 
+- `root: [n]bool = made.root`
 
 ### `Layout(..)` (generic struct)
 Layout of `spec`: as `Plain`, except that subtrees whose layout does not depend on the viewport (`FoldPlan`) are laid out while compiling.
@@ -1133,8 +1184,10 @@ Paint of `spec` laid out by `ct_layout.Layout(spec, options)` (see the file comm
 - `quad_count = m`: Nodes that can paint a quad: the most quads a frame emits.
 - `node: [m]u32 = painted`: Row k: the node of template k, in paint order.
 - `label_count = labels.len`
+- `keys: [m]u32 = made_batches.keys`: Row k: template k's batch key, texture << 16 | material, as `DrawList.op.key`.
 - `Batches = struct { first: [nb]u32, count: [nb]u32, key: [nb]u32 }`: The commands when every template is visible, as `paint.encode` would build them: consecutive templates with equal keys form one batch.
 - `batch_count = nb`
+- `batches: Batches = made_batches.b`
 - `Dirty = std.bit_set.Static(m)`
 - `Target = enum { fill_rgb, border_rgb, material_data, uv }`: Payload fields independent of visibility, batch keys, layout and inherited styles.
 - `fn Binding(comptime State: type) type`
@@ -1558,7 +1611,7 @@ inherit: paint inputs that a node passes down to its subtree, resolved in one pa
 - `fn opacity(t: *Tree) void`: `alpha` of every extras row = its `opacity` times the inherited row's `alpha`: the opacity paint applies to the row's node and the nodes that take its scope.
 - `fn transform(t: *Tree) void`: `world` of every extras row = the inherited `world` after the row's `transform` about its node's centre: what maps the node's layout rect to the screen.
 - `fn clip(t: *Tree) void`: `clip_radii` of every extras row: the corner radii of the clip its node hands its children.
-- `fn all(t: *Tree) void`: The three sweeps, as `paint.emit` runs them.
+- `fn all(t: *Tree) void`: Resolves opacity, transform and clip together in parent order.
 - `fn alphaOf(t: *const Tree, i: u32) f32`: Opacity paint applies to node `i`, after `opacity`.
 - `fn worldOf(t: *const Tree, i: u32) [6]f32`: Layout space to screen for node `i`, after `transform`.
 - `fn clipRadiiOf(t: *const Tree, i: u32) [4]f32`: Corner radii of the clip node `i` hands its children, after `clip`.
@@ -2087,6 +2140,246 @@ Fields: `glyphs`
 - `fn drawBatch(_: *const Null, pass: Pass, batch: draw_list.Batch) void`
 - `fn drawText(n: *const Null, pass: Pass, run: u32) void`
 
+## `lcgf.gpu_desc` (src/render/gpu/desc.zig)
+
+The descriptors of `lcgf_render.gpu`: WebGPU's object model as plain Zig data, shared by every back end's projection (src/render/<back end>/gpu.zig).
+
+### Top level
+
+- `TextureDimension = enum { @"1d", @"2d", @"3d" }`
+- `TextureViewDimension = enum { @"1d", @"2d", @"2d_array", cube, cube_array, @"3d" }`
+- `Extent3D = struct { width: u32, height: u32 = 1, depth_or_array_layers: u32 = 1 }`
+- `Origin3D = struct { x: u32 = 0, y: u32 = 0, z: u32 = 0 }`
+- `AddressMode = enum { clamp_to_edge, repeat, mirror_repeat }`
+- `FilterMode = enum { nearest, linear }`
+- `MipmapFilterMode = enum { nearest, linear }`
+- `CompareFunction = enum { never, less, equal, less_equal, greater, not_equal, greater_equal, always }`
+- `VertexStepMode = enum { vertex, instance }`
+- `VertexAttribute = struct { format: VertexFormat, offset: u64, shader_location: u32 }`
+- `PrimitiveTopology = enum { point_list, line_list, line_strip, triangle_list, triangle_strip }`
+- `FrontFace = enum { ccw, cw }`
+- `CullMode = enum { none, front, back }`
+- `IndexFormat = enum { uint16, uint32 }`
+- `BlendFactor = enum { zero, one, src, one_minus_src, src_alpha, one_minus_src_alpha, dst, one_minus_dst, dst_alpha, one_minus_dst_alpha, constant, one_minus_c…`
+- `BlendOperation = enum { add, subtract, reverse_subtract, min, max }`
+- `MultisampleState = struct { count: u32 = 1, mask: u32 = 0xffff_ffff, alpha_to_coverage_enabled: bool = false }`
+- `LoadOp = enum { load, clear }`
+- `StoreOp = enum { store, discard }`
+- `Color = struct { r: f64 = 0, g: f64 = 0, b: f64 = 0, a: f64 = 0 }`
+- `Target = struct { format: TextureFormat, samples: u32 = 1, width: u32 = 0, height: u32 = 0 }`: Where a frame's pixels go, as the host made it: the projection reads the format and sample count from here so a pipeline matches the pass it draws in.
+- `Rect = struct { x: u32, y: u32, width: u32, height: u32 }`: A rectangle in framebuffer pixels, rows from the top (WebGPU's scissor convention).
+- `fn scissor(rect: [4]f32, clip: [4]f32, scale: f32, width: u32, height: u32) Rect`: The scissor of a custom command (`DrawList.customs[k]`): its rect cut by its clip, scaled to pixels and kept inside a `width` × `height` target.
+
+### `BufferUsage` (struct)
+
+Fields: `map_read`, `map_write`, `copy_src`, `copy_dst`, `index`, `vertex`, `uniform`, `storage`, `indirect`
+
+
+### `BufferDescriptor` (struct)
+
+Fields: `label`, `size`, `usage`
+
+
+### `TextureUsage` (struct)
+
+Fields: `copy_src`, `copy_dst`, `texture_binding`, `storage_binding`, `render_attachment`
+
+
+### `TextureFormat` (enum)
+The formats every back end maps.
+
+- `fn bytesPerPixel(f: TextureFormat) u32`
+
+### `TextureDescriptor` (struct)
+
+Fields: `label`, `size`, `format`, `usage`, `dimension`, `mip_level_count`, `sample_count`
+
+
+### `SamplerDescriptor` (struct)
+
+Fields: `label`, `address_mode_u`, `address_mode_v`, `address_mode_w`, `mag_filter`, `min_filter`, `mipmap_filter`, `lod_min_clamp`, `lod_max_clamp`, `compare`
+
+
+### `VertexFormat` (enum)
+
+- `fn size(f: VertexFormat) u32`
+
+### `VertexBufferLayout` (struct)
+
+Fields: `array_stride`, `step_mode`, `attributes`
+
+
+### `PrimitiveState` (struct)
+
+Fields: `topology`, `strip_index_format`, `front_face`, `cull_mode`
+
+
+### `BlendComponent` (struct)
+
+Fields: `operation`, `src_factor`, `dst_factor`
+
+
+### `BlendState` (struct)
+
+Fields: `color`, `alpha`
+
+
+### `ColorWriteMask` (struct)
+
+Fields: `red`, `green`, `blue`, `alpha`
+
+- `all: ColorWriteMask = .{}`
+
+### `ColorTargetState` (struct)
+
+Fields: `format`, `blend`, `write_mask`
+
+
+### `VertexState` (struct)
+
+Fields: `entry_point`, `buffers`
+
+
+### `FragmentState` (struct)
+
+Fields: `entry_point`, `targets`
+
+
+### `RenderPipelineDescriptor` (struct)
+
+Fields: `label`, `vertex`, `primitive`, `multisample`, `fragment`
+
+
+### `ComputePipelineDescriptor` (struct)
+
+Fields: `label`, `entry_point`
+
+
+## `lcgf.gpu_reflect` (src/render/gpu/reflect.zig)
+
+WGSL reflection at compile time: the resource bindings (`@group(g) @binding(b) var ...`) and entry points (`@vertex fn`, `@fragment fn`, `@compute @workgroup_size(...) fn`) of a shader, read from its source by the Zig compiler.
+
+### Top level
+
+- `SampleType = enum { float, sint, uint, depth }`
+- `ViewDimension = enum { @"1d", @"2d", @"2d_array", cube, cube_array, @"3d" }`
+- `Access = enum { read, write, read_write }`
+- `Stage = enum { vertex, fragment, compute }`
+- `Failure = struct { what: []const u8 = "", at: []const u8 = "" }`: Why `parseInto` refused a shader: what it expected, and the source from there on (40 bytes).
+- `Error = error{Wgsl}`
+- `fn parse(comptime src: []const u8) Module`: Reflects WGSL source `src` while compiling.
+- `fn parseInto(src: []const u8, text: []u8, bindings: []Binding, entries: []EntryPoint, failure: *Failure) Error!Module`: Reflects `src` at run time or at comptime, into the caller's memory: `text` (src.len bytes, the source without comments, which the names point into), `bindings` and `entries`.
+- `fn groupInto(m: Module, g: u32, out: []Binding) []Binding`: The bindings of group `g` in `m`, ordered by binding index, into `out`: `Module.group` at run time.
+
+### `Kind` (enum)
+
+- `fn isBuffer(k: Kind) bool`
+
+### `Binding` (struct)
+
+Fields: `group`, `binding`, `name`, `kind`, `sample_type`, `view_dimension`, `multisampled`, `storage_format`, `access`, `runtime_sized`
+
+
+### `EntryPoint` (struct)
+
+Fields: `stage`, `name`, `workgroup_size`
+
+
+### `Module` (struct)
+
+Fields: `bindings`, `entry_points`
+
+- `fn groupCount(comptime m: Module) u32`: Number of groups: one past the highest group index used.
+- `fn group(comptime m: Module, comptime g: u32) []const Binding`: The bindings of group `g`, ordered by binding index.
+- `fn entryPoint(comptime m: Module, comptime name: []const u8) EntryPoint`
+- `fn Group(comptime m: Module, comptime g: u32, comptime Buffer: type, comptime TextureView: type, comptime Sampler: type) type`: The struct a bind group of group `g` is created from: one field per binding, named as in WGSL, of type `Buffer` for uniform and storage buffers, `TextureView` for textures and storage textures, `Sampler` for samplers.
+
+### `Module.Group(..)` (generic struct)
+The struct a bind group of group `g` is created from: one field per binding, named as in WGSL, of type `Buffer` for uniform and storage buffers, `TextureView` for textures and storage textures, `Sampler` for samplers.
+
+
+## `lcgf.gpu_gradient` (src/render/gpu/gradient.zig)
+
+The render conformance scene's custom draw (`custom.png`), written once against `lcgf_render.gpu` and compiled for every back end that has a projection.
+
+### Top level
+
+- `fn Gradient(comptime gpu: type, comptime source: type) type`
+
+### `Gradient(..)` (generic struct)
+
+Fields: `pipeline`, `group`, `screen`
+
+- `Shader = gpu.Shader(source)`
+- `fn init(dev: gpu.Device, arena: *gpu.Arena, target: gpu.Target) !G`
+- `fn deinit(g: *G, dev: gpu.Device) void`
+- `fn upload(g: *const G, up: *gpu.Upload, width: u32, height: u32) void`: The target size, written in the frame's upload phase.
+- `fn draw(g: *const G, pass: *gpu.RenderPass, rect: gpu.Rect, width: u32, height: u32) void`: Draws the gradient inside `rect` of a `width` × `height` target.
+
+## `lcgf.gpu_check` (src/render/gpu/check.zig)
+
+The projection's own checks, written once against `lcgf_render.gpu` and run by every back end on a real device: the parts of WebGPU's model the conformance scene's gradient does not reach.
+
+### Top level
+
+- `fn RenderToTexture(comptime gpu: type, comptime shaders: type) type`: Upload a 2x2 pattern through staging, draw it into a 4x4 texture, sample that into an 8x8 one in a second pass (the render-to-texture convention), read it back: each source texel is a 4x4 block.
+- `fn Compute(comptime gpu: type, comptime shaders: type) type`: A compute pass writes a storage buffer from its index and a uniform; the host reads it.
+- `fn renderToTexture(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: anytype) !void`
+- `fn compute(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: anytype) !void`
+
+### `RenderToTexture(..)` (generic struct)
+Upload a 2x2 pattern through staging, draw it into a 4x4 texture, sample that into an 8x8 one in a second pass (the render-to-texture convention), read it back: each source texel is a 4x4 block.
+
+Fields: `arena`, `host_arena`, `staging`, `pattern`, `middle`, `final`, `smp`, `quad`, `tint`, `pipeline`, `first`, `second`
+
+- `width = 8`
+- `height = 8`
+- `fn init(r: *R, dev: gpu.Device) !void`: Fills `r` in place: the arenas must not move once resources live in them.
+- `fn deinit(r: *R, dev: gpu.Device) void`
+- `fn record(r: *R, up: *gpu.Upload) !void`
+- `fn verify(px: []const u8) bool`: Whether `px` (the final texture's RGBA8 rows) has each source texel as a 4x4 block.
+
+### `Compute(..)` (generic struct)
+A compute pass writes a storage buffer from its index and a uniform; the host reads it.
+
+Fields: `shared`, `staging`, `out`, `base`, `pipeline`, `group`
+
+- `S = gpu.Shader(shaders.fill)`
+- `count = 200`
+- `fn init(k: *K, dev: gpu.Device) !void`
+- `fn deinit(k: *K, dev: gpu.Device) void`
+- `fn record(k: *K, up: *gpu.Upload) void`
+- `fn verify(values: []const u32) bool`: Whether element i of `values` is i * 3 + 7.
+
+## `lcgf.gpu_naga` (src/render/gpu/naga.zig)
+
+naga's translations, finished for each back end at compile time.
+
+### Top level
+
+- `SlotKind = enum { buffer, texture, sampler, image, uniform, storage }`
+- `Slot = struct { group: u32, binding: u32, slot: u32 }`
+- `fn slots(comptime m: reflect.Module, comptime split_buffers: bool, comptime split_images: bool) []const Slot`: The flat slot of every binding of `m`, numbered per class.
+- `fn slotOf(comptime table: []const Slot, comptime group: u32, comptime binding: u32) u32`
+- `fn glslSlots(comptime m: reflect.Module) []const Slot`: GL ES's slots: uniform buffers, storage buffers, textures and images each numbered apart.
+- `fn glsl(comptime m: reflect.Module, comptime src: []const u8) [:0]const u8`: naga's GLSL ES with `binding = k` written into each storage block's and image's layout qualifier.
+- `fn glslName(line: []const u8) ?[2]u32`: The (group, binding) of a GLSL line declaring naga's `_group_G_binding_B_<stage>`, if any.
+- `fn glslBlocks(comptime text: []const u8, comptime name: []const u8) []const [:0]const u8`: The uniform block names naga gave `name` (`_group_G_binding_B_<stage>`) in `text`: the `uniform <Block> {` on the line that declares it.
+- `fn hlsl(comptime src: []const u8) [:0]const u8`: naga's HLSL with its sampler heap removed: each `static const SamplerState x = nagaSamplerHeap[nagaGroupGSamplerIndexArray[B]];` becomes `SamplerState x : register(sB, spaceG);`, and the heap and index arrays go.
+- `fn mslSlots(comptime m: reflect.Module) []const Slot`: Metal's slots: buffers (uniform and storage) together, textures with storage textures.
+- `fn mslSizesSlot(comptime m: reflect.Module) u32`: Buffer slot of the runtime-sized arrays' lengths (`_buffer_sizes`): after every buffer.
+- `fn mslVertexBuffer(slot: u32) u32`: Vertex buffer slot `slot` of a pipeline: counted down from the top of Metal's 31 buffer slots, so it never meets a resource buffer.
+- `fn mslSized(comptime m: reflect.Module) []const reflect.Binding`: The runtime-sized storage buffers, in the order naga's `_mslBufferSizes` lists them: the order the WGSL declares them.
+- `fn msl(comptime m: reflect.Module, comptime src: []const u8) [:0]const u8`: naga's MSL with every resource at its slot.
+- `fn slotsInto(m: reflect.Module, split_buffers: bool, split_images: bool, scratch: []reflect.Binding, out: []Slot) []Slot`: `slots` at run time: one per binding, into `out` (at least `m.bindings.len` long).
+- `fn slotIn(table: []const Slot, group: u32, binding: u32) ?u32`: `slotOf` at run time.
+- `fn glslAlloc(gpa: std.mem.Allocator, table: []const Slot, src: []const u8) ![:0]u8`: `glsl` at run time: naga's GLSL ES with storage blocks and images given their bindings.
+- `fn glslBlocksInto(gpa: std.mem.Allocator, text: []const u8, name: []const u8, out: *std.ArrayList([]const u8)) !void`: `glslBlocks` at run time: the uniform blocks of `text` that hold `name`, appended to `out`.
+- `fn hlslAlloc(gpa: std.mem.Allocator, src: []const u8) ![:0]u8`: `hlsl` at run time, for lcgf-gen: naga's samplers taken out of its heap, one `register(sB, spaceG)` each, line endings kept.
+- `fn mslSizesSlotIn(m: reflect.Module) u32`: `mslSizesSlot` at run time.
+- `fn mslSizedIndex(m: reflect.Module, group: u32, binding: u32) ?u32`: The index of `@group(g) @binding(b)` among the runtime-sized arrays (`mslSized`), if it is one.
+- `fn mslAlloc(gpa: std.mem.Allocator, m: reflect.Module, table: []const Slot, src: []const u8) ![:0]u8`: `msl` at run time, for lcgf-gen: naga's MSL with every resource at its slot (`table` from `slotsInto(m, false, false, ...)`).
+
 ## `lcgf.context` (src/runtime/context.zig)
 
 Context: the runtime front end's state that outlives a frame (tier 1).
@@ -2154,9 +2447,16 @@ Fields: `ctx`, `in`
 - `fn open(f: *Frame, id: Id, style: Style) Node`: Starts a node.
 - `fn close(f: *Frame) void`
 - `fn leaf(f: *Frame, id: Id, style: Style) Node`: A node with no children.
+- `fn openRow(f: *Frame, id: Id, row: anytype) Node`: `open` from a style already turned into its row (`Template.from`; a `*const Template` or a C `*const FlatRow`): the row is pushed as it is.
+- `fn leafRow(f: *Frame, id: Id, row: anytype) Node`: `leaf` from a row (`openRow`).
 - `fn text(f: *Frame, str: []const u8, ts: TextStyle) Node`: A text leaf.
+- `fn textf(f: *Frame, comptime fmt: []const u8, args: anytype, ts: TextStyle) Node`: A text leaf of `args` formatted by `fmt` (`std.fmt`), written straight into the frame's strings: `f.textf("Count: {d}", .{n}, ts)`, no buffer of the caller's.
+- `fn room(f: *const Frame) []u8`: The free end of the frame's strings, to write text into before `textWritten`: how a caller with its own formatter (C++'s `std::format_to_n`, Rust's `fmt::Write`) puts formatted text in the frame without a buffer of its own.
+- `fn textWritten(f: *Frame, n: usize, ts: TextStyle) Node`: A text leaf over the `n` bytes just written at `room()`, as `text` would push them; `n` past the room is cut to it, and reported (`Status.strings`).
+- `fn textfStyled(f: *Frame, comptime fmt: []const u8, args: anytype, ts: TextStyle, style: Style) Node`: `textf` with full control over the leaf, as `textStyled`.
 - `fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node`: `text` with full control over the leaf (padding, sizing, background).
 - `fn custom(f: *Frame, id: Id, style: Style, data: u64) Node`: Reserves a rect that the caller draws itself.
+- `fn customRow(f: *Frame, id: Id, row: anytype, data: u64) Node`: `custom` from a row (`openRow`).
 - `fn interact(f: *Frame, node: Node, sense: Sense) Response`: Makes `node` interactive and reports what happened to it this frame.
 - `fn drag(f: *const Frame, id: Id) [2]f32`: Pointer movement this frame while `id` is dragged; zero otherwise.
 - `fn lastRect(f: *const Frame, id: Id) Rect`: Where `id` was laid out last frame.
@@ -2164,12 +2464,12 @@ Fields: `ctx`, `in`
 - `fn setFill(f: *Frame, node: Node, color: Color) void`
 - `fn setCursor(f: *Frame, cursor: Cursor, when: bool) void`: Requests `cursor` if `when` holds.
 - `fn focusScope(f: *Frame, node: Node, kind: u8) void`: Makes `node` a focus scope (`focus.Scopes`): `group` for a composite widget that is one Tab stop with arrows inside (a toolbar, a radio group), `trap` for a modal layer that keeps focus among its descendants.
-- `fn animate(f: *Frame, id: Id, target: f32, spring: Spring) f32`: A value that eases toward `target` across frames on a spring keyed by `id`.
+- `fn animate(f: *Frame, id: Id, target: anytype, spring: Spring) values.Of(@TypeOf(target))`: A value that eases toward `target` across frames on a spring keyed by `id`.
 - `fn animateLayout(f: *Frame, node: Node, spring: Spring) void`: Slides `node` (and its subtree) on a spring whenever its laid-out position changes, starting from where it was shown last frame.
 - `fn sequence(f: *Frame, id: Id, keys: []const keyframes.Key) f32`: Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
-- `fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color`: A colour that moves to `target` along `tr` whenever `target` changes, instead of jumping: one tween per channel, keyed by `id.with(0..3)`.
+- `fn transition(f: *Frame, id: Id, target: Color, tr: Transition) Color`: A colour that moves to `target` along `tr` whenever `target` changes, instead of jumping: `tween` over its channels, keyed by `id.with(0..3)`.
 - `fn setFillAnimated(f: *Frame, node: Node, id: Id, color: Color, tr: Transition) void`: `setFill` with a transition: a fill that changes between frames (hover, press, theme) fades to the new colour along `tr`.
-- `fn tween(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32`: A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the target changes, a new leg starts from the current value.
+- `fn tween(f: *Frame, id: Id, target: anytype, seconds: f32, ease: Ease) values.Of(@TypeOf(target))`: A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the target changes, a new leg starts from the current value.
 - `fn end(f: *Frame, font: Mono) Output`: Diagonal: measure with `font`, lay out, paint.
 - `fn finish(f: *Frame) Output`: Paint and bookkeeping only, for callers who ran layout themselves.
 
@@ -2383,6 +2683,7 @@ Widgets (tier 2): the base every widget is built on, and the four reference widg
 - `fn checkbox(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response`
 - `fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32) Response`
 - `fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme) type`: The comptime front end running the reference widgets of `spec`: state in `Signals`, input through `Events`, look and behaviour through the functions above.
+- `fn CustomDraw(comptime data: u64) type`: The widget of `ct.custom`: a node the host draws itself, as `Frame.custom` makes one.
 - `fn sameDraw(a: *const DrawList, b: *const DrawList) bool`: Whether two draw lists are the same: quad bytes, text runs and commands, in order.
 - `fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Limits) type`: Runs one UI through both front ends, frame by frame, and checks they agree.
 - `fn Semantic(comptime cap: u32) type`: What assistive technology sees of both front ends' current frame in a `Harness`: each tree run through `names`, `states` and `flatten` (a11y/tree.zig), as a bridge would.
@@ -2409,12 +2710,13 @@ The reference widgets as spec nodes.
 - `fn label(comptime th: Theme, comptime text: @EnumLiteral()) Spec`: Text showing the string field `text`.
 - `fn button(comptime th: Theme, comptime id: @EnumLiteral(), comptime text: @EnumLiteral()) Spec`: A button named `id` showing the string field `text`; its click is its event.
 - `fn checkbox(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime text: @EnumLiteral()) Spec`: A checkbox named `id` toggling the bool field `bind`, captioned by the string field `text`.
+- `fn custom(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec`: A node named `id` that the host draws itself (`Frame.custom`'s route): its rect comes back as a custom command carrying `data`.
 - `fn slider(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral()) Spec`: A slider named `id` setting the f32 field `bind`, 0 to 1.
 
 ### `ComptimeUi(..)` (generic struct)
 The comptime front end running the reference widgets of `spec`: state in `Signals`, input through `Events`, look and behaviour through the functions above.
 
-Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `kept`, `built`, `font`
+Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `kept`, `built`, `row_of`, `skipped`, `font`
 
 - `Events = E`
 - `Signals = S`
@@ -2426,9 +2728,16 @@ Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `kep
 - `fn frame(ui: *Self, in: *const Input) Output`: Steps input against last frame's rects, applies each widget's behaviour to the state, then builds, lays out and paints the frame.
 - `fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output`: Uses the same accessibility settings as the runtime context.
 - `fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`: Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
+- `fn treeRow(ui: *const Self, row: u32) u32`: The tree row of spec row `row` in the frame being built (or last frame's, during `step`), 0 when a region left it out.
 - `fn keep(ui: *Self, comptime W: type) *[4]f32`: Hover and held for the widget at spec row `row`, as `Interaction.response` reports them: while a widget is held, only it shows hover.
 - `fn response(ui: *const Self, row: u32, in: *const Input) Response`
 - `fn field(comptime name: []const u8) S.Field`
+
+### `CustomDraw(..)` (generic struct)
+The widget of `ct.custom`: a node the host draws itself, as `Frame.custom` makes one.
+
+- `custom_draw_data = data`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
 ### `Harness(..)` (generic struct)
 Runs one UI through both front ends, frame by frame, and checks they agree.
@@ -2467,6 +2776,30 @@ Comptime front end: the same toolbar as a spec over a state struct.
 
 Fields: `reset_text`, `wireframe`, `wire_text`, `exposure`, `layer`
 
+
+## `lcgf.widgets` (src/widgets/kit.zig)
+
+Kit: the runtime front end's common widgets behind one value that holds the frame and the theme, each taking its options by name.
+
+### Top level
+
+- `fn on(f: *Frame, th: *const Theme) Kit`: The kit over frame `f` with theme `th`, for this frame.
+- `fn idOf(id: anytype) Id`: `id` as an `Id`: an `Id` as it is, an enum literal hashed while compiling.
+
+### `Kit` (struct)
+
+Fields: `f`, `theme`
+
+- `ButtonOptions = struct { label: []const u8 = "" }`
+- `CheckboxOptions = struct { label: []const u8 = "" }`
+- `SliderOptions = struct { min: f32 = 0, max: f32 = 1 }`
+- `TextfieldOptions = struct { hint: []const u8 = "" }`
+- `fn label(ui: Kit, str: []const u8) Node`: Text showing `str`, copied (it may be a temporary).
+- `fn text(ui: Kit, comptime fmt: []const u8, args: anytype) Node`: Text of `args` formatted by `fmt` (`std.fmt`), written into the frame's strings: no buffer of the caller's.
+- `fn button(ui: Kit, id: anytype, o: ButtonOptions) Response`: A button; `clicked` is set the frame it fires.
+- `fn checkbox(ui: Kit, id: anytype, value: anytype, o: CheckboxOptions) Response`: A checkbox over `value` (a `*bool` or a `*Check`), toggled by a click or Space.
+- `fn slider(ui: Kit, id: anytype, value: *f32, o: SliderOptions) Response`: A slider over `value`, from `min` at the left end to `max` at the right.
+- `fn textfield(ui: Kit, id: anytype, state: anytype, o: TextfieldOptions) Response`: A one-line text field over `state` (a `*textfield.Text(cap)`), showing `hint` while empty; what the input did to the text is `state.result`.
 
 ## `lcgf.widgets_label` (src/widgets/label.zig)
 
@@ -5187,6 +5520,16 @@ Fields: `gfx`
 
 - `fn draw(s: *Setup, fb: *Framebuffer, list: *const DrawList, glyphs: iface.Glyphs, background: Color, scale: f32) void`
 
+## `lcgf.render_sw_font` (src/render/sw/font.zig)
+
+The bundled bitmap font for the software renderer: DejaVu Sans Mono at 14 px (the examples' atlas, src/example/font/, under its LICENSE.txt), repacked into `Mono`'s 16 x 16 byte-indexed grid, so the glyph quads `Mono.quads` makes sample it as they are.
+
+### Top level
+
+- `width = 16 * cell_w`
+- `height = 16 * cell_h`
+- `image: sw.Image = .{ .pixels = &pixels, .width = width, .height = height }`
+
 ## `lcgf.png` (src/assets/png.zig)
 
 PNG decoding into premultiplied RGBA8, over the caller's memory (https://www.w3.org/TR/png/).
@@ -5546,7 +5889,7 @@ Signals: change counters for the runtime front end (tier 1).
 
 ### Top level
 
-- `Signal = enum(u32) { _ }`: A row of `Signals.version`.
+- `Signal = enum(u32) { unset = std.math.maxInt(u32), _ }`: A row of `Signals.version`.
 - `fn Cell(comptime T: type) type`: A value paired with its signal.
 - `fn Derived(comptime T: type) type`: A value computed from other signals (a memo), with its own signal and the stamp of the inputs it was last computed from.
 
@@ -5568,19 +5911,22 @@ A value paired with its signal.
 Fields: `value`, `signal`
 
 - `fn init(signals: *Signals, value: T) Self`
+- `fn of(value: T) Self`: A cell whose signal is created on its first change.
 - `fn get(self: *const Self) T`
 - `fn set(self: *Self, signals: *Signals, value: T) void`: Stores `value`; the signal is bumped only if it differs from the old one.
 
 ### `Derived(..)` (generic struct)
 A value computed from other signals (a memo), with its own signal and the stamp of the inputs it was last computed from.
 
-Fields: `cell`, `stamp`
+Fields: `cell`, `stamp`, `computed`
 
 - `fn init(signals: *Signals, deps: []const Signal, value: T) Self`
+- `fn of(value: T) Self`: A memo holding `value` until its first `update`, which always computes.
 - `fn get(self: *const Self) T`
 - `fn signal(self: *const Self) Signal`
 - `fn stale(self: *const Self, signals: *const Signals, deps: []const Signal) bool`: An input changed since the last `set`.
 - `fn set(self: *Self, signals: *Signals, deps: []const Signal, value: T) void`: Stores a value computed from `deps` at their current versions.
+- `fn update(self: *Self, signals: *Signals, deps: []const Signal, comptime func: anytype, args: anytype) T`: The value, recomputed as `@call(.auto, func, args)` first when an input in `deps` changed since the last computation (or there was none).
 
 ### `Effect` (struct)
 A reaction to signals that the caller runs (saving a file, sending a message), at most once per frame.
@@ -5595,6 +5941,7 @@ Anims: every spring in the UI as one table of columns, stepped together (tier 0)
 
 ### Top level
 
+- `fn stepVector(comptime width: usize, c: anytype, i: usize, dt: f32) @Vector(width, f32)`: One full SIMD group or the exact final group of a compile-time table.
 - `fn BoundSprings(comptime State: type) type`: A generated UI declares its animated bool and f32 target fields with `pub const springs = .{ .volume = Spring{}, .glow = Spring{} };`.
 
 ### `Spring` (struct)
@@ -5694,6 +6041,21 @@ Fields: `len`, `cap`, `c`
 ### `Flips.Columns` (struct)
 
 Fields: `node`, `id`, `stiffness`, `damping`, `delta`
+
+
+## `lcgf.anim_values` (src/anim/values.zig)
+
+Values: what `Frame.animate` and `Frame.tween` can move.
+
+### Top level
+
+- `fn Of(comptime T: type) type`: The type a target of type `T` animates as: an untyped number literal moves as an f32.
+- `fn count(comptime T: type) comptime_int`: How many numbers a value of `T` is made of; a compile error naming the first part of `T` that is not a number (a bool, a pointer, an optional, a union).
+- `fn flatten(comptime T: type, v: T) [count(T)]f32`: The components of `v`, in order.
+- `fn build(comptime T: type, xs: *const [count(T)]f32) T`: The value made of `xs`, in `flatten`'s order.
+
+### `Of(..)` (generic struct)
+The type a target of type `T` animates as: an untyped number literal moves as an f32.
 
 
 ## `lcgf.shell_headless` (src/shell/headless.zig)
@@ -5920,6 +6282,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `send_event_size = 44`
 - `set_input_focus_size = 12`
 - `get_input_focus_size = 4`
+- `create_pixmap_size = 16`
+- `copy_area_size = 28`
 - `create_gc_size = 20`
 - `put_image_head = 24`
 - `get_image_size = 20`
@@ -5966,6 +6330,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `fn sendEvent(b: *Buf, window: u32, mask: u32, event: *const [32]u8) void`: Sends the 32-byte `event` to `window` (to its owner when `mask` is 0).
 - `fn setInputFocus(b: *Buf, window: u32) void`: Gives `window` the keyboard focus (revert to the root; CurrentTime).
 - `fn getInputFocus(b: *Buf) void`: Has a reply and no effect: a round trip, after which the server has handled every earlier request.
+- `fn createPixmap(b: *Buf, id: u32, drawable: u32, width: u16, height: u16, depth: u8) void`
+- `fn copyArea(b: *Buf, src: u32, dst: u32, gc: u32, width: u16, height: u16) void`: Copies the complete frame from the pixmap to the window, origin to origin.
 - `fn createGc(b: *Buf, id: u32, drawable: u32) void`: A graphics context for PutImage, without GraphicsExpose events.
 - `fn putImage(b: *Buf, drawable: u32, gc: u32, w: u16, h: u16, x: i16, y: i16, depth: u8) void`: The header of a ZPixmap PutImage of `w` x `h` pixels of 32 bits at (x, y); the caller sends the `w * h * 4` pixel bytes right after it.
 - `fn getImage(b: *Buf, drawable: u32, x: i16, y: i16, w: u16, h: u16) void`: Reads `w` x `h` ZPixmap pixels back; the reply's data starts at byte 32.
@@ -6047,7 +6413,11 @@ Modifier and button bits of an event's `state`.
 - `get_input_focus = 43`
 - `translate_coordinates = 40`
 - `open_font = 45`
+- `create_pixmap = 53`
+- `free_pixmap = 54`
 - `create_gc = 55`
+- `free_gc = 60`
+- `copy_area = 62`
 - `put_image = 72`
 - `get_image = 73`
 - `create_glyph_cursor = 94`
@@ -6484,6 +6854,376 @@ Interop between the two front ends (tier 1): a runtime `Frame` inside a region o
 - `fn widgetRects(comptime E: type, ram: anytype) E.Rects`: The widget rect table `Events(spec).Rects` from a comptime layout's RAM: each widget's visible rect (`vis`), in the layout's own coordinates, as `Rects.fromTree` takes it from a runtime tree.
 - `fn regionInput(outer: *const Input, rect: [4]f32) Input`: The input of a front end hosted in `rect` (x0, y0, x1, y1, in `outer`'s coordinates): the rect's size as its viewport, and the pointer moved by the rect's origin.
 - `fn compose(out: *DrawList, host: *const DrawList, guest: *const DrawList, region_id: u32, strings: []u8) error{ NoRegion, NoRoom }!void`: `host` with `guest` drawn in the region `region_id`: the host's custom command whose `CustomDraw.id` is `region_id` is replaced, in paint order, by all of `guest`'s commands.
+
+## `lcgf.abi_plan` (src/abi/plan.zig)
+
+plan(): what the widgets' comptime front end (`ComptimeUi`, src/widgets/base.zig) decides while compiling, as a pure function over arrays.
+
+### Top level
+
+- `version: u32 = 1`
+- `none: u32 = std.math.maxInt(u32)`
+- `FieldType = enum(u8) { str, bool, f32, u32, u8, other, color }`: What a state field holds, as the generated state structs lay it out (C rules): `str` is a pointer and a length (16 bytes on 64-bit targets), `bool` and `u8` one byte (`u8` is an enum's tag, a `choice` selector), `f32`, `u32` and `color` (rgba bits) four.
+- `Kind = enum(u8) { container, button, label, checkbox, slider, custom, widget }`: The reference widgets' spec kinds, after `ct.*` built them (a button is a row with an id).
+- `RegionKind = enum(u8) { none, when, list, choice }`: What makes a node's rows live only sometimes (spec.zig's `when`, `list`, `choice`).
+- `Spring = struct { field: u32, stiffness: f32, damping: f32 }`: A spring on an f32 or bool field: the slider bound to it shows the sprung value.
+- `Format = struct { text: []const u8, segs: []const fmt.Seg, args: []const u32 }`: A formatted label: its text, its segments (src/core/fmt.zig; a segment's `arg` indexes `args`) and the fields its arguments are, by index.
+- `Op = enum(u8) { container, button, label, checkbox, box, slider, thumb, custom, widget }`: What a row pushes.
+- `Widget = struct { row: u32, kind: Kind, focusable: bool }`
+- `Error = error{ BadTree, BadBind, BadKind, BadRegion, BadSpring }`
+- `Dir = extern struct { id: u32, class: u32, words_per_row: u32, offset: u32, len: u32 }`: One entry of the column directory: where a column's words are.
+- `Column = enum(u32) { rows, styles, widgets, fields, springs, theme, formats, segs, text }`
+- `column_count = @typeInfo(Column).@"enum".field_names.len`
+- `Class = enum(u32) { dynamic, constant, dropped }`: Every column is constant (rodata): the caller's buffer holds the frame's working columns.
+- `header_words = wordsOf(Header)`
+- `FormatSize = struct { formats: usize = 0, segs: usize = 0, text: usize = 0 }`: What the formatted labels of some nodes take in the tables.
+- `fn argKind(t: FieldType) ?fmt.Kind`: The format kind a field of type `t` is written as, or null when it cannot be an argument.
+- `fn Buffers(comptime n: comptime_int) type`: Room for a plan of `n` nodes: one row, one style and at most one widget per node, plus the three theme styles.
+- `fn layoutState(fields: []Field) struct { size: u32, alignment: u32 }`: Lays out the state struct as C lays out the generated one: writes each field's `offset`.
+- `fn plan(nodes: []const Node, fields: []Field, springs: []const Spring, th: *const Theme, rows: []Row, styles: []Style, widgets: []Widget, formats: []Format) …`: The plan of `nodes` with theme `th`.
+- `fn count(comptime spec: Spec) comptime_int`: Nodes in `spec`, itself included.
+- `fn fieldsOf(comptime State: type) [@typeInfo(State).@"struct".field_names.len]Field`: The fields of `State`, in declaration order: strings, bools and f32s.
+- `fn fieldsOfZig(comptime State: type) [@typeInfo(State).@"struct".field_names.len]Field`: `fieldsOf` for `ComptimeUi`: a field of another type is `other`, for Zig code only.
+- `fn springsOf(comptime State: type) [springCount(State)]Spring`: The springs `State` declares (`pub const springs = .{ .volume = Spring{} }`), in that order.
+- `fn fromSpec(comptime State: type, comptime spec: Spec) [count(spec)]Node`: `spec`'s nodes, depth-first, binding the fields of `State`.
+- `fn fromSpecZig(comptime State: type, comptime spec: Spec) [count(spec)]Node`: `fromSpec` for `ComptimeUi`: a Zig custom widget (`Spec.widget`) is a `widget` node and its subtree is lenient (its `push` draws it).
+- `fn tablesOf(comptime State: type, comptime spec: Spec, comptime th: Theme) [encodedWords(count(spec), fieldsOf(State).len, springCount(State), formatSize(&fr…`: The encoded tables of `ComptimeUi(State, spec, th)`'s UI, made while compiling.
+- `fn PlanOf(comptime spec: Spec) type`: `ComptimeUi(State, spec, th)`'s plan, made while compiling: the rows and styles it pushes, the same `plan` the seam's tables are encoded from.
+- `fn planOf(comptime State: type, comptime spec: Spec, comptime th: Theme) PlanOf(spec)`
+- `fn emit(host: anytype, c: anytype, looks: *const Looks, r: u32, row: Row, style: Style, parent: u32) u32`: Pushes row `r` under tree row `parent` and returns its tree row: the one place a row's op becomes a tree row, for both front ends of the tables (`ComptimeUi.push` and the seam's frame).
+- `fn wordsOf(comptime T: type) comptime_int`: Words of a value of `T` written field by field (`Words.put`).
+- `fn put(comptime T: type, v: T, out: []u32) void`: A value as words and back: f32 as its bits, ints, bools and enums as u32, packed structs as their backing integer, arrays and structs element by element.
+- `fn get(comptime T: type, in: []const u32) T`
+- `fn layoutHashOf(comptime list: anytype) u32`: `layout_hash` over other types: the runtime front end's (src/abi/runtime.zig).
+- `fn encodedWords(n: usize, f: usize, springs: usize, fm: FormatSize) usize`: An upper bound on the words of a plan of `n` nodes and `f` fields, and of formats `fm` (`formatSize`).
+- `fn formatSize(nodes: []const Node) FormatSize`
+- `fn encode(p: *const Plan, out: []u32) usize`: Writes `p` into `out` (at least `encodedWords` long); returns the words used.
+
+### `Field` (struct)
+
+Fields: `name`, `type`, `offset`
+
+
+### `Node` (struct)
+One spec node, depth-first.
+
+Fields: `kind`, `style`, `id`, `bind`, `parent`, `region`, `region_field`, `data`, `lenient`, `format`
+
+
+### `Row` (struct)
+One tree row the frame pushes.
+
+Fields: `op`, `parent`, `style`, `id`, `field`, `widget`, `end`, `sealed`, `when`, `gate`, `gate_field`, `gate_index`, `data`, `format`
+
+
+### `Plan` (struct)
+What `plan` produces.
+
+Fields: `rows`, `styles`, `widgets`, `formats`, `fields`, `springs`, `label`, `fills`, `box`, `thumb`, `runs`, `state_size`, `state_align`
+
+
+### `Buffers(..)` (generic struct)
+Room for a plan of `n` nodes: one row, one style and at most one widget per node, plus the three theme styles.
+
+
+### `Looks` (struct)
+The theme's parts `emit` adds to a row's own style.
+
+Fields: `label`, `fills`, `box`
+
+
+### `PlanOf(..)` (generic struct)
+`ComptimeUi(State, spec, th)`'s plan, made while compiling: the rows and styles it pushes, the same `plan` the seam's tables are encoded from.
+
+
+### `Header` (struct)
+The header: the first words of the tables.
+
+Fields: `magic`, `version`, `layout_hash`, `words`, `index_bits`, `coord`, `lanes`, `features`, `rows`, `runs`, `widgets`, `fields`, `styles`, `springs`, `state_size`, `state_align`, `columns`
+
+
+### `Tables` (struct)
+Tables read back, as the frame uses them: slices into the caller's words.
+
+Fields: `header`, `words`, `rows`, `styles`, `widgets`, `fields`, `springs`, `formats`, `segs`, `text`, `label`, `fills`, `box`, `thumb`
+
+- `DecodeError = error{ NotTables, Version, LayoutHash, Truncated }`
+- `fn decode(words: []const u32) DecodeError!Tables`: Checks the header (magic, version, layout hash, length) and finds the columns.
+- `fn row(t: *const Tables, i: u32) Row`
+- `fn format(t: *const Tables, k: u32) struct { first: u32, count: u32, at: u32, len: u32 }`: Format `k`: its segments are `seg(first ..< first + count)`, its text is `textByte(at ..< at + len)`.
+- `fn seg(t: *const Tables, i: u32) struct { kind: fmt.Kind, prec: u8, field: u32, start: u32, len: u32 }`: Segment `i` of the segs column: what it writes, with the field of its argument.
+- `fn textByte(t: *const Tables, b: u32) u8`: Byte `b` of the text column.
+- `fn style(t: *const Tables, i: u32) Style`
+- `fn widget(t: *const Tables, k: u32) Widget`
+- `fn spring(t: *const Tables, k: u32) Spring`
+- `fn field(t: *const Tables, k: u32) struct { type: FieldType, offset: u32 }`
+
+### `Tables.Section` (struct)
+
+Fields: `at`, `per`, `len`
+
+
+## `lcgf.abi_seam` (src/abi/seam.zig)
+
+The prebuilt frame behind the C seam: `ComptimeUi.frame` (src/widgets/base.zig) driven by tables (src/abi/plan.zig) instead of by a comptime spec.
+
+### Top level
+
+- `none_widget = plan.none`: The `widget` of a frame without an event.
+- `Output = struct { draw: *const DrawList, tree: *const Tree, widget: u32 = none, value: f32 = 0, focus: u32 = none, wake: f32 = types.inf }`: What a frame returns: the draw list, the tree it was painted from, and the event the pointer made (`widget` is a slot in widget order, `none` for no event).
+- `Status = enum(c_int) { ok = 0, not_tables = 1, version = 2, layout_hash = 3, truncated = 4, buffer_too_small = 5, unaligned = 6 }`: Result codes of the C functions: 0 is success.
+- `frame_symbol = std.fmt.comptimePrint("lcgf_frame_u32_f32_l{d}", .{simd.lanes})`: The exported names, specialised as this build is: 32-bit rows, f32 coordinates, and the lane count of `simd`.
+- `fn cDraw(d: *const DrawList) CDraw`
+- `fn exportAll() void`: Exports the seam's functions.
+- `fn ExternState(comptime State: type) type`: The state struct a C++ or Rust program would pass for `State`: strings as pointer and length, in declaration order.
+- `fn externDefaults(comptime State: type) ExternState(State)`: `State`'s defaults, as the extern struct.
+- `fn SeamUi(comptime State: type, comptime spec: spec_zig.Spec, comptime th: base.Theme) type`: A UI over the seam in Zig: the tables made while compiling, the frame behind the seam.
+
+### `Ui` (struct)
+
+Fields: `tables`, `rows`, `runs`, `customs`, `pressed`, `down`, `focus`, `rects`, `row_of`, `spring_x`, `spring_v`, `spring_t`, `work`, `looks`, `cols`, `font`, `built`
+
+- `Error = plan.Tables.DecodeError || error{ BufferTooSmall, Unaligned }`
+- `fn bytes(tables: []const u32) Error!usize`: Bytes one UI of `tables` needs in the caller's buffer.
+- `fn init(tables: []const u32, buf: []u8) Error!*Ui`: Checks `tables` and places a UI at the start of `buf`.
+- `fn frame(ui: *Ui, state: [*]u8, in: *const Input) Output`: One frame: the pointer's event applied to the state, then every row pushed, laid out and painted, as `ComptimeUi.frame` does for the reference widgets.
+
+### `CInput` (struct)
+The input a host passes: the fields the reference widgets read.
+
+Fields: `viewport`, `pointer`, `dt`, `scale`, `buttons`, `mods`, `events`, `events_len`
+
+- `fn input(c: *const CInput) Input`
+
+### `CDraw` (struct)
+A frame's draw list as columns, for C, C++ and Rust to read in place.
+
+Fields: `quads`, `quad_len`, `run_len`, `runs`, `strings`, `strings_len`, `cmd_kind`, `cmd_first`, `cmd_count`, `cmd_key`, `cmd_len`, `custom_len`, `customs`
+
+
+### `CFrame` (struct)
+
+Fields: `draw`, `widget`, `value`, `focus`, `wake`
+
+
+### `ExternState(..)` (generic struct)
+The state struct a C++ or Rust program would pass for `State`: strings as pointer and length, in declaration order.
+
+
+### `SeamUi(..)` (generic struct)
+A UI over the seam in Zig: the tables made while compiling, the frame behind the seam.
+
+Fields: `buf`, `state`, `ui`
+
+- `tables = words`
+- `fn init(s: *Self) !void`
+- `fn frame(s: *Self, in: *const Input) Output`
+
+## `lcgf.abi_zon` (src/abi/zon.zig)
+
+A UI spec as a `.zon` file: what C++ and Rust programs write where Zig writes a comptime `Spec` with the `ct.*` builders.
+
+### Top level
+
+- `Length = union(enum) { fit, fill, px: f32, pct: f32, grow: f32 }`
+- `ThemeColor = enum { text, panel, control, control_hot, control_held, accent }`
+- `Box = struct { style: ZStyle = .{}, children: []const ZNode = &.{}, when: ?[]const u8 = null }`
+- `List = struct { count: []const u8, max: u32, dir: types.Axis = .y, style: ZStyle = .{}, template: []const ZNode }`
+- `Choice = struct { select: []const u8, dir: types.Axis = .y, style: ZStyle = .{}, children: []const ZNode }`
+- `ZText = struct { format: []const u8, args: []const []const u8 = &.{} }`
+- `ThemeName = enum { default }`
+- `Error = error{ OutOfMemory, ParseZon, UnknownField, FieldWithoutType, BadList, MissingText, NotStatic, BadField, BadFormat }`
+- `StaticWidget = struct { name: []const u8, row: u32, slider: bool }`
+- `MixerState = struct { title: []const u8 = "Mixer", mute_text: []const u8 = "Mute", muted: bool = false, volume: f32 = 0.5, pan: f32 = 0 }`: src/comptime/mixed.zig's panel, with a title and a pan slider in a column around it.
+- `fn fieldColor(z: ZField) u32`: A colour field's default, as rgba bits (`Color.bitsOf`).
+- `fn read(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8, path: []const u8) Error!Expanded`: Reads `source`.
+- `fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8, path: []const u8) Error!ZSpec`: Parses `source` without expanding it.
+- `fn fieldsOf(arena: std.mem.Allocator, spec: ZSpec) Error![]plan.Field`: The state's fields, in order, not yet laid out.
+- `fn expand(arena: std.mem.Allocator, spec: ZSpec) Error!Expanded`
+- `fn readStatic(gpa: std.mem.Allocator, arena: std.mem.Allocator, source: [:0]const u8, path: []const u8) Error!Static`: Reads `source` as a static UI: spec.zig's `col`, `row`, `label`, `checkbox` and `slider`, one row each, and its regions `when`, `list`, `choice` and `virtual_list` (comptime UIs, ct_layout and ct_paint).
+- `fn expandStatic(arena: std.mem.Allocator, spec: ZSpec) Error!Static`
+- `fn staticTables(arena: std.mem.Allocator, x: *const Static) (Error || abi_ct.Error)![]u32`: The words of a static UI, in `arena` (`abi_ct.make`).
+- `fn tables(arena: std.mem.Allocator, x: *const Expanded) (Error || plan.Error)![]u32`: The tables of an expanded spec, in `arena`.
+
+### `ZColor` (union)
+
+Fields: `rgb`, `rgba`, `theme`
+
+
+### `ZStyle` (struct)
+The parts of `Style` a spec sets; defaults are `Style`'s.
+
+Fields: `size`, `min`, `max`, `pad`, `gap`, `main`, `cross`, `shrink`, `clip`, `fill`, `border_color`, `border`, `radius`, `opacity`, `fill_bind`, `border_bind`
+
+
+### `ZNode` (union)
+
+Fields: `row`, `col`, `label`, `text`, `button`, `checkbox`, `slider`, `list`, `choice`, `virtual_list`, `custom`
+
+
+### `ZField` (struct)
+
+Fields: `name`, `str`, `bool`, `f32`, `u32`, `u8`, `color`, `spring`
+
+
+### `ZSpec` (struct)
+
+Fields: `name`, `theme`, `viewport`, `state`, `ui`
+
+
+### `Expanded` (struct)
+A spec read and expanded: the nodes and fields `plan` takes.
+
+Fields: `spec`, `theme`, `fields`, `nodes`, `springs`
+
+
+### `Static` (struct)
+A spec read as a static UI: the rows `abi_ct.make` takes and the laid-out state.
+
+Fields: `spec`, `fields`, `nodes`, `state_size`, `state_align`, `widgets`
+
+
+### `PanelState` (struct)
+Every feature that crosses the seam besides the reference widgets: a `when`, a `list`, a `choice`, a custom draw node, a sprung slider, a formatted label and keyboard focus.
+
+Fields: `title`, `show`, `show_text`, `len`, `mode`, `level`
+
+- `Mode = enum(u8) { compact, detailed }`
+- `springs = .{ .level = @import("../anim/anims.zig").Spring{} }`
+
+## `lcgf.abi_runtime` (src/abi/runtime.zig)
+
+The runtime front end behind the C seam: `Context`, `Frame` and the reference widgets, for C++ (lcgf/runtime.hpp) and Rust (`lcgf::runtime`) programs that build their UI each frame in code, as Zig programs do with `ctx.begin` and `f.open`.
+
+### Top level
+
+- `style_words = plan.wordsOf(Style)`
+- `text_style_words = plan.wordsOf(TextStyle)`
+- `theme_words = plan.wordsOf(base.Theme)`
+- `row_words = plan.wordsOf(Template)`
+- `layout: u32 = plan.layoutHashOf(.{ Style, TextStyle, Template, CView, Look, Extra })`: What C++ and Rust must agree on to call the runtime front end: the words of a style, a text style and a row, and the columns they push rows into.
+- `depth_bit: u5 = @bitOffsetOf(context.Status, "depth")`: Bit of `CView.status` that `enter` sets when the stack overflows (`Status.depth`).
+- `fn exportAll() void`
+
+### `CLimits` (struct)
+`Limits`' sizes, as C passes them.
+
+Fields: `nodes`, `texts`, `customs`, `strings`, `anims`, `depth`
+
+
+### `CView` (struct)
+The frame's tree as `open` and `leaf` write it: where `Tree.pushRow` and `Frame.enter` store, so C++ and Rust push a row they made with the stores Zig's inlined `leaf` makes, and no call (`lcgf_view` in lcgf.h).
+
+Fields: `len`, `xlen`, `overflow`, `depth`, `status`, `cap`, `depth_cap`, `stack`, `id`, `parent`, `end`, `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `nkids`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `extra`, `scope`, `x_node`, `x_row`
+
+
+## `lcgf.abi_ct` (src/abi/ct.zig)
+
+Static UIs across the seam: the comptime pipeline (ct_layout, ct_paint) for programs written in C++ or Rust.
+
+### Top level
+
+- `none = types.none`
+- `version: u32 = 1`
+- `pad_lanes = 16`: Lanes every column is padded for: the widest build reads them too.
+- `default_string_cap = 1024`: Bytes of label text one frame holds, by default.
+- `ColumnArray = struct { field: []const u8, axis: u32, size: u32 }`: One array of `Tree.Columns`: a `[]T` field, or one axis of a `[k][]T` field.
+- `RegionKind = enum(u32) { none, list, when, choice }`
+- `Error = error{ OutOfMemory, BadTree, BadLabel, BadRegion, BadBind, Transform }`
+- `Select = struct { n: u32 = 0, first: u32 = 0, offset: f32 = 0 }`: One region's selection this frame (ct_dynamic.Select).
+- `frame_symbol = std.fmt.comptimePrint("lcgf_ct_frame_u32_f32_l{d}", .{simd.lanes})`
+- `Controls = struct { title: []const u8 = "Volume", muted: bool = false, volume: f32 = 0.5, pan: f32 = 0 }`: Sized controls, for the events gate: the examples' checkboxes and sliders have no size of their own, so nothing can hit them.
+- `Palette = struct { title: []const u8 = "Palette", accent: types.Color = .rgb(200, 40, 40), edge: types.Color = .rgb(40, 40, 200) }`: Colours patched into quads, for the patch gate: a swatch filled with `accent` and a bar filled with `accent` and bordered with `edge` (ct_paint.Patches).
+- `Meter = struct { name: []const u8 = "Gain", level: f32 = 0.5, count: u32 = 3, on: bool = true, peak: f32 = 0 }`: Formatted labels, for the format gate: every argument kind (string, f32 at two precisions, u32, bool), braces, and a slider in the options form.
+- `Bind = struct { field: []const u8, node: u32, border: bool = false }`: A patch binding (ct_paint.Patches' `Binding`), by field name.
+- `fn rowsMax(n: usize) usize`: Rows of a column of `n` rows for any lane count up to `pad_lanes`: whole vectors plus one spare, as `simd.rows` gives for the widest.
+- `fn written(name: []const u8, shows: bool, live: bool, windows: bool) bool`: Whether a static UI's frame writes column `name` (ct_layout.Plain's `writes` for a UI with no regions): the layout scratch but the precomputed gap totals, the outputs, `sense` (finalize clears its padding rows, so it is copied in each frame) and `value` when a checkbox or slider shows a state field.
+- `fn nodesOf(comptime State: type, comptime spec: spec_zig.Spec) [@import("../comptime/flatten.zig").count(spec)]Node`: The rows of a comptime spec, with labels bound to `State`'s fields.
+- `fn coordBits(viewport: ?[2]f32) u32`: The coordinate bits for a fixed screen (columns.Coord): 0 (f32) without one.
+- `fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u32`: The words of the static UI of `nodes`, in `arena`.
+- `fn exportAll() void`
+- `fn bindingsOf(comptime name: []const u8) []const Bind`: The bindings of a static example.
+- `fn Patched(comptime e: anytype) type`: ct_paint.Patches over `e`'s bindings (`bindingsOf`): what the static UI's frame paints through.
+- `fn gatherText(comptime State: type, comptime nodes: []const Node, state: *const State, buf: []u8, spans: []Span) u32`: The labels' text of `state`, as the static UI's frame gathers it: each label's string field, or its format written (src/core/fmt.zig), in label order into `buf`, cut where `buf` ends.
+- `fn stateFor(comptime State: type, f: u32, text: []const []const u8) State`: The state of frame `f` of the gates (here and bindings/check/): string field k shows `texts[(f + 3k) mod len]`, a bool is `(f + k) mod 3 != 0`, a count alternates between small (`(f + k) mod 11`) and large (`(7919f + k) mod 200000`), an enum(u8) is `(f + k) mod 2`, an f32 (a slider's value, a list's scroll) `((131f + 17k) mod 5000) * 0.75` and a colour `colorFor(f, k)`.
+- `fn colorFor(f: u32, k: u32) u32`: Colour field k of frame f's state (rgba bits): r (13f + 40k) mod 256, g 7f mod 256, b 90k mod 256, opaque.
+- `fn cStateOf(comptime State: type, s: *const State, fields: []const plan.Field, buf: []align(8) u8) void`: `s` as C lays out the generated state struct (`plan.layoutState`).
+- `fn wordsOf(arena: std.mem.Allocator, comptime e: examples.Example) ![]u32`: The words of example `e`, as lcgf-gen makes them from its `.zon`.
+
+### `Block` (struct)
+One tree of the words: the whole UI, or the skeleton its passes run over.
+
+Fields: `n`, `xlen`, `cols`, `extras`, `sense`, `label_rows`, `regions`, `max_src`, `flow_src`, `scroll_src`
+
+
+### `Region` (struct)
+One dynamic region (ct_dynamic.Info) and where its selector is in the state.
+
+Fields: `kind`, `row`, `end`, `stride`, `max`, `alts`, `field_offset`, `field_type`, `scroll_offset`, `height`
+
+
+### `Header` (struct)
+The first words.
+
+Fields: `magic`, `version`, `layout_hash`, `words`, `coord`, `has_child_clip`, `state_size`, `state_align`, `string_cap`, `labels`, `quads`, `batches`, `folded`, `regions`, `has_windows`, `root_when`, `slot_count`, `slots`, `slot_defaults`, `full`, `skel`, `label_offsets`, `label_formats`, `seg_count`, `segs`, `format_bytes`, `format_text`, `expand`, `fields`, `spans`, `patch_count`, `patches`, `paint_node`, `clip_node`, `templates`, `keys`, `batch_first`, `batch_count`, `batch_key`, `label_plans`
+
+
+### `Node` (struct)
+One row of a static UI, in `Tree.push` order (depth-first, parents first).
+
+Fields: `style`, `parent`, `end`, `id`, `label_field`, `format`, `shows`, `region`, `region_field`, `scroll_field`, `height`, `fill_bind`, `border_bind`
+
+- `fn isLabel(nd: Node) bool`
+- `fn labelShows(nd: Node, k: u32) bool`: The label shows field `k`: it is its field, or one of its format's arguments.
+
+### `Options` (struct)
+What a static UI's spec gives `make` besides its rows.
+
+Fields: `fields`, `state_size`, `state_align`, `coord`, `string_cap`
+
+
+### `Ui` (struct)
+A static UI, placed at the start of the caller's buffer by `init`.
+
+Fields: `words`, `h`, `full`, `skel`, `tx`, `spans`, `strings`, `sel`, `slot_source`, `d`
+
+- `InitError = error{ NotTables, Version, LayoutHash, Truncated, BufferTooSmall, Unaligned }`
+- `fn check(words: []const u32) InitError!*const Header`: Checks the header of `words`.
+- `fn bytes(words: []const u32) InitError!usize`: Bytes one UI of `words` needs, for any lane count.
+- `fn init(words: []const u32, buf: []u8) InitError!*Ui`: Checks `words` and places a UI at the start of `buf` (aligned to `mem.column_align`).
+- `fn frame(ui: *Ui, state: [*]const u8, viewport: [2]f32) *const DrawList`: One frame: the labels' text and the regions' selectors from `state`, laid out in a `viewport`-sized area and painted.
+
+### `Patched(..)` (generic struct)
+ct_paint.Patches over `e`'s bindings (`bindingsOf`): what the static UI's frame paints through.
+
+
+## `lcgf.ct_tables` (src/comptime/tables.zig)
+
+The tables of a comptime UI as pure functions over arrays.
+
+### Top level
+
+- `none = types.none`
+- `Fold = struct { folded_rows: usize }`: What a fold plan decides: see `foldPlan`.
+- `TransformError = error{Transform}`
+- `Label = extern struct { node: u32, parent: u32, quad_end: u32, padding: [4]f32, color: u32 }`: How a label's run is placed among the sorted quads.
+- `fn gapTotal(p: anytype, n: usize, out: []f32) void`: `prepare`'s gap totals: the gap times the in-flow child count less one.
+- `fn foldPlan(p: anytype, n: usize, labels: []const u32, volatile_rows: ?[]const bool, has_label: []bool, indep: []bool, root: []bool, inside: []bool) Fold`: Which rows fold (ct_layout.FoldPlan).
+- `fn skeletonRows(n: usize, inside: []const bool, skel_row: []u32) u32`: The skeleton rows of a fold: row j of the UI is skeleton row `skel_row[j]`, or `none` for a row inside a fold root.
+- `fn foldedLeaf(s: types.Style, size: [2]f32) types.Style`: The style a fold root becomes in the skeleton: a leaf of its laid-out size.
+- `fn expand(n: usize, root: []const bool, inside: []const bool, pos: [2][]const f32, size: [2][]const f32, base: []u32, rel: [2][]f32, out_size: [2][]f32, keep…`: For each row: the skeleton row its position starts from (itself, or its fold root), the constant offset from there, and, for folded rows, its constant size and 0 in `keep_size` (1 for skeleton rows, whose size comes from the passes).
+- `fn inherit(p: anytype, alpha: []f32, clip_radii: [][4]f32) TransformError!void`: `draw.inherit`'s opacity and clip sweeps over the extras rows: `alpha[r]` and `clip_radii[r]` for extras row r (`p.xlen` rows).
+- `fn keyOf(look: tree.Look) u32`
+- `fn paintRows(p: anytype, n: usize, alpha: []const f32, out: []u32) usize`: The rows that paint a quad, in row order: `paint.emit`'s condition without `visible`.
+- `fn foldGroups(p: anytype, n: usize, root: []const bool, group: []u32) void`: The fold root each row lies under (itself for a root), or `none`.
+- `fn sortByKey(p: anytype, rows: []const u32, group: []const u32, pos: [2][]const f32, size: [2][]const f32, out: []u32, done: []bool) void`: `rows` (the nodes that paint, in row order) reordered so that equal batch keys follow each other where that cannot change the picture (see ct_paint's `sortByKey`).
+- `fn paintOrder(n: usize, in_row_order: []const u32, painted: []const u32, out: []u32) void`: Every descriptor in paint order: sorted quads occupy the original quad positions; other rows keep theirs.
+- `fn labelPlans(p: anytype, order: []const u32, painted: []const u32, labels: []const u32, alpha: []const f32, out: []Label) void`: The labels' runs: each a boundary in the sorted quad stream, after the quads painted before it (its own background included).
+- `fn templates(p: anytype, painted: []const u32, alpha: []const f32, clip_radii: []const [4]f32, out: []Quad) void`: Template k: the quad `painted[k]` paints, `rect` and `clip` zero.
+- `fn batches(p: anytype, painted: []const u32, keys: []u32, first: []u32, count: []u32, key: []u32) usize`: Batch keys of the templates, and the commands when every template is visible: consecutive templates with equal keys form one batch.
+- `fn batchCount(p: anytype, painted: []const u32) usize`: Batch count of `painted` without writing the batches.
+- `fn boundaries(p: anytype, labels: []const u32, out: []u32) void`: The relayout boundary of each label (ct_layout.Plain): its nearest ancestor, or itself, fixed on both axes (`min == max`), else the root.
+- `fn dirtySpan(p: anytype, bounds: []const u32, changed: []const bool) ?[2]u32`: The rows to lay out again when the labels marked in `changed` change: the subtree of the lowest row whose subtree holds every one of their boundaries.
 
 ## `lcgf.embedded_fixed` (src/embedded/fixed.zig)
 

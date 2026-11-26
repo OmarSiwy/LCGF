@@ -8,4 +8,5 @@ test {
     _ = @import("porting.zig");
     _ = @import("perf.zig");
     _ = @import("backends.zig");
+    _ = @import("gpu.zig");
 }

@@ -27,6 +27,30 @@ comptime {
 }
 // -- end
 
+// -- options
+const Meter = struct { name: []const u8 = "Gain", level: f32 = 0.5, clips: u32 = 0 };
+
+const meter_spec = s.col(.{ .pad = @splat(6), .gap = 4 }, .{
+    s.text("{}: {.1} dB, {} clips", .{ .name, .level, .clips }),
+    s.styled(s.slider(.level, .{ .name = "Level" }), .{ .size = .{ .px(120), .px(10) } }),
+});
+
+comptime {
+    lcgf.validate.check(Meter, meter_spec, .{});
+}
+// -- end
+
+test "options and formatted text: the text a frame shows" {
+    try testing.expectEqual(3, lcgf.flatten.Flat(meter_spec).node_count);
+    // The formatted label through the widgets' front end (whose sliders are `ct.slider`s).
+    const S = struct {
+        var ui: lcgf.widgets_base.ComptimeUi(Meter, s.col(.{}, .{meter_spec.children[0]}), .default) = .{};
+    };
+    const in: Input = .{ .viewport = .{ 300, 80 } };
+    const out = S.ui.frame(&in);
+    try testing.expectEqualStrings("Gain: 0.5 dB, 0 clips", out.draw.strings);
+}
+
 test "tables: structure is a compile-time constant" {
     // -- flat
     const F = lcgf.flatten.Flat(mixer);
