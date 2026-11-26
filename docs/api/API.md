@@ -391,9 +391,11 @@ layout: a fixed sequence of linear passes over the tree columns.
 - `fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void`: `fit` with the extra sizing rules of `fx` (flex.zig).
 - `fn fitFlexOpts(t: *Tree, fx: *const Flex, axis: Axis, comptime opts: FlexOptions) void`: `fitFlex` with the features of `opts` compiled in.
 - `fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void`: `fit` over rows [first, last), any `first < last <= len`.
+- `fn fitSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32) void`
 - `fn resolve(t: anytype, axis: Axis, viewport: f32) void`: Top-down: final size of every node on one axis.
 - `fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void`: `resolve` with the extra sizing rules of `fx` (flex.zig).
 - `fn resolveSpan(t: anytype, axis: Axis, first: u32, last: u32) void`: `resolve` over rows [first, last), any `first < last <= len`: every row after `first` from its parent, in row order, with `first`'s own size taken as given and only read.
+- `fn resolveSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32) void`: `resolveSpan` with the extra sizing rules of `fx` (flex.zig), for grids on a flex page.
 - `fn textAvail(t: anytype, tx: *Texts) void`: Gathers the width layout gave each text run.
 - `fn place(t: anytype) void`: Top-down: position of every node on both axes.
 - `fn placeFlex(t: *Tree, fx: *const Flex) void`: `place` with the extra placement rules of `fx` (flex.zig).
@@ -425,6 +427,12 @@ A point of a box: an edge midpoint, a corner or the centre.
 - `fx = [9]f32{ 0, 0.5, 1, 0, 0.5, 1, 0, 0.5, 1 }`
 - `fy = [9]f32{ 0, 0, 0, 0.5, 0.5, 0.5, 1, 1, 1 }`
 
+### `Place` (struct)
+One anchored placement as a value (CSS `right`/`bottom` insets, `position: fixed`), for `Anchors.place`: point `pivot` of the node on point `at` of the box, moved by `offset`.
+
+Fields: `at`, `pivot`, `offset`, `viewport`, `flip`
+
+
 ### `Anchors` (struct)
 The anchor side list: one row per anchored node, so the pass loops over anchors that exist instead of testing every node.
 
@@ -434,6 +442,7 @@ Fields: `len`, `cap`, `overflow`, `c`
 - `fn reset(an: *Anchors) void`
 - `fn push(an: *Anchors, node: u32, at: Anchor, pivot: Anchor, offset: [2]f32) u32`: Puts point `pivot` of `node` on point `at` of its parent's content box, then moves it by `offset`.
 - `fn pushRect(an: *Anchors, node: u32, box: Rect, at: Anchor, pivot: Anchor, offset: [2]f32) u32`: Like `push`, but the box is the absolute rect `box`: typically another node's rect from the previous frame (`lastRect`), for a tooltip or popover that belongs to one part of the tree and is drawn next to another.
+- `fn place(an: *Anchors, node: u32, p: Place, viewport: Rect) u32`: `push`, or `pushRect` over `viewport` for a `Place.viewport` placement, with its flip.
 - `fn flip(an: *Anchors, k: u32, axes: [2]bool) void`: Lets anchor row `k` flip on the axes set in `axes`: when the node would cross an edge of the viewport and the mirrored placement would not, `at`, `pivot` and `offset` are taken from the other side (a menu hung below a button opens above it near the bottom of the window).
 
 ### `Anchors.Columns` (struct)
@@ -488,12 +497,15 @@ grid: two-dimensional layout in rows and columns of tracks, after CSS Grid (http
 - `AutoFlow = enum(u8) { row = 0, column = 1, row_dense = 2, column_dense = 3 }`
 - `Distribution = enum(u8) { start, center, end, space_between, space_around, space_evenly }`
 - `Repeat = enum { auto_fill, auto_fit }`
+- `fn implicitTracks(decl: Decl, items: []const Item) u32`: How many tracks past `decl`'s own auto-placement of `items` can need on `decl.growAxis()`, at most: every item past the last explicit cell, one after another.
 - `fn repeatAuto(extent: f32, gap: f32, minimum: f32, occupied_tracks: u32, mode: Repeat, track: Track, out: []Track) error{ NoSpace, InvalidGeometry }![]const …`: Resolves an automatic repeat against a definite content extent, before constructing the grid.
 - `fn expandTracks(explicit: []const Track, required: u32, pattern: []const Track, out: []Track) error{ NoSpace, MissingPattern }![]const Track`: Materializes bounded implicit tracks by repeating the caller's pattern after explicit tracks.
 - `fn sizeTracks(gs: *Grids, k: u32, a: u1, inner: f32) f32`: Sizes the tracks of grid `k` on axis `a` inside `inner`, the grid's content size, writes each track's `size` and `start` (a running sum), and returns the total.
 - `fn autoPlace(gs: *Grids) void`
 - `fn fit(t: *Tree, gs: *Grids, axis: Axis) void`: `layout.fit` for a tree with grids.
+- `fn fitWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis) void`: `fit` with the flex rules of `fx` (a `*const Flex`, or void for none) on the rows around the grids, for a page with both.
 - `fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void`: `layout.resolve` for a tree with grids.
+- `fn resolveWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis, viewport: f32) void`: `resolve` with the flex rules of `fx`, as `fitWith`.
 - `fn run(t: *Tree, tx: *Texts, gs: *Grids, viewport: [2]f32) void`: Every pass in order, as `layout.run`, with `fit` and `resolve` taken from this file.
 
 ### `Track` (struct)
@@ -525,17 +537,19 @@ Fields: `len`, `tracks_len`, `items_len`, `overflow`, `cap`, `g`, `tr`, `it`, `o
 - `fn grid(gs: *Grids, node: u32, columns: []const Track, rows: []const Track) u32`: Makes `node` a grid with these columns (tracks along x) and rows (along y).
 - `fn item(gs: *Grids, k: u32, node: u32, cell: [2]u32) u32`: Places `node`, a floating child of grid `k`'s node, in the cell at column `cell[0]`, row `cell[1]`.
 - `fn autoItem(gs: *Grids, k: u32, node: u32) u32`: Places `node`, a floating child of grid `k`'s node, in the next free cell in row order, chosen by `autoPlace`.
-- `fn gaps(gs: *Grids, k: u32, g: [2]f32) void`: Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks the grid has.
+- `fn declare(gs: *Grids, node: u32, decl: Decl, implicit: u32) u32`: Makes `node` the grid `decl` describes, with `implicit` more tracks of `decl.auto` on the axis auto-placement grows (`implicitTracks` gives a bound).
+- `fn place(gs: *Grids, k: u32, node: u32, at: Item) u32`: Makes `node`, a floating child of grid `k`'s node, the grid item `at` describes.
+- `fn gaps(gs: *Grids, k: u32, g: [2]f32) void`: Sets grid `k`'s space between columns (`g[0]`) and between rows (`g[1]`).
 - `fn autoFlow(gs: *Grids, k: u32, flow: AutoFlow) void`: Auto-placement traverses rows or columns, with optional hole filling from the start for every item.
 - `fn boundedFractions(gs: *Grids, k: u32, enabled: bool) void`: Distribute fractional tracks subject to their minima/maxima.
 - `fn distribute(gs: *Grids, k: u32, modes: [2]Distribution) void`: Align the group of tracks inside free content-box space on each axis.
 - `fn justify(gs: *Grids, r: u32, j: [2]Justify) void`: Sets where item `r` sits in its cell across (`j[0]`) and down (`j[1]`).
-- `fn span(gs: *Grids, r: u32, n: [2]u32) void`
+- `fn span(gs: *Grids, r: u32, n: [2]u32) void`: Makes item `r` cover `n[0]` columns and `n[1]` rows from its cell, clamped to the tracks the grid has.
 - `fn shareAxis(gs: *Grids, child: u32, parent_item: u32, axis: Axis) error{InvalidSubgrid}!void`: Shares an existing parent item's tracks with its child grid.
 
 ### `Grids.GridColumns` (struct)
 
-Fields: `node`, `first`, `count`, `first_item`, `last_item`, `gap`, `flow`, `bounded`, `distribution`, `parent`, `parent_first`
+Fields: `node`, `first`, `count`, `first_item`, `last_item`, `gap`, `flow`, `bounded`, `distribution`, `explicit`, `reserved`, `repeat_count`, `repeat_min`, `repeat_fit`, `justify`, `parent`, `parent_first`
 
 
 ### `Grids.TrackColumns` (struct)
@@ -546,6 +560,20 @@ Fields: `k_px`, `k_fit`, `k_fr`, `min`, `max`, `content_floor`, `content`, `size
 ### `Grids.ItemColumns` (struct)
 
 Fields: `node`, `grid`, `cell`, `span`, `auto`, `next`, `cell_size`, `cell_start`, `stretch`, `factor`, `subgrid`
+
+
+### `Decl` (struct)
+A grid container as one value (CSS `grid-template-*`, `grid-auto-*`, `gap`, `grid-auto-flow`, `justify-content`/`align-content`, `justify-items`/`align-items`), for `Grids.declare`.
+
+Fields: `columns`, `rows`, `auto`, `gap`, `flow`, `distribution`, `justify`, `subgrid`, `repeat`
+
+- `AutoRepeat = struct { mode: Repeat, track: Track, max: u32 = 64 }`
+- `fn growAxis(d: Decl) u1`: The axis auto-placement adds tracks on: rows for row flow, columns for column flow.
+
+### `Item` (struct)
+A grid item as one value (CSS `grid-column`, `grid-row`, `grid-area`, `justify-self`, `align-self`), for `Grids.place`.
+
+Fields: `cell`, `span`, `justify`
 
 
 ## `lcgf.rtl` (src/layout/rtl.zig)
@@ -1063,6 +1091,12 @@ Spec: a UI declared as a compile-time value.
 - `fn decorated(comptime s: Spec, comptime d: @import("../text/layout/decorations.zig").Style) Spec`: Label `s` with text decoration `d`: `decorated(label(.a), .{ .underline = true })`.
 - `fn spans(comptime s: Spec, comptime runs: []const @import("../text/protocol.zig").Span) Spec`: Label `s` as one paragraph in several styles: from each span's `start` byte on, its text style's size, colour and font: `spans(label("a bold word"), &.{ .{ .start = 2, .style = bold }, .{ .start = 6, .style = plain } })`.
 - `fn flexed(comptime s: Spec, comptime flex: FlexStyle) Spec`: `s` laid out with the flex rules `flex` as well as its style: `flexed(label(.a), .{ .margin = .{ 6, 2, 6, 2 } })`.
+- `fn grid(comptime style: Style, comptime decl: grid_zig.Decl, comptime children: anytype) Spec`: A grid container: its children in the cells of `decl`'s tracks, one per child unless `cell` places one: `grid(.{}, .{ .columns = &.{ .px(80), .fr(1) } }, .{ label("A"), ...
+- `fn cell(comptime s: Spec, comptime item: grid_zig.Item) Spec`: `s`, a child of a `grid`, placed at `item` (CSS `grid-column`/`grid-row`/`grid-area`): `cell(label("A"), .{ .cell = .{ 1, 0 }, .span = .{ 2, 1 } })`.
+- `fn anchored(comptime s: Spec, comptime place: overlay.Place) Spec`: `s`, a floating node, placed by `place` instead of at its parent's content origin plus its offset: `anchored(styled(label("New"), .{ .float = true }), .{ .at = .top_right, .pivot = .top_right })`.
+- `fn sticky(comptime s: Spec, comptime top: f32) Spec`: `s` held at least `top` pixels below the top of its scroller while its parent's content box has room, as CSS `position: sticky; top: …`.
+- `fn layer(comptime s: Spec, comptime z: u8) Spec`: `s` and its subtree painted in stacking layer `z` (CSS `z-index` on a positioned box): above every row of a lower layer, in row order within one.
+- `fn gridItems(comptime n: Spec) []const grid_zig.Item`: The cells `n`'s children ask for, for `grid.implicitTracks`.
 - `fn named(comptime s: Spec, comptime name: []const u8) Spec`: `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 - `fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec`: A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which the first `count` are live, `count` being the run-time value of the integer state field bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`.
 - `fn virtualList(comptime count: @EnumLiteral(), comptime scroll: @EnumLiteral(), comptime visible: u32, comptime height: f32, comptime template: Spec) Spec`: A clipped vertical list of `visible` fixed-height items.
@@ -1072,7 +1106,7 @@ Spec: a UI declared as a compile-time value.
 ### `Spec` (struct)
 One node of the declaration.
 
-Fields: `kind`, `id`, `bind`, `text`, `text_style`, `paragraph`, `decoration`, `spans`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`, `tokens`
+Fields: `kind`, `id`, `bind`, `text`, `text_style`, `paragraph`, `decoration`, `spans`, `style`, `flex`, `grid`, `cell`, `anchor`, `sticky`, `layer`, `children`, `widget`, `custom`, `name`, `region`, `format`, `tokens`
 
 - `fn shows(s: Spec, field: []const u8) bool`: The state fields this node shows: its `bind`, or a formatted label's arguments.
 
@@ -1088,11 +1122,7 @@ The measure / wrap protocol: how text extents reach layout.
 
 ### Top level
 
-- `Span = struct { start: u32, style: types.TextStyle, decoration: Decoration = .{} }`: One style run of a paragraph: from byte `start` of its text on (to the next span's start), `style`'s size, colour and font instead of the run's.
-- `Features = struct { spans: bool = true, decorations: bool = true }`: Which inputs a `MonoParagraphsOf` reads.
-- `MonoParagraphs = MonoParagraphsOf(.{})`: `MonoParagraphsOf` with every input.
-- `fn insertAfter(d: *DrawList, j: u32, first: u32) u32`: Puts quads `first..d.quad_len` (just appended after `paint.emit`) right after op `j`, the text op of their run: their ops after it, and the quads themselves moved to where the next quad op's quads begin, so every run of consecutive quad ops still names consecutive quads (`paint.encode` merges them).
-- `fn MonoParagraphsOf(comptime with: Features) type`: `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
+- `Span = struct { start: u32, style: types.TextStyle }`: One style run of a paragraph: from byte `start` of its text on (to the next span's start), `style`'s size, colour and font instead of the run's.
 - `fn StaticAtlas(comptime strings: []const []const u8) type`: Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
 
 ### `Mono` (struct)
@@ -1107,22 +1137,15 @@ Fields: `advance`, `line`
 - `fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: The same metrics and geometry, with UVs from a static atlas subset.
 - `fn quadsForCommands(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: Expands only runs referenced by text commands.
 
-### `Styled` (struct)
-Styled runs of a frame, for any font: run `rows[i]` of `Texts` takes `table[styles[i]]`, and `decorations` and `spans`, when not empty, have one row per `table` row.
-
-Fields: `rows`, `styles`, `table`, `decorations`, `spans`
-
-
-### `MonoParagraphsOf(..)` (generic struct)
+### `MonoParagraphs` (struct)
 `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
 
 Fields: `mono`, `rows`, `styles`, `table`, `decorations`, `spans`, `strings`
 
-- `fn measure(p: Self, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
-- `fn wrap(p: Self, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
-- `fn quads(p: Self, d: *const DrawList, tx: *const Texts, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them (from the frame's `tx`: each run's wrap flag and width), each glyph in its span's size and colour.
-- `fn decorate(p: Self, d: *DrawList, tx: *const Texts) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
-- `fn styled(p: Self) Styled`: The styled runs this font measures, for a real shaper (`text_stack.Stack.style`).
+- `fn measure(p: MonoParagraphs, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
+- `fn wrap(p: MonoParagraphs, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
+- `fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them, each glyph in its span's size and colour.
+- `fn decorate(p: MonoParagraphs, d: *DrawList) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -1471,7 +1494,7 @@ Events: the comptime front end's input side.
 
 - `Availability = struct { enabled: bool = true, activates: bool = true }`: Input eligibility, kept separate from visuals.
 - `Hit = struct { slot: u32, value: f32 = 0 }`: A pointer event on the widget at `slot`: a slider's `value`, else a click.
-- `fn Events(comptime spec: Spec) type`: The interactive widgets of `spec` and how input reaches them.
+- `fn Events(comptime spec: Spec) type`
 - `fn topmost(c: [4][]const f32, enabled: anytype, rows: usize, x: f32, y: f32) u32`: The topmost of `rows` rects under (x, y), or `none`: `c[0..4]` are the x0, y0, x1, y1 columns, padded to whole vectors (padding rows empty, x0 == x1, so never hit).
 - `fn nextFocusOver(order: anytype, pos: anytype, from: u32, back: bool) u32`: The widget Tab (`back` false) or Shift+Tab (`back` true) moves focus to from slot `from` (`none`: no focus), wrapping at the ends, as a slot; `none` when nothing is focusable.
 - `fn focusKeysOver(order: anytype, pos: anytype, focus: *u32, in: *const Input, tab: u8) void`: `nextFocusOver` for every Tab press (and auto-repeat) in this frame's key events, in order; Shift goes back.
@@ -1479,7 +1502,6 @@ Events: the comptime front end's input side.
 - `fn chord(code: u8, mods: Input.Mods) u16`: A key and the four modifiers as one 12-bit number.
 
 ### `Events(..)` (generic struct)
-The interactive widgets of `spec` and how input reaches them.
 
 - `Index = F.Index`
 - `widget_count = count`: Widgets: spec nodes with an id.
@@ -1509,7 +1531,7 @@ The interactive widgets of `spec` and how input reaches them.
 ### `Events(..).Rects` (struct)
 Where each widget is on screen, in widget order: the static rect table.
 
-Fields: `c`, `exact_tree`, `node_offset`
+Fields: `c`, `exact_tree`, `node_offset`, `stack`
 
 - `fn fromTree(t: anytype) Rects`: The widgets' rows of a laid-out tree's `vis` columns (a tree built from this spec, so row numbers agree).
 - `fn fromTreeOffset(t: anytype, offset: u32) Rects`: Widgets.Ui has one host root before the spec's rows; raw specs use zero.
@@ -1521,6 +1543,12 @@ Fields: `enabled`, `activates`
 
 - `fn set(mask: *InputMask, target: Widget, availability: Availability) void`
 - `fn allows(mask: *const InputMask, target: Widget) bool`
+
+### `Events(..).Stack` (struct)
+What a layered hit reads (`Rects.stack`), borrowed from its owner for one frame.
+
+Fields: `tree`, `layer`, `row`
+
 
 ### `Events(..).Payload(..)` (generic struct)
 What an event on a widget of `kind` carries: a slider its new value, 0 at the left edge to 1 at the right; a checkbox nothing (it was toggled); any other widget nothing (it was clicked).
@@ -3582,22 +3610,32 @@ Fields: `ctx`, `in`
 - `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
 - `fn endFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) Output`: `endFlex` with the flex features of `opts` compiled in (`FlexOptions`), over `font` or a `paragraphs` font.
 - `fn layoutFlexOpts(f: *Frame, font: anytype, fx: *Flex, comptime opts: FlexOptions) void`: The layout half of `endFlexOpts`.
-- `fn endParagraphs(f: *Frame, font: anytype) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (a `protocol.MonoParagraphsOf`, such as `MonoParagraphs`; its `strings` are set to this frame's).
-- `fn layoutParagraphs(f: *Frame, font: anytype) void`: The layout half of `endParagraphs`.
-- `fn endFlexParagraphs(f: *Frame, font: anytype, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
-- `fn layoutFlexParagraphs(f: *Frame, font: anytype, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
-- `fn finishParagraphs(f: *Frame, font: anytype) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
+- `fn endParagraphs(f: *Frame, font: MonoParagraphs) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) and text decorations on some runs: `font` lists them (`protocol.MonoParagraphs`; its `strings` are set to this frame's).
+- `fn layoutParagraphs(f: *Frame, font: MonoParagraphs) void`: The layout half of `endParagraphs`.
+- `fn endFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
+- `fn layoutFlexParagraphs(f: *Frame, font: MonoParagraphs, fx: *Flex) void`: The layout half of `endFlexParagraphs`.
+- `fn finishParagraphs(f: *Frame, font: MonoParagraphs) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
+- `fn endSides(f: *Frame, font: anytype, sides: Sides) Output`: `end` with the side tables in `sides`.
+- `fn layoutSides(f: *Frame, font: anytype, sides: Sides) void`: The layout half of `endSides`: `grid.run`'s passes when there are grids, else `layout.run`'s (with flex rules, `runFlex`'s), with the font's measure and wrap; then the anchors and the sticky nodes.
+- `fn finishSides(f: *Frame, font: anytype, sides: Sides) Output`: The paint half of `endSides`: in layer order when `sides.layers` is given, then a `MonoParagraphs` font's decorations.
+- `fn endGrid(f: *Frame, font: Mono, gs: *grid.Grids) Output`: `endSides` with grids only.
+- `fn layoutGrid(f: *Frame, font: Mono, gs: *grid.Grids) void`: `layoutSides` with grids only.
 - `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
 - `fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.
 - `fn finalizeLayout(f: *Frame, options: rounding.Options) error{InvalidScale}!void`: Apply layout transitions after all placement passes, then snap, transform and clip.
 - `fn endText(f: *Frame, stack: *TextStack, ascent: []f32) Output`: Font-backed counterpart of `end`.
-- `fn endTextStyled(f: *Frame, stack: *TextStack, ascent: []f32, s: protocol.Styled, rows: text_stack.StyledRows, rects: []types.Rect) Output`: Font-backed measurement and arrangement only, the public half of endText.
-- `fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void`
+- `fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and arrangement only, the public half of endText.
 - `fn endTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!Output`
 - `fn layoutTextRounded(f: *Frame, stack: *TextStack, ascent: []f32, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeText(f: *Frame, stack: *TextStack, ascent: []f32) void`: Font-backed measurement and placement before caller passes and finalizeLayout.
-- `fn finish(f: *Frame) Output`: Paint and bookkeeping only, for callers who ran layout themselves.
+- `fn finish(f: *Frame) Output`
+
+### `Frame.Sides` (struct)
+Caller-owned side tables for `endSides`, each null when the frame uses none.
+
+Fields: `grids`, `anchors`, `sticky`, `layers`, `flex`
+
 
 ## `lcgf.text_lines` (src/text/layout/lines.zig)
 
@@ -3728,19 +3766,11 @@ Optional rich paragraph row.
 Fields: `spans`, `metrics`, `normalized_spans`
 
 
-### `StyledRows` (struct)
-Caller-owned rows for `Stack.style`: a paragraph and a rich row per text, spans for the styled runs that have them (their span columns: every span plus one per run), and metrics scratch for the longest span list (plus one).
-
-Fields: `paragraphs`, `rich`, `spans`, `start`, `font`, `px`, `color`, `metrics`
-
-
 ### `Stack` (struct)
 Shapers by font index, and scratch for one paragraph.
 
 Fields: `shapers`, `cache`, `font_ids`, `font_generations`, `run`, `g`, `l`, `bidi`, `direction`, `paragraphs`, `default_paragraph`, `normalization`, `fallback`, `rich`, `paint_colors`, `span_px`, `px`, `text`, `normalized`, `ellipsis_glyph`, `ellipsis_font`, `ellipsis_px`, `overflow`
 
-- `fn style(st: *Stack, tx: *const Texts, s: protocol.Styled, rows: StyledRows) error{NoSpace}!void`: Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as `spec.paragraph`, `spec.spans` and the markup lower to): each listed row's paragraph, and for a run with spans a rich row whose first span is the run's own style.
-- `fn decorate(st: *Stack, tx: *const Texts, strings: *const Strings, s: protocol.Styled, d: *DrawList, rects: []Rect) void`: After `paint.emit`: the decorations of `s`'s decorated runs as solid quads right after each run's text (`protocol.insertAfter`), each run laid out again as drawn (`paragraph`) and decorated by `text_decorations.quads` with its face's metrics.
 - `fn serves(st: *const Stack, tx: *const Texts, k: usize) bool`: Whether this stack measures row `k`.
 - `fn layoutAt(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32) error{NoSpace}!void`: Lays row `k` of `tx` out into the scratch (`g`, `l`), start aligned, broken at `width`: shaped with its font at its size, then `lines.breakLines`, `lines.place` and, with `bidi`, `lines.reorder`.
 - `fn paragraph(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize) error{NoSpace}!void`: Row `k` laid out as `wrap` left it: broken at `avail` when it wraps, else not at all.
@@ -5259,6 +5289,7 @@ Scroll area (tier 2): a viewport that clips its content and shows the part at a 
 - `fn thumbStyle(th: *const Theme, g: Geometry, offset: f32) Style`: The thumb: the viewport's share of the content, at the offset's share, floating in the track (whose height is the viewport's).
 - `fn inside(r: Rect, p: [2]f32) bool`: Whether `p` is inside `r` (half-open, as hit testing).
 - `fn scrolled(offset: f32, g: Geometry, over: bool, held: bool, dy: f32, focused: bool, in: *const Input) f32`: The next offset, clamped to `g`.
+- `fn scrollerOf(t: *const @import("../core/tree.zig").Tree, row: u32) u32`: The viewport of the nearest scroll area at or above tree row `row`, or the root (0): the scroller a sticky node (`scroll.Sticky`, `spec.sticky`) sticks in.
 - `fn position(offset: f32, g: Geometry) f32`: How far through the content `offset` is, 0 to 1; 0 when the content fits.
 - `fn Page(comptime th: Theme) type`: The example page: a 200 x 100 scroll area over a column of six labels and a checkbox, in both front ends, in theme `th`.
 
