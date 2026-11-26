@@ -147,9 +147,16 @@ fn named(comptime n: Spec, comptime want: []const u8) bool {
 /// start.
 pub fn buttonStyle(th: *const Theme, r: Response) Style {
     var s = base.buttonStyle(th);
-    s.fill = base.buttonFill(th, r);
     s.min = .{ 120, 0 };
     s.main = .start;
+    return faced(th, s, r);
+}
+
+/// The button's `face` (its style, or as CSS restyles it) filled by its response, as a
+/// button's is.
+pub fn faced(th: *const Theme, face: Style, r: Response) Style {
+    var s = face;
+    s.fill = base.buttonFill(th, r);
     return s;
 }
 
@@ -241,6 +248,12 @@ fn role(f: *Frame, n: types.Node, r: a11y.Role) void {
 /// The button of select `name` (options `def`, labelled `texts`), in the page's flow, showing
 /// the chosen option.
 pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *SelectState, texts: []const []const u8) Response {
+    return buttonFace(f, th, name, def, st, texts, buttonStyle(th, .{}));
+}
+
+/// `button` laid out by `face` instead of `buttonStyle`, as `spec.styled` restyles
+/// `ct.select` (CSS on a `<select>`); the fill still follows hover and held.
+pub fn buttonFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: menu.Def, st: *SelectState, texts: []const []const u8, face: Style) Response {
     std.debug.assert(texts.len == def.items.len);
     // Every response is asked for before anything is built, so the rows show the frame's
     // final state, as in the comptime front end.
@@ -249,7 +262,7 @@ pub fn button(f: *Frame, th: *const Theme, comptime name: []const u8, comptime d
     var hits: menu.Hits = .{ .toggle = r.clicked, .outside = inter.response(.from(partName(name, "scrim"))).pressed };
     inline for (def.items, 0..) |o, k| hits.add(k, inter.response(.from(partName(name, o))));
     st.* = advance(def, st.*, hits, f.in.events);
-    const b = f.open(.from(name), valued(buttonStyle(th, r), st.*));
+    const b = f.open(.from(name), valued(faced(th, face, r), st.*));
     _ = f.interact(b, .button);
     role(f, b, .combobox);
     _ = base.label(f, th, texts[st.selected]);
@@ -297,7 +310,7 @@ pub const ct = struct {
     /// one of `opts.texts`.
     pub fn select(comptime th: Theme, comptime id: @EnumLiteral(), comptime field: @EnumLiteral(), comptime opts: Options) Spec {
         const W = Comptime(th, @tagName(id), @tagName(field), opts);
-        return .{ .kind = .row, .id = @tagName(id), .bind = @tagName(field), .widget = W.Button, .children = &.{.{ .kind = .label }} };
+        return .{ .kind = .row, .style = buttonStyle(&th, .{}), .id = @tagName(id), .bind = @tagName(field), .widget = W.Button, .children = &.{.{ .kind = .label }} };
     }
 
     /// The scrim and the list of select `id`, with the same arguments as its `select`.
@@ -346,7 +359,7 @@ pub fn Comptime(comptime th: Theme, comptime id: [:0]const u8, comptime field: [
             pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
                 const tb = &ui.tables;
                 const st: SelectState = @field(ui.signals.state, field);
-                const b = tb.t.push(parent, .hash(id), &valued(buttonStyle(&th, ui.response(next.*, in)), st));
+                const b = tb.t.push(parent, .hash(id), &valued(faced(&th, n.style, ui.response(next.*, in)), st));
                 tb.t.c.role[b] = @backingInt(a11y.Role.combobox);
                 pushText(tb, b, opts.texts[st.selected], base.labelText(&th));
                 tb.t.seal(b);

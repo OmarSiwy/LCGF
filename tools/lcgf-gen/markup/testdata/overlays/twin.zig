@@ -1,6 +1,7 @@
 //! overlays, written by hand: a select with a group of options, a button's tooltip (title=),
 //! a dialog of any content, a popover and a menu (engine spec F10), each moved last into a
-//! root over the viewport so they float from its origin and draw above the page.
+//! root over the viewport so they float from its origin and draw above the page. CSS on the
+//! select restyles its button in both frontends.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -30,10 +31,19 @@ const edit: menu.Def = .{ .items = &.{ "undo", "redo" } };
 
 const shapes: select.Options = .{ .texts = &.{ "Circle", "Square", "Tri" }, .groups = &.{.{ .at = 1, .label = "Angular" }} };
 
+/// `select { width: 160px; border: 1px solid #c03030 }` over the select's button.
+const shape_face: lcgf.types.Style = blk: {
+    var st = select.buttonStyle(&theme, .{});
+    st.size[0] = .px(160);
+    st.border = 1;
+    st.border_color = .rgb(192, 48, 48);
+    break :blk st;
+};
+
 pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
     s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.row(.{ .pad = @splat(8), .gap = 8 }, .{
-            s.named(select.ct.select(theme, .shape, .shape, shapes), "Shape"),
+            s.named(s.styled(select.ct.select(theme, .shape, .shape, shapes), shape_face), "Shape"),
             button.ct.button(theme, .settings, "Settings"),
             popover.ct.button(theme, .info, .info_open, "Info"),
             menu.ct.button(theme, .edit, .edit_menu, edit, "Edit"),

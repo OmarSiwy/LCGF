@@ -952,9 +952,12 @@ pub const Emit = struct {
                 return "";
             },
             .select => {
-                e.print("_ = {s}.button(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
+                const face = e.rtFace(n);
+                e.print("_ = {s}.{s}(f, &theme, \"{s}\", comptime {s}.positional({d}), &{s}, &.{{", .{ e.use("select"), e.faced("button", face), n.id, e.use("select"), n.captions.len, e.stateRef(n.bind) });
                 e.rtTexts(n.captions);
-                e.write(" });");
+                e.write(" }");
+                e.write(face);
+                e.write(");");
                 return "";
             },
             .select_list => {

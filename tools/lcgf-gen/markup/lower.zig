@@ -2078,7 +2078,7 @@ pub const Lowerer = struct {
             // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
             // rules (margins) go on the row a widget pushes first, its root.
             const faced = switch (kind) {
-                .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio => true,
+                .button, .link, .toggle, .checkbox, .@"switch", .slider, .textfield, .search, .textarea, .number, .progress, .separator, .radio, .select => true,
                 else => false,
             };
             const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;
@@ -2871,6 +2871,8 @@ pub const Lowerer = struct {
         }
         var node: ir.Node = .{ .kind = .select, .parent = parent, .loc = l.loc(n), .bind = bind, .captions = captions.items, .groups = groups.items };
         node.id = l.widgetId(n, bind, "<select>") orelse return true;
+        // CSS on the <select> restyles its button; its list keeps the theme's look.
+        l.widgetStyle(n, parent, lcgf.widgets_select.buttonStyle(&l.page.theme, .{}), &node);
         node.name = l.accessibleName(n);
         if (node.name.len == 0) node.name = l.controlCaption(n);
         const first = l.page.handlers.items.len;
@@ -2880,6 +2882,10 @@ pub const Lowerer = struct {
         var list = node;
         list.kind = .select_list;
         list.name = "";
+        list.style = .{};
+        list.base_style = .{};
+        list.params_expr = "";
+        list.margin = null;
         ok(l.overlays.append(l.arena, l.addNode(list)));
         return true;
     }
