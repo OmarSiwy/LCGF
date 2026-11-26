@@ -1033,6 +1033,7 @@ Spec: a UI declared as a compile-time value.
 - `fn slider(comptime id: @EnumLiteral(), comptime bind_or_options: anytype) Spec`: A slider named `id`, showing and setting an f32 field, 0 to 1: `slider(.volume, .volume)`, or with options as `checkbox`'s, `slider(.volume, .{ .name = "Volume" })`.
 - `fn styled(comptime s: Spec, comptime style: Style) Spec`: `s` laid out by `style`: `styled(slider(.volume, .{ .name = "Volume" }), .{ .size = .{ .px(80), .px(10) } })`.
 - `fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec`: Label `s` drawn in `text_style` instead of the page theme's: `textStyled(heading(1, "Mixer"), .{ .px = 28, .color = .rgb(230, 230, 235) })`.
+- `fn paragraph(comptime s: Spec, comptime p: @import("../text/layout/stack.zig").Paragraph) Spec`: Label `s` with paragraph style `p`: `paragraph(label(.a), .{ .line_height = .{ .px = 20 } })`.
 - `fn flexed(comptime s: Spec, comptime flex: FlexStyle) Spec`: `s` laid out with the flex rules `flex` as well as its style: `flexed(label(.a), .{ .margin = .{ 6, 2, 6, 2 } })`.
 - `fn named(comptime s: Spec, comptime name: []const u8) Spec`: `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 - `fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec`: A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which the first `count` are live, `count` being the run-time value of the integer state field bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`.
@@ -1043,7 +1044,7 @@ Spec: a UI declared as a compile-time value.
 ### `Spec` (struct)
 One node of the declaration.
 
-Fields: `kind`, `id`, `bind`, `text`, `text_style`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`, `tokens`
+Fields: `kind`, `id`, `bind`, `text`, `text_style`, `paragraph`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`, `tokens`
 
 - `fn shows(s: Spec, field: []const u8) bool`: The state fields this node shows: its `bind`, or a formatted label's arguments.
 
@@ -1072,6 +1073,15 @@ Fields: `advance`, `line`
 - `fn quads(font: Mono, d: *const DrawList, out: []Quad, glyphs: Glyphs) u32`: Expands the draw list's text runs into glyph quads for a 16x16 byte-indexed atlas: byte b samples cell (b & 15, b >> 4).
 - `fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: The same metrics and geometry, with UVs from a static atlas subset.
 - `fn quadsForCommands(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: Expands only runs referenced by text commands.
+
+### `MonoParagraphs` (struct)
+`Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes `table[styles[i]]` (`rows` ascending; draw list run k is texts row k).
+
+Fields: `mono`, `rows`, `styles`, `table`, `strings`
+
+- `fn measure(p: MonoParagraphs, tx: *Texts) void`: Mono's measure, then the single-line extent of every styled run.
+- `fn wrap(p: MonoParagraphs, tx: *Texts) void`: Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it when it shows an ellipsis.
+- `fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them.
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -1814,6 +1824,7 @@ Font selection over a caller-owned catalog.
 ### Top level
 
 - `Style = enum { normal, italic, oblique }`
+- `Face = struct { entry: Entry, path: []const u8 }`: One row of an application's font table, as a page's `@font-face` rules declare it: the catalog row `find` selects over, and the file the host loads into shaper `entry.font`.
 - `Metric = enum { x_height, cap_height, zero_advance, ideograph_advance }`
 - `AdjustError = error{ InvalidSize, MissingMetric }`
 - `fn find(catalog: []const Entry, families: []const []const u8, request: Request) ?usize`: First matching family, then closest width, style, and weight.
@@ -3522,6 +3533,9 @@ Fields: `ctx`, `in`
 - `fn layoutWith(f: *Frame, font: Mono) void`: Measure and arrange without painting: insert prepared textures or explicit passes, then call finish.
 - `fn endFlex(f: *Frame, font: Mono, fx: *Flex) Output`: `end` with the flex rules (margins, wrap, align-self, aspect, baselines) the caller wrote into `fx` this frame, one row per node: `fx.set(@backingInt(node), &.{ .margin = ...
 - `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
+- `fn endParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) Output`: `end` with paragraph styles (line height, spacing, line clamp, ellipsis) on some runs: texts row `rows[i]` takes `table[styles[i]]`, measured and wrapped by `protocol.MonoParagraphs` over this frame's strings.
+- `fn endFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) Output`: `endFlex` with paragraph styles, as `endParagraphs`.
+- `fn paragraphs(f: *const Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) MonoParagraphs`: The font `endParagraphs` measures with.
 - `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
 - `fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.
@@ -3818,7 +3832,7 @@ The comptime front end running the reference widgets of `spec`: state in `Signal
 ### `ComptimeUiTokens(..)` (generic struct)
 `ComptimeUi` whose rows also read run-time theme tokens (`spec.tokened`) from a caller-owned `theme_table.ThemeTable(Tokens)` (`ui.tokens`) when they are pushed, so a changed table lays the page out again on the next frame (`themeChanged`).
 
-Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `focus_visible`, `frame_settings`, `failure`, `input_mask`, `previous_input_mask`, `build_hit`, `building`, `platform_cursor`, `cursor_set`, `kept`, `built`, `tree_rows`, `window_selection`, `font`
+Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `focus_visible`, `frame_settings`, `failure`, `input_mask`, `previous_input_mask`, `build_hit`, `building`, `platform_cursor`, `cursor_set`, `kept`, `built`, `tree_rows`, `window_selection`, `font`, `paragraphs`
 
 - `Events = E`
 - `Signals = S`
@@ -6295,6 +6309,7 @@ Text field: one line of editable text.
 ### Top level
 
 - `bands = 4`: Selection bands a text field keeps per line, so that its rows are fixed: one per run of one direction the selection covers.
+- `mask = "*"`: What a password field shows once per grapheme of its text: how long it is, nothing else.
 - `fn Text(comptime cap: u32) type`: A text field's state, `cap` bytes of text.
 - `fn isText(comptime T: type) bool`: Whether `T` is a `Text(cap)`.
 - `fn textError(comptime State: type, comptime widget: []const u8, comptime name: []const u8) ?[]const u8`: Why `State`'s field `name` cannot be the text of a `widget` (a `Text(cap)`), or null.
@@ -6311,11 +6326,13 @@ Text field: one line of editable text.
 - `fn selectionStyle(th: *const Theme, sel: [2]f32, top: f32) Style`: The selection behind the text, from x `sel[0]` to `sel[1]` px, one line tall.
 - `fn caretStyle(th: *const Theme, x: f32, top: f32, focused: bool) Style`: The caret: 1 px wide at x `x`, one line tall, in the text colour while focused and invisible otherwise (it keeps its row, so both front ends have the same rows either way).
 - `fn shown(s: anytype, th: *const Theme, hint: []const u8) Shown`
+- `fn shownAs(comptime secure: bool, s: anytype, th: *const Theme, hint: []const u8, buf: []u8) Shown`: `shown`, and for a password field (`secure`) its text as one `mask` per grapheme (`Editor.display`, written to `buf`, at least the field's capacity), with the caret and the selection over the mask.
 - `fn fresh(s: anytype) ?moves.View`: `s.view` while it is the layout of the field's current text, else null.
 - `fn caretX(s: anytype, th: *const Theme, at: u32) f32`: The caret's x at byte `at`, px from the text's left edge: from the view when fresh, else `at` advances.
 - `fn stopNear(t: []const u8, x: f32) u32`: The grapheme boundary of `t` nearest to `x` advances from its start (a click), clamped.
 - `fn reveal(scroll: f32, x: f32, view: f32, content: f32) f32`: The scroll that keeps x `x` (the caret) inside a view `view` px wide, moving as little as it can from `scroll`, never past the content's end (`content` px) or its start.
 - `fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in: *const Input) void`: Applies a frame's input to field `s` (a `*Text(cap)`) named `id`, laid out last frame at `last` (zero before the first frame): while the pointer holds the field, the caret follows it (a press also moves the anchor, unless Shift is held); while focused, its keys, typed text and the IME's composition go to the editor (`Editor.update`), with Enter submitting.
+- `fn behaveAs(comptime secure: bool, s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, in: *const Input) void`: `behave`, for a password field when `secure`: the editor's password mode, so its text is never copied or cut, word moves go to the ends and the host is asked for secure input.
 - `fn point(s: anytype, th: *const Theme, r: Response, last: Rect, in: *const Input) *edit.Editor`: The first part of `behave`: resets what the field asks of the host, and places the caret where the pointer holds the field.
 - `fn follow(s: anytype, th: *const Theme, r: Response, last: Rect) void`: The last part of `behave`, after the keys: scrolls the view to the caret, and asks for text input at it while focused.
 - `fn keyboardOf(in: *const Input, id: Id, focused: bool) keyboard.Keyboard`: This frame's keys for field `id`: all of them while it is focused, none otherwise.
@@ -6324,8 +6341,9 @@ Text field: one line of editable text.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void`: The semantics the tree columns cannot carry, for field `name` in either front end's tree: its name is the row `label` (its caption, `aria-labelledby`; `none` for none).
 - `fn textValue(t: *const Tree, s: *a11y.Semantics, str: *Strings, name: Id, field: anytype, hint: []const u8) void`: What field `name` (over `field`, a `*Text(cap)`, showing `hint` while empty) holds, for assistive technology: its text and its placeholder, copied to the frame's strings `str` (`a11y.setText`).
 - `fn textfield(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response`: A text field named `id` over `s` (a `*Text(cap)`), showing `hint` while empty.
+- `fn password(f: *Frame, th: *const Theme, id: Id, s: anytype, hint: []const u8) Response`: A password field (`<input type=password>`): a text field that shows one `mask` per grapheme, never puts its text on the clipboard and asks for secure input.
 - `fn platform(f: *Frame, s: anytype) void`: Copies what field `s` asks of the host this frame to the runtime front end's `Platform`: text input with its purpose and, but for a password, the text and selection around the caret for the IME and autocorrect; the clipboard text it copied, and a paste.
-- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec) type`: The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`) (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
+- `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime hint: Spec, comptime secure: bool) type`: The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`) (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
 - `fn pushText(ui: anytype, parent: u32, str: []const u8, ts: TextStyle) void`: Pushes a text leaf showing `str` under row `parent` of comptime front end `ui`, as `Frame.textStyled(str, ts, .{})` does in the runtime front end.
 
 ### `Text(..)` (generic struct)
@@ -6348,6 +6366,7 @@ Fields: `str`, `hint`, `caret`, `sel`, `band`
 ### `ct` (struct)
 
 - `fn textfield(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype) Spec`: A text field named `id` over the `Text(cap)` field `bind`, showing `hint` while empty: a literal or a string field (`hintSpec`).
+- `fn password(comptime th: Theme, comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime hint: anytype) Spec`: `textfield` as a password field (`password`).
 
 ### `Comptime(..)` (generic struct)
 The comptime text field named `name` over field `bind`, placeholder `hint` (`hintSpec`) (`Spec.widget`): the same rows as `textfield`, and the same input applied (`behave`).
