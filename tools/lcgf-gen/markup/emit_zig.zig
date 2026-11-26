@@ -671,16 +671,18 @@ pub const Emit = struct {
                 e.write(" });");
                 return "";
             },
-            .textfield, .search => {
-                const m = if (n.kind == .search) "search" else "textfield";
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), m, e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+            .textfield, .search, .textarea => if (e.eachOf(i) != none) {
+                e.itemText(n, list_depth);
+                return "";
+            } else if (n.kind == .textarea) {
+                e.print("_ = {s}.textarea(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(");");
                 e.submitFlag(n);
                 return "";
-            },
-            .textarea => {
-                e.print("_ = {s}.textarea(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
+            } else {
+                const m = if (n.kind == .search) "search" else "textfield";
+                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, ", .{ e.use(m), m, e.rtId(n.id, list_depth), e.stateRef(n.bind) });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(");");
                 e.submitFlag(n);
@@ -703,6 +705,31 @@ pub const Emit = struct {
             },
             .spacer, .spinner, .each => unreachable,
         }
+    }
+
+    /// A text control inside an lcgf-each: the region keeps one editor (`edit_<id>`), for the
+    /// row being edited; every other row shows its item's text through a copy made this frame.
+    /// Focus on another row moves the editor there, seeded from its item. Changes and submits
+    /// go to on:change (index, text) and on:submit (index); the item is never written.
+    fn itemText(e: *Emit, n: ir.Node, list_depth: u32) void {
+        const m = switch (n.kind) {
+            .search => "search",
+            .textarea => "textarea",
+            else => "textfield",
+        };
+        const id = n.id;
+        e.print("{{ const editing = p.edit_{s}_row == @as(u32, @intCast(copy0)); var scratch: lcgf.widgets_textfield.Text(256) = .{{}}; if (!editing) scratch.set({s}); const st = if (editing) &p.edit_{s} else &scratch; ", .{ id, e.stateRef(n.bind), id });
+        e.print("const r = {s}.{s}(f, &theme, {s}, st, ", .{ e.use(m), m, e.rtId(id, list_depth) });
+        if (n.kind == .textarea) e.print("{d}, ", .{n.level});
+        e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+        e.print("); if (r.focused and !editing) {{ p.edit_{s} = st.*; p.edit_{s}_row = @intCast(copy0); }} ", .{ id, id });
+        e.print("if (p.edit_{s}_row == @as(u32, @intCast(copy0))) {{ ", .{id});
+        for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.widget, id) and h.each.len > 0) switch (h.event) {
+            .change => e.print("if (st.result.changed) {s}.{f} = .{{ @intCast(copy0), p.edit_{s}.text() }}; ", .{ e.events_var, std.zig.fmtId(id), id }),
+            .submit => e.print("if (st.result.submitted) {s}.{s}_submit = @intCast(copy0); ", .{ e.events_var, id }),
+            else => {},
+        };
+        e.write("} }");
     }
 
     /// `&field`: the address a runtime control writes through.
@@ -992,12 +1019,14 @@ pub const Emit = struct {
             e.write("            if (out.event) |event| switch (event) {\n");
             for (hs) |h| if (h.event == .click and h.each.len == 0) e.print("                .{f} => h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
             // A text control's event is what its input did; submit is one part of it.
-            for (hs) |h| if (h.event == .submit) e.print("                .{f} => |result| if (result.submitted) h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
+            for (hs) |h| if (h.event == .submit and h.each.len == 0) e.print("                .{f} => |result| if (result.submitted) h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
             var widgets: u32 = 0;
             for (e.page.nodes.items(.id), 0..) |id, k| widgets += @intFromBool(id.len > 0 and (e.eachOf(@intCast(k)) == none or e.page.nodes.items(.kind)[k] == .each));
             if (widgets > clicks) e.write("                else => {},\n");
             e.write("            };\n");
         }
+        for (hs) |h| if (h.event == .submit and h.each.len > 0)
+            e.print("            if (events_{s}.{s}_submit) |index| h.{f}(&p.ui, index); // {s}\n", .{ h.each, h.widget, std.zig.fmtId(h.name), e.where(h.loc) });
         for (hs) |h| if (h.event == .click and h.each.len > 0)
             e.print("            if (events_{s}.{f}) |index| h.{f}(&p.ui, index); // {s}\n", .{ h.each, std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
         for (hs) |h| if (h.event == .change and h.each.len > 0)
@@ -1024,6 +1053,17 @@ pub const Emit = struct {
             , .{ n.id, n.text, n.bind, n.id, n.id, n.id });
             decls.print(e.arena, "        const {s}_limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = 16384, .depth = 64 }};\n", .{ n.id, n.max, @as(u32, @intFromFloat(n.range[0])) }) catch unreachable;
             rows.print(e.arena, " + {s}_limits.nodes", .{n.id}) catch unreachable;
+            // One editor per text control of the region, for the row being edited.
+            for (0..e.page.nodes.len) |k| {
+                const c = e.page.nodes.get(k);
+                const texty = c.kind == .textfield or c.kind == .search or c.kind == .textarea;
+                if (texty and e.eachOf(@intCast(k)) == i) e.print(
+                    \\        /// The editor of `{s}` for the item being edited, and that item's index.
+                    \\        edit_{s}: lcgf.widgets_textfield.Text(256) = .{{}},
+                    \\        edit_{s}_row: ?u32 = null,
+                    \\
+                , .{ c.id, c.id, c.id });
+            }
             strings.print(e.arena, " + {s}_limits.strings", .{n.id}) catch unreachable;
         }
         e.print(
@@ -1065,6 +1105,7 @@ pub const Emit = struct {
             var events: std.ArrayList(u8) = .empty;
             for (e.page.handlers.items) |h| if (std.mem.eql(u8, h.each, n.id)) switch (h.event) {
                 .change => events.print(e.arena, " {f}: ?struct {{ u32, {s} }} = null,", .{ std.zig.fmtId(h.widget), fieldType(h.payload.?) }) catch unreachable,
+                .submit => events.print(e.arena, " {s}_submit: ?u32 = null,", .{h.widget}) catch unreachable,
                 else => events.print(e.arena, " {f}: ?u32 = null,", .{std.zig.fmtId(h.widget)}) catch unreachable,
             };
             if (events.items.len > 0) e.print("            var events_{s}: struct {{{s} }} = .{{}};\n", .{ n.id, events.items });

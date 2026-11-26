@@ -1149,7 +1149,11 @@ pub const Lowerer = struct {
             l.ds.err(at, "inside lcgf-each, bind a field of the item: \"{s}.field\" (per-item state is the app's)", .{item});
             return "";
         }
-        if (ty != .bool and ty != .f32 and ty != .u32) {
+        if (ty == .text) {
+            l.ds.err(at, "inside lcgf-each a text control shows an item field one way: value=\"{{{s}.field}}\" with on:change and on:submit", .{item});
+            return "";
+        }
+        if (ty != .bool and ty != .f32 and ty != .u32 and ty != .str) {
             l.ds.err(at, "inside lcgf-each, only checkboxes, switches, toggles, sliders, radio groups and lcgf-if bind an item field so far", .{});
             return "";
         }
@@ -1354,8 +1358,15 @@ pub const Lowerer = struct {
                     l.ds.err(doc.attrLoc(a), "on:submit is for text fields, search fields and text areas (Enter; Ctrl+Enter in a text area)", .{});
                     continue;
                 }
-                ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .submit, .widget = id, .field = bind, .loc = at }));
+                const each = l.eachOf(n);
+                ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .submit, .widget = id, .field = bind, .loc = at, .each = if (each == none) "" else l.page.nodes.items(.id)[each] }));
             } else if (std.mem.eql(u8, event, "change")) {
+                if (payload == .text and std.mem.indexOfScalar(u8, bind, '.') != null) {
+                    // A per-item text control reports its text as it is edited.
+                    const each = l.eachOf(n);
+                    ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .change, .widget = id, .field = bind, .payload = .str, .loc = at, .each = l.page.nodes.items(.id)[each] }));
+                    continue;
+                }
                 if (payload == .text) {
                     l.ds.err(doc.attrLoc(a), "on:change on a text control is not lowered yet; use on:submit", .{});
                     continue;
@@ -1621,13 +1632,16 @@ pub const Lowerer = struct {
             .textarea => "<textarea>",
             else => "<input type=text>",
         };
-        const bind = l.binding(n, "value", .text, what);
+        var bind = l.binding(n, "value", .text, what);
+        // Inside an lcgf-each: one way, `value="{row.name}"` over a string field of the item.
+        const one_way = bind.len == 0 and l.oneWay(n, "value", .str).len > 0;
+        if (one_way) bind = l.oneWay(n, "value", .str);
         if (bind.len == 0) {
             l.ds.err(l.loc(n), "{s} needs bind:value=\"field\"", .{what});
             l.skip[n] = true;
             return true;
         }
-        var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind };
+        var node: ir.Node = .{ .kind = kind, .parent = parent, .loc = l.loc(n), .bind = bind, .one_way = one_way };
         node.id = l.widgetId(n, bind, what) orelse return true;
         const hint = l.attr(n, "placeholder") orelse "";
         l.caption(&node, hint, l.valueLoc(n, "placeholder"));

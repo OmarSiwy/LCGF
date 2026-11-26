@@ -1,0 +1,14 @@
+<!doctype html>
+<html lcgf-page="rename">
+<head>
+  <title>Rename</title>
+  <style>
+    .list { width: 400px; height: 200px; gap: 4px; }
+  </style>
+</head>
+<body>
+  <template lcgf-each="row in rows" class="list">
+    <input type="text" id="name" value="{row.name}" on:change="renamed" on:submit="done">
+  </template>
+</body>
+</html>
