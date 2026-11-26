@@ -74,16 +74,33 @@ pub fn box(comptime id: anytype, comptime config: Config, comptime children: any
     return s;
 }
 
-/// Eases `root` along `config.transition` and keeps the step in its fade field, if any.
-fn stepFade(comptime config: Config, ui: anytype, root: *style.Computed, in: *const Input) void {
+/// Eases `root` along `config.transition` and keeps the step in its fade field, if any. A
+/// second call in a frame passes `dt` 0, which paints the same step again.
+fn stepFade(comptime config: Config, ui: anytype, root: *style.Computed, dt: f32) void {
     if (config.fade_field) |field| {
         const fade = &@field(ui.signals.state, field);
-        fade.* = fade.next(root, config.transition.under(ui.frame_settings.reduced_motion), in.dt);
+        fade.* = fade.next(root, config.transition.under(ui.frame_settings.reduced_motion), dt);
     }
     if (config.clock_field) |field| {
         const clock = &@field(ui.signals.state, field);
-        clock.* = clock.next(root, config.animation, in.dt, ui.frame_settings.reduced_motion);
+        clock.* = clock.next(root, config.animation, dt, ui.frame_settings.reduced_motion);
     }
+}
+
+/// Whether `config` eases or animates its control.
+fn moves(comptime config: Config) bool {
+    return config.fade_field != null or config.clock_field != null;
+}
+
+/// `wakeAfter` for a control over `config`; a control declares it as
+/// `if (moves(config)) Wake(config).wakeAfter else {}`, so one that does not move adds no hook.
+fn Wake(comptime config: Config) type {
+    return struct {
+        pub fn wakeAfter(ui: anytype, in: *const Input) f32 {
+            _ = in;
+            return fadeWake(config, ui);
+        }
+    };
 }
 
 /// Seconds until `config`'s fade lands: 0 asks for the next frame while it moves.
@@ -171,7 +188,7 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
                 ui.fail(err);
                 break :blk recipe.baseFor(Parts.root);
             };
-            stepFade(config, ui, &root, in);
+            stepFade(config, ui, &root, in.dt);
             const tb = &ui.tables;
             const i = tb.t.push(parent, if (name) |x| .hash(x) else .none, &root.box);
             if (comptime flexes) if (comptime n.flex) |fs| {
@@ -239,7 +256,7 @@ pub fn search(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), compti
     field.bind = null;
     field.widget = SearchField(W);
     const clear: Spec = .{ .kind = .row, .id = name ++ ".clear", .children = &.{.{ .kind = .label }} };
-    return .{ .kind = .row, .bind = @tagName(bind), .children = &.{ field, clear }, .widget = SearchBox(name, @tagName(bind), W) };
+    return .{ .kind = .row, .bind = @tagName(bind), .children = &.{ field, clear }, .widget = SearchBox(name, @tagName(bind), W, config) };
 }
 
 /// The field inside a recipe search box: a focus stop the box pushes and steps.
@@ -259,8 +276,10 @@ fn SearchField(comptime W: type) type {
 /// Rows of a recipe text field: the field, its bands, text, selection copies, caret and outline.
 const field_rows = textfield_zig.bands + controls.selection_sections * 2 + 4;
 
-fn SearchBox(comptime name: [:0]const u8, comptime bind: []const u8, comptime W: type) type {
+fn SearchBox(comptime name: [:0]const u8, comptime bind: []const u8, comptime W: type, comptime config: Config) type {
     return struct {
+        pub const wakeAfter = if (moves(config)) Wake(config).wakeAfter else {};
+
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
             _ = field;
             return W.bindError(State, bind);
@@ -273,7 +292,8 @@ fn SearchBox(comptime name: [:0]const u8, comptime bind: []const u8, comptime W:
             var response = ui.response(row + 1, in);
             response.focused = ui.focus == @field(Ui.Events.Widget, name);
             const use = W.useFor(ui, in, response);
-            const root = W.resolvePart(ui, Parts.root, use);
+            var root = W.resolvePart(ui, Parts.root, use);
+            stepFade(config, ui, &root, in.dt);
             var child = use;
             child.parent = &root;
             child.local = &.{};
@@ -454,7 +474,8 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
             response.focused = ui.focus == @field(Ui.Events.Widget, name);
             const use = useFor(ui, in, response);
             var root = resolvePart(ui, Parts.root, use);
-            stepFade(config, ui, &root, in);
+            // A search field paints the step its box took (`SearchBox`).
+            stepFade(config, ui, &root, if (kind == .search) 0 else in.dt);
             var child = use;
             child.parent = &root;
             child.local = &.{};
@@ -638,13 +659,16 @@ fn SelectFace(comptime name: [:0]const u8, comptime field: []const u8, comptime 
     if (stocked.recipe == null) stocked.recipe = model.select;
     const W = Widget(.button, name, "", "", .{}, stocked, true);
     return struct {
+        pub const wakeAfter = if (moves(config)) Wake(config).wakeAfter else {};
+
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
             const Ui = @TypeOf(ui.*);
             const st: select_zig.SelectState = @field(ui.signals.state, field);
             var response = ui.response(next.*, in);
             response.focused = ui.focus == @field(Ui.Events.Widget, name);
             const use = W.useFor(ui, in, response);
-            const root = W.resolvePart(ui, Parts.root, use);
+            var root = W.resolvePart(ui, Parts.root, use);
+            stepFade(config, ui, &root, in.dt);
             var child = use;
             child.parent = &root;
             child.local = &.{};
@@ -676,6 +700,8 @@ fn Section(comptime th: base.Theme, comptime name: [:0]const u8, comptime expand
     if (stocked.recipe == null) stocked.recipe = model.disclosure;
     const W = Widget(.button, name, "", title, .{}, stocked, literal);
     return struct {
+        pub const wakeAfter = if (moves(config)) Wake(config).wakeAfter else {};
+
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
             _ = field;
             if (base.fieldError(State, "accordion section", expanded, bool)) |err| return err;
@@ -701,6 +727,7 @@ fn Section(comptime th: base.Theme, comptime name: [:0]const u8, comptime expand
             var use = W.useFor(ui, in, response);
             use.states.expanded = open_;
             var root = W.resolvePart(ui, Parts.root, use);
+            stepFade(config, ui, &root, in.dt);
             var child = use;
             child.parent = &root;
             child.local = &.{};
@@ -764,6 +791,7 @@ fn TextArea(comptime name: [:0]const u8, comptime bind: []const u8, comptime row
         pub const focusable = true;
         pub const Payload = edit.Result;
         pub const inputAvailability = W.inputAvailability;
+        pub const wakeAfter = if (moves(config)) Wake(config).wakeAfter else {};
 
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
             _ = field;
@@ -772,10 +800,12 @@ fn TextArea(comptime name: [:0]const u8, comptime bind: []const u8, comptime row
 
         const Resolved = struct { root: style.Computed, content: style.Computed, placeholder: style.Computed, selection: style.Computed, caret: style.Computed, focus: style.Computed, metrics: base.Theme };
 
-        fn resolve(ui: anytype, in: *const Input, response: types.Response) Resolved {
+        /// `dt` steps the root's fade: the frame's on the push, 0 on the step.
+        fn resolve(ui: anytype, in: *const Input, response: types.Response, dt: f32) Resolved {
             const use = W.useFor(ui, in, response);
             var r: Resolved = undefined;
             r.root = W.resolvePart(ui, Parts.root, use);
+            stepFade(config, ui, &r.root, dt);
             var child = use;
             child.parent = &r.root;
             child.local = &.{};
@@ -793,7 +823,7 @@ fn TextArea(comptime name: [:0]const u8, comptime bind: []const u8, comptime row
             const Ui = @TypeOf(ui.*);
             var response = ui.response(next.*, in);
             response.focused = ui.focus == @field(Ui.Events.Widget, name);
-            var r = resolve(ui, in, response);
+            var r = resolve(ui, in, response, in.dt);
             const t = &ui.tables.t;
             const field = &@field(ui.signals.state, bind);
             const editor = field.editor();
@@ -841,7 +871,7 @@ fn TextArea(comptime name: [:0]const u8, comptime bind: []const u8, comptime row
             const Ui = @TypeOf(ui.*);
             const response = base.ctResponse(ui, row, event, in);
             const states = W.state(ui);
-            const r = resolve(ui, in, response);
+            const r = resolve(ui, in, response, 0);
             const field = &@field(ui.signals.state, bind);
             const editor = field.editor();
             const previous = editor.mode.read_only;

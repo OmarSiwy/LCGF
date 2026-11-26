@@ -1,6 +1,6 @@
 <!doctype html>
 <style>
-  #a { transition: transform 1s; }
+  #a { transition: margin-left 1s; }
   #b:hover { transition: color 1s; }
   p { transition-duration: 1s; animation: spin 1s infinite; }
   #a { animation: spin 1s; }
@@ -8,7 +8,7 @@
   #c { animation: nothing 1s infinite; }
   #d { animation: spin 1s reverse infinite; }
   #e { animation: spin 1s infinite; }
-  @keyframes spin { to { opacity: 0; } 50% { width: 10px; } }
+  @keyframes spin { to { opacity: 0; } 50% { margin-left: 10px; } }
   div { transition: color 0s, opacity 0ms; }
   #c { transition: color 1s 0.5s; }
   #d { transition: color 1s, opacity 2s; }

@@ -595,3 +595,47 @@ test "color on a recipe box restyles the text inside that inherits it, in both f
     try std.testing.expectEqual(Ink.hot_ink.bitsOf(), output.runtime.texts.c.color[0]);
     try std.testing.expectEqual(Ink.own.bitsOf(), output.runtime.texts.c.color[1]);
 }
+
+test "a transition eases padding and transform, and a keyframe without a value takes the resolved one" {
+    @setEvalBranchQuota(200_000);
+    const Moves = struct {
+        const rules = [_]style.Rule{.{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{ style.set(.padding_left, 30), style.set(.transform, .{ 1, 0, 0, 1, 0, 8 }) } }};
+        const card: model.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(10), .fill = .rgb(10, 10, 10) } } }}, .rules = &rules };
+        const transition: controls.Transition = .{ .seconds = 0.1, .ease = .linear, .padding = true, .transform = true };
+        const fade_in: controls.Animation = .{ .seconds = 0.1, .iterations = 1, .tracks = &.{.{ .channel = 0, .keys = &.{ .{ .at = 0, .value = 250 }, .{ .at = 0.1, .value = controls.Fade.unset } } }} };
+        const App = struct {
+            fade: controls.Fade = .{},
+            clock: controls.Clock = .{},
+            pub fn build(app: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                const c = controls.beginBox(f, .from("card"), true, .{ .recipe = card, .transition = transition, .fade = &app.fade, .animation = fade_in, .clock = &app.clock }) catch unreachable;
+                _ = f.textStyled("Card", .{ .px = 14, .color = .white }, .{});
+                controls.endBox(f, c);
+                f.close();
+            }
+        };
+        const label: spec.Spec = spec.textStyled(spec.label("Card"), .{ .px = 14, .color = .white });
+        const State_ = struct { fade: controls.Fade = .{}, clock: controls.Clock = .{} };
+        const MUi = base.ComptimeUi(State_, spec.col(panel, .{ct.box(.card, .{ .recipe = card, .transition = transition, .fade_field = "fade", .animation = fade_in, .clock_field = "clock" }, .{label})}), .default);
+        const MRun = base.Harness(App, MUi, .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 });
+        var run: MRun = .{};
+    };
+    const run = &Moves.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 }, .dt = 0.025 };
+    var output = try run.frame(&input);
+    const card = output.runtime.tree.find(.from("card"));
+    // The fill's animation runs from 250 to the resolved 10 over 100 ms.
+    const red = output.runtime.tree.c.look[card].fill & 0xff;
+    try std.testing.expect(red > 10 and red < 250);
+    const w0 = output.runtime.tree.rect(card).w();
+    const r = output.runtime.tree.rect(card);
+    input.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    output = try run.frame(&input);
+    output = try run.frame(&input);
+    const w1 = output.runtime.tree.rect(card).w();
+    try std.testing.expect(w1 > w0 and w1 < w0 + 20);
+    for (0..4) |_| output = try run.frame(&input);
+    try std.testing.expectEqual(w0 + 20, output.runtime.tree.rect(card).w());
+    try std.testing.expectEqual(types.Color.rgb(10, 10, 10).bitsOf(), output.runtime.tree.c.look[card].fill);
+}

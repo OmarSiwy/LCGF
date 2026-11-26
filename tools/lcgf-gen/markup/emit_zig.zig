@@ -726,7 +726,12 @@ pub const Emit = struct {
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
             e.write(", .transition = ");
             e.structure(n.live.transition, .{});
-            if (runtime) e.print(", .fade = {s}", .{e.copyRef(e.fadeName(n))}) else e.print(", .fade_field = \"{s}\"", .{e.fadeName(n)});
+            if (!runtime)
+                e.print(", .fade_field = \"{s}\"", .{e.fadeName(n)})
+            else if (n.kind == .radio)
+                e.print(", .fades = &{s}", .{e.stateRef(e.fadeName(n))}) // one per option
+            else
+                e.print(", .fade = {s}", .{e.copyRef(e.fadeName(n))});
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
         }
         if (n.live.animation.tracks.len > 0) {
@@ -738,7 +743,11 @@ pub const Emit = struct {
             for (n.live.animation.tracks, 0..) |t, k| {
                 e.print("{s}.{{ .channel = {d}, .keys = &.{{", .{ if (k == 0) " " else ", ", t.channel });
                 for (t.keys, 0..) |key, j| {
-                    e.print("{s}.{{ .at = {d}, .value = {d}", .{ if (j == 0) " " else ", ", key.at, key.value });
+                    // A key without a value takes the resolved one (Clock).
+                    if (key.value == lcgf.theme_recipes.controls.Fade.unset)
+                        e.print("{s}.{{ .at = {d}, .value = recipes.controls.Fade.unset", .{ if (j == 0) " " else ", ", key.at })
+                    else
+                        e.print("{s}.{{ .at = {d}, .value = {d}", .{ if (j == 0) " " else ", ", key.at, key.value });
                     if (key.ease != .linear) e.print(", .ease = .{s}", .{@tagName(key.ease)});
                     e.write(" }");
                 }
@@ -1047,7 +1056,7 @@ pub const Emit = struct {
                     for (f.cases, 0..) |c, k| e.print("{s} {f}", .{ if (k == 0) "" else ",", std.zig.fmtId(c) });
                     e.print(" }} = .{f}, // {s}\n", .{ std.zig.fmtId(f.cases[0]), e.where(f.loc) });
                 } else if (f.cap > 0) {
-                    // One per lcgf-each copy, by item index.
+                    // One per lcgf-each copy, by item index, or one per radio option.
                     e.print("    {f}: [{d}]{s} = @splat({s}), // {s}\n", .{ std.zig.fmtId(f.name), f.cap, fieldType(f.type), defaultOf(f), e.where(f.loc) });
                 } else e.print("    {f}: {s} = {s}, // {s}\n", .{ std.zig.fmtId(f.name), fieldType(f.type), defaultOf(f), e.where(f.loc) });
             }

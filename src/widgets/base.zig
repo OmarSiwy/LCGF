@@ -797,7 +797,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             // static controls add no hook or timer storage.
             inline for (comptime customRows(spec)) |row| {
                 const Widget = comptime nodeAt(spec, row).widget.?;
-                if (comptime @hasDecl(Widget, "wakeAfter")) {
+                // `wakeAfter` may be `{}`: a widget that moves only under some configs.
+                if (comptime @hasDecl(Widget, "wakeAfter") and @TypeOf(Widget.wakeAfter) != void) {
                     const node = ui.treeRow(row);
                     if (node < t.len and t.participation(node).paint) wake = @min(wake, Widget.wakeAfter(ui, in));
                 }

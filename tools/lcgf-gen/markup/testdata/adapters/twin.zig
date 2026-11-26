@@ -6,7 +6,8 @@
 //! Clear button, which still clears it; a text area takes the editor recipe and its validation;
 //! a number field is :invalid while its typed text is outside min..max; a select's button takes
 //! the recipe while its list stays the theme select's; a <summary>'s state CSS styles its
-//! section's header.
+//! section's header. Each of these but the link, toggle and number eases its fill and border
+//! over 100 ms (`transition`): the radio group one `Fade` per option, the others one each.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -19,7 +20,11 @@ const Color = lcgf.types.Color;
 
 pub const theme: w.Theme = .{};
 
-pub const State = struct { bold: bool = false, size: u32 = 1, find: lcgf.widgets_textfield.Text(256) = .{}, notes: lcgf.widgets_textfield.Text(256) = .{}, qty: lcgf.widgets_number.Number = .{}, shape: lcgf.widgets_select.SelectState = .{}, more: bool = false };
+const Fade = recipes.controls.Fade;
+
+pub const State = struct { bold: bool = false, size: u32 = 1, find: lcgf.widgets_textfield.Text(256) = .{}, notes: lcgf.widgets_textfield.Text(256) = .{}, qty: lcgf.widgets_number.Number = .{}, shape: lcgf.widgets_select.SelectState = .{}, more: bool = false, size_fade: [2]Fade = @splat(.{}), find_fade: Fade = .{}, notes_fade: Fade = .{}, shape_fade: Fade = .{}, more_fade: Fade = .{} };
+
+const eases: recipes.controls.Transition = .{ .seconds = 0.1, .ease = .linear, .fill = true, .border_color = true };
 
 const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes.model.tokenRows(.{
     .palette = .{ theme.text, theme.panel, theme.control, theme.control_hot, theme.control_held, theme.accent },
@@ -61,7 +66,7 @@ const recipe_shape: recipes.Recipe = .{ .parts = recipes.model.select.parts, .ru
     .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, blue)} },
 }) };
 const shapes: lcgf.widgets_select.Options = .{ .texts = &.{ "Circle", "Square" } };
-const shape_config: recipes.ct.Config = .{ .recipe = recipe_shape, .tokens = recipe_tokens };
+const shape_config: recipes.ct.Config = .{ .recipe = recipe_shape, .tokens = recipe_tokens, .transition = eases, .fade_field = "shape_fade" };
 
 const recipe_more: recipes.Recipe = .{ .parts = recipes.model.disclosure.parts, .rules = &(recipes.model.disclosure_rules ++ [_]style.Rule{
     .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, red)} },
@@ -73,12 +78,12 @@ const page_root: lcgf.types.Style = .{ .size = .{ .fill, .fill } };
 pub const spec = s.col(page_root, .{ s.col(body, .{
     recipes.ct.link(.docs, "Read the docs", .{ .recipe = recipe_docs, .tokens = recipe_tokens }),
     recipes.ct.toggle(.bold, .bold, "Bold", .{ .recipe = recipe_bold, .tokens = recipe_tokens }),
-    recipes.ct.radio(.size, .size, .{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens }),
-    recipes.ct.search(.find, .find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens }),
-    recipes.ct.textarea(.notes, .notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true } }),
+    recipes.ct.radio(.size, .size, .{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens, .transition = eases, .fade_field = "size_fade" }),
+    recipes.ct.search(.find, .find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens, .transition = eases, .fade_field = "find_fade" }),
+    recipes.ct.textarea(.notes, .notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true }, .transition = eases, .fade_field = "notes_fade" }),
     recipes.ct.number(.qty, .qty, qty_range, .{ .recipe = recipe_qty, .tokens = recipe_tokens, .validation = .{ .range = .{ 0, 10 } } }),
     recipes.ct.select(theme, .shape, .shape, shapes, shape_config),
-    recipes.ct.details(theme, .more, .more, "More", .{ .recipe = recipe_more, .tokens = recipe_tokens }, .{
+    recipes.ct.details(theme, .more, .more, "More", .{ .recipe = recipe_more, .tokens = recipe_tokens, .transition = eases, .fade_field = "more_fade" }, .{
         s.textStyled(lcgf.widgets_label.ct.label(theme, "Hidden text"), .{ .color = theme.text, .wrap = true }),
     }),
 }), recipes.ct.selectList(theme, .shape, .shape, shapes, shape_config) });
@@ -94,18 +99,23 @@ pub const App = struct {
     qty: lcgf.widgets_number.Number = .{},
     shape: lcgf.widgets_select.SelectState = .{},
     more: bool = false,
+    size_fade: [2]Fade = @splat(.{}),
+    find_fade: Fade = .{},
+    notes_fade: Fade = .{},
+    shape_fade: Fade = .{},
+    more_fade: Fade = .{},
 
     pub fn build(app: *App, f: *Frame) void {
         _ = f.open(.none, page_root);
         _ = f.open(.none, body);
         _ = recipes.link(f, .from("docs"), "Read the docs", .{ .recipe = recipe_docs, .tokens = recipe_tokens }) catch unreachable;
         _ = recipes.toggle(f, .from("bold"), &app.bold, "Bold", .{ .recipe = recipe_bold, .tokens = recipe_tokens }) catch unreachable;
-        _ = recipes.radio(f, .from("size"), &app.size, &.{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens }) catch unreachable;
-        _ = recipes.search(f, .from("find"), &app.find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens }) catch unreachable;
-        _ = recipes.textarea(f, .from("notes"), &app.notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true } }) catch unreachable;
+        _ = recipes.radio(f, .from("size"), &app.size, &.{ "Small", "Large" }, .{ .recipe = recipe_size, .tokens = recipe_tokens, .transition = eases, .fades = &app.size_fade }) catch unreachable;
+        _ = recipes.search(f, .from("find"), &app.find, "Find", .{ .recipe = recipe_find, .tokens = recipe_tokens, .transition = eases, .fade = &app.find_fade }) catch unreachable;
+        _ = recipes.textarea(f, .from("notes"), &app.notes, 2, "Notes", .{ .recipe = recipe_notes, .tokens = recipe_tokens, .validation = .{ .required = true }, .transition = eases, .fade = &app.notes_fade }) catch unreachable;
         _ = recipes.number(f, .from("qty"), &app.qty, qty_range, .{ .recipe = recipe_qty, .tokens = recipe_tokens, .validation = .{ .range = .{ 0, 10 } } }) catch unreachable;
-        _ = recipes.select(f, "shape", comptime lcgf.widgets_select.positional(2), &app.shape, shapes.texts, .{ .recipe = recipe_shape, .tokens = recipe_tokens }) catch unreachable;
-        _ = recipes.details(f, &theme, .from("more"), &app.more, "More", .{ .recipe = recipe_more, .tokens = recipe_tokens }) catch unreachable;
+        _ = recipes.select(f, "shape", comptime lcgf.widgets_select.positional(2), &app.shape, shapes.texts, .{ .recipe = recipe_shape, .tokens = recipe_tokens, .transition = eases, .fade = &app.shape_fade }) catch unreachable;
+        _ = recipes.details(f, &theme, .from("more"), &app.more, "More", .{ .recipe = recipe_more, .tokens = recipe_tokens, .transition = eases, .fade = &app.more_fade }) catch unreachable;
         _ = f.textStyled("Hidden text", .{ .color = theme.text, .wrap = true }, .{ .role = .label });
         lcgf.widgets_accordion.close(f);
         f.close();
@@ -211,10 +221,11 @@ fn center(r: lcgf.types.Rect) [2]f32 {
 /// found, and the Clear button empties it; the required text area is :invalid until it has text;
 /// the number field is :invalid while its text reads above max, and Enter clamps it to max;
 /// the select's button takes its hover fill, opens its list, and Down and Enter pick Square;
-/// the section's header takes its hover fill and a click opens it.
+/// the section's header takes its hover fill and a click opens it. A frame lasts as long as
+/// the transitions, so each lands in one; the Small option's hover fill eases over two.
 pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     _ = page;
-    var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
+    var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 }, .dt = 0.1 };
     var t = p.frame(h, &in).tree;
     const docs = t.find(.from("docs"));
     const bold = t.find(.from("bold"));
@@ -237,7 +248,12 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     const small = t.find(lcgf.types.Id.from("size").with(0));
     const large = t.find(lcgf.types.Id.from("size").with(1));
     in.pointer = center(t.rect(small));
+    const before = t.c.look[small].fill;
+    in.dt = 0.05;
     t = p.frame(h, &in).tree;
+    try std.testing.expect(t.c.look[small].fill != before and t.c.look[small].fill != green.bitsOf());
+    t = p.frame(h, &in).tree;
+    in.dt = 0.1;
     try std.testing.expectEqual(green.bitsOf(), t.c.look[small].fill);
     try std.testing.expect(green.bitsOf() != t.c.look[large].fill);
     in.buttons.left = true;

@@ -1,9 +1,11 @@
 //! transitions, written by hand: `transition` on a widget makes it a recipe widget that
 //! eases its root (`controls.Transition`), its leg kept in a generated `<id>_fade` field;
 //! Plain has no state CSS of its own, so the stock hover fill eases. On a box with state CSS
-//! the transition eases the box. `animation` plays its @keyframes as tracks over the root's
-//! channels from a generated `<id>_clock`: Pulse for ever, back and forth; Glow twice, then
-//! held at its end (forwards). Both frontends step by the input's dt.
+//! the transition eases the box: the card's opacity, padding and transform, so its hover
+//! padding eases through layout. `animation` plays its @keyframes as tracks over the root's
+//! channels from a generated `<id>_clock`: Pulse for ever, back and forth, from its own
+//! opacity and transform (no `from` keyframe: a `Fade.unset` key); Glow twice, then held at
+//! its end (forwards). Both frontends step by the input's dt.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -35,12 +37,25 @@ const recipe_go: recipes.Recipe = .{ .parts = recipes.model.button.parts, .rules
 }) };
 const recipe_plain: recipes.Recipe = .{ .parts = recipes.model.button.parts, .rules = &(recipes.model.button_rules ++ [_]style.Rule{}) };
 const recipe_card: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(8), .fill = .rgb(48, 52, 64) } } }}, .rules = &[_]style.Rule{
-    .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.opacity, 0.5)} },
+    .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{ style.set(.opacity, 0.5), style.set(.transform, .{ 1, 0, 0, 1, 0, 2 }), style.set(.padding_left, 12), style.set(.padding_top, 12), style.set(.padding_right, 12), style.set(.padding_bottom, 12) } },
 } };
 
 const recipe_pulse: recipes.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(4) } } }}, .rules = &[_]style.Rule{} };
 const recipe_glow: recipes.Recipe = .{ .parts = recipes.model.button.parts, .rules = &(recipes.model.button_rules ++ [_]style.Rule{}) };
-const pulse: recipes.controls.Animation = .{ .seconds = 0.2, .iterations = lcgf.types.inf, .alternate = true, .tracks = &.{.{ .channel = 12, .keys = &.{ .{ .at = 0, .value = 1 }, .{ .at = 0.1, .value = 0.6 }, .{ .at = 0.2, .value = 0.2 } } }} };
+const own = recipes.controls.Fade.unset;
+/// One track per transform channel toward translateX(4px), each from its own value.
+fn toward(comptime channel: u8, comptime value: f32) recipes.controls.Animation.Track {
+    return .{ .channel = channel, .keys = &.{ .{ .at = 0, .value = own }, .{ .at = 0.2, .value = value } } };
+}
+const pulse: recipes.controls.Animation = .{ .seconds = 0.2, .iterations = lcgf.types.inf, .alternate = true, .tracks = &.{
+    .{ .channel = 12, .keys = &.{ .{ .at = 0, .value = own }, .{ .at = 0.1, .value = 0.6 }, .{ .at = 0.2, .value = 0.2 } } },
+    toward(13, 1),
+    toward(14, 0),
+    toward(15, 0),
+    toward(16, 1),
+    toward(17, 4),
+    toward(18, 0),
+} };
 const glow: recipes.controls.Animation = .{ .seconds = 0.1, .iterations = 2, .tracks = &.{
     .{ .channel = 0, .keys = &.{ .{ .at = 0, .value = 0 }, .{ .at = 0.1, .value = 255, .ease = .in_out } } },
     .{ .channel = 1, .keys = &.{ .{ .at = 0, .value = 0 }, .{ .at = 0.1, .value = 128, .ease = .in_out } } },
@@ -49,7 +64,7 @@ const glow: recipes.controls.Animation = .{ .seconds = 0.1, .iterations = 2, .tr
 } };
 
 const button_transition: recipes.controls.Transition = .{ .seconds = 0.1, .ease = .linear, .fill = true, .text_color = true };
-const card_transition: recipes.controls.Transition = .{ .seconds = 0.2, .opacity = true };
+const card_transition: recipes.controls.Transition = .{ .seconds = 0.2, .opacity = true, .transform = true, .padding = true };
 
 const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
 

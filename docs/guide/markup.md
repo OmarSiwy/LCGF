@@ -468,21 +468,29 @@ nested queries combine. `@media` on other
 boxes waits for style variants (engine spec F3) and is an error.
 
 `transition` on a recipe widget or box eases its root's `background-color`, `border-color`,
-`color` and `opacity` (`all` is those four) to each new value: `controls.Transition`, its leg
-kept in a generated `<id>_fade` field of the State and stepped by the input's `dt` in both
-frontends. A widget with a transition is a recipe widget even without state CSS, so the
-stock hover and press colours ease too. One duration and easing per element (`linear`,
-`ease`, `ease-in`, `ease-out`, `ease-in-out`); delays, other properties and transitions on
-other widgets are errors. On a box nothing restyles at run time a transition never runs and
-nothing is emitted; `none` or zero durations animate nothing anywhere.
+`color`, `opacity`, `transform`, `padding`, `gap`, `border-radius`, `border-width`, `width`
+and `height` (`all` is all of them) to each new value: `controls.Transition`, its leg kept in
+a generated `<id>_fade` field of the State and stepped by the input's `dt` in both
+frontends. Padding, gap and sizes ease through layout, which runs after the style each frame;
+a size that is not px on either end jumps, as `auto` does. A radio group eases each option,
+with one `Fade` per option; a `<summary>` eases its section's header, and a transition on
+the `<details>` itself is not read. A widget with a transition is a recipe widget even
+without state CSS, so the stock hover and press colours ease too. One duration and easing
+per element (`linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`); delays, other
+properties and transitions on other widgets are errors. On a box nothing restyles at run
+time a transition never runs and nothing is emitted; `none` or zero durations animate
+nothing anywhere.
 
 `animation: <name> <duration> [<easing>] [<count>|infinite] [alternate] [forwards]` on a
-recipe widget or box plays `@keyframes <name>` over the root's `background-color`,
-`border-color`, `color` and `opacity` (`controls.Animation`, one track per colour channel),
-its clock in a generated `<id>_clock` field. Each animated property is given at `from` and
-`to`; a finite animation needs `forwards`, since returning to the element's own style at
-the end is not lowered. A delay, `reverse`, `paused`, several animations on one element and
-other properties are errors.
+recipe widget or box plays `@keyframes <name>` over the same properties as a transition
+(`controls.Animation`, one track per channel: four per colour, six per transform matrix, one
+per length), its clock in a generated `<id>_clock` field. A property missing at `from` or `to`
+takes the element's own value there (a `Fade.unset` key), as in CSS. Transforms ease the
+matrix entry by entry, so a rotation passes through a scale. A finite animation needs
+`forwards`, since returning to the element's own style at the end is not lowered. A delay,
+`reverse`, `paused`, several animations on one element, an animation on a radio group, a
+property and its longhand in one `@keyframes`, more than 14 keyframes per property and other
+properties are errors.
 
 ## What is not lowered
 

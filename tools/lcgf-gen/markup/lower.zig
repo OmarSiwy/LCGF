@@ -551,7 +551,7 @@ pub const Lowerer = struct {
             const x = l.ir_of[n];
             if (x == none or nodes.items(.live)[x].recipe.len > 0) continue;
             const kind = nodes.items(.kind)[x];
-            const control = l.recipeWidget(n, x) and kind != .container and !l.composite(kind);
+            const control = l.recipeWidget(n, x) and kind != .container;
             const eases = l.transitionOf(n) != null and control;
             const plays = l.k.get(n, .animation).decl != none and (control or (kind == .container and l.recipeWidget(n, x)));
             if ((nodes.items(.live)[x].disabled and kind != .container) or eases or plays) l.recipeOf(n, &reported);
@@ -599,23 +599,25 @@ pub const Lowerer = struct {
     fn checkTransitions(l: *Lowerer) void {
         for (0..l.doc.nodes.len) |n_| {
             const n: u32 = @intCast(n_);
-            const x = l.ir_of[n];
+            const x = l.movingNode(n);
             if (x == none) continue;
             const r = l.transitionOf(n) orelse continue;
             const at = l.c.decls.items(.loc)[l.k.get(n, .transition).decl];
             const node = l.page.nodes.get(x);
-            if (node.live.recipe.len > 0 and !l.composite(node.kind)) {
+            if (node.live.recipe.len > 0) {
                 const t = l.transition(r, at) orelse continue;
                 const copies = l.copiesOf(n, at, "a transition") orelse continue;
                 l.page.nodes.items(.live)[x].transition = t;
-                l.fieldOf(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition", copies);
+                // A radio group eases each option: one fade per option.
+                const cap = if (node.kind == .radio) @as(u32, @intCast(node.captions.len)) else copies;
+                l.fieldOf(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition", cap);
                 continue;
             }
             const restyled = node.uses.len > 0 or node.text_uses.color != none or node.text_uses.px != none or switch (node.kind) {
                 .container, .landmark, .label, .text, .heading, .when, .choice, .list, .each, .spacer, .separator => false,
                 else => true,
             };
-            if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a link, a toggle button, a checkbox, a switch, a range or a text or number field outside lcgf-each); this one restyles instantly", .{l.tag(n)});
+            if (restyled) l.ds.err(at, "transition on <{s}>: its look changes at run time and only a recipe widget eases (a <button>, a link, a toggle button, a checkbox, a switch, a radio, a range, a text, search or number field, a text area, a <select> or a <summary>, outside lcgf-each); this one restyles instantly", .{l.tag(n)});
         }
     }
 
@@ -624,7 +626,7 @@ pub const Lowerer = struct {
     fn checkAnimations(l: *Lowerer) void {
         for (0..l.doc.nodes.len) |n_| {
             const n: u32 = @intCast(n_);
-            const x = l.ir_of[n];
+            const x = l.movingNode(n);
             const e = l.k.get(n, .animation);
             if (x == none or e.decl == none) continue;
             ok(l.reads.put(l.arena, (@as(u64, n) << 32) | e.decl, {}));
@@ -632,18 +634,20 @@ pub const Lowerer = struct {
             const r = l.substitute(n, d.first, d.end, d.loc) orelse continue;
             if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "none")) continue;
             const node = l.page.nodes.get(x);
-            if (node.live.recipe.len == 0 or l.composite(node.kind)) {
-                l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text or number field outside lcgf-each", .{l.tag(n)});
+            // ponytail: a radio group's options would each need a clock; one Clock per group
+            // that samples every option is the upgrade.
+            if (node.live.recipe.len == 0 or node.kind == .radio) {
+                l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range, a text, search or number field, a text area, a <select> or a <summary>, outside lcgf-each", .{l.tag(n)});
                 continue;
             }
-            const a = l.animation(r, d.loc) orelse continue;
+            const a = l.animation(n, r, d.loc) orelse continue;
             const copies = l.copiesOf(n, d.loc, "an animation") orelse continue;
             l.page.nodes.items(.live)[x].animation = a;
             l.fieldOf(ok(std.fmt.allocPrint(l.arena, "{s}_clock", .{node.id})), .clock, d.loc, "an animation", copies);
         }
     }
 
-    fn animation(l: *Lowerer, r: [2]u32, at: Loc) ?lcgf.theme_recipes.controls.Animation {
+    fn animation(l: *Lowerer, n: u32, r: [2]u32, at: Loc) ?lcgf.theme_recipes.controls.Animation {
         const Key = lcgf.keyframes.Key;
         var out: lcgf.theme_recipes.controls.Animation = .{};
         var name: []const u8 = "";
@@ -708,49 +712,148 @@ pub const Lowerer = struct {
             l.ds.err(at, "no @keyframes {s}", .{name});
             return null;
         };
-        // One track per channel of each property a stop sets; every property at 0% and 100%.
-        const Channels = struct { prop: []const u8, first: u8, count: u8 };
-        const props = [_]Channels{ .{ .prop = "background-color", .first = 0, .count = 4 }, .{ .prop = "border-color", .first = 4, .count = 4 }, .{ .prop = "color", .first = 8, .count = 4 }, .{ .prop = "opacity", .first = 12, .count = 1 } };
+        // One track per channel of each property a stop sets. A property missing at 0% or
+        // 100% gets a key of `Fade.unset` there, which takes the element's own value.
         var anim_tracks: std.ArrayList(lcgf.theme_recipes.controls.Animation.Track) = .empty;
-        for (props) |pc| {
-            var keys: [4]std.ArrayList(Key) = @splat(.empty);
+        var taken: [lcgf.theme_recipes.controls.Fade.channels]bool = @splat(false);
+        for (keyframed) |pc| {
+            var keys: [6]std.ArrayList(Key) = @splat(.empty);
             for (kf.stops) |stop| for (stop.decl_first..stop.decl_first + stop.decl_count) |di| {
                 const dd = l.c.decls.get(di);
-                const is = std.mem.eql(u8, dd.name, pc.prop) or (pc.first == 0 and std.mem.eql(u8, dd.name, "background"));
+                const is = for (pc.props) |p| {
+                    if (std.mem.eql(u8, dd.name, p)) break true;
+                } else false;
                 if (!is) continue;
-                const v = if (pc.count == 1) blk: {
-                    const ok_num = dd.end - dd.first == 1 and l.c.toks.items(.type)[dd.first] == .number;
-                    if (!ok_num) {
-                        l.ds.err(dd.loc, "opacity in a keyframe takes a number", .{});
-                        return null;
-                    }
-                    break :blk [4]f32{ @floatCast(l.c.toks.items(.num)[dd.first]), 0, 0, 0 };
-                } else blk: {
-                    const c = values.color(l.c, dd.first, dd.end) orelse {
-                        l.ds.err(dd.loc, "{s} in a keyframe takes a colour", .{dd.name});
-                        return null;
-                    };
-                    break :blk [4]f32{ @floatFromInt(c.r), @floatFromInt(c.g), @floatFromInt(c.b), @floatFromInt(c.a) };
-                };
-                for (0..pc.count) |k| ok(keys[k].append(l.arena, .{ .at = stop.at * out.seconds, .value = v[k], .ease = if (keys[k].items.len == 0) .linear else ease }));
+                const v = l.keyValue(n, pc.kind, dd) orelse return null;
+                for (0..pc.count) |k| ok(keys[k].append(l.arena, .{ .at = stop.at * out.seconds, .value = v[k], .ease = ease }));
             };
             if (keys[0].items.len == 0) continue;
-            if (keys[0].items[0].at != 0 or keys[0].items[keys[0].items.len - 1].at != out.seconds) {
-                l.ds.err(kf.loc, "@keyframes {s}: give {s} at from and at to; a keyframe taking the element's own value is not lowered", .{ name, pc.prop });
+            if (keys[0].items.len + 2 > lcgf.theme_recipes.controls.Animation.max_keys) {
+                l.ds.err(kf.loc, "@keyframes {s}: {s} takes at most {d} keyframes", .{ name, pc.props[0], lcgf.theme_recipes.controls.Animation.max_keys - 2 });
                 return null;
+            }
+            for (pc.first..pc.first + pc.count) |ch| {
+                if (taken[ch]) {
+                    l.ds.err(kf.loc, "@keyframes {s}: {s} and another property set one value; animate one of them", .{ name, pc.props[0] });
+                    return null;
+                }
+                taken[ch] = true;
+            }
+            const own = lcgf.theme_recipes.controls.Fade.unset;
+            for (keys[0..pc.count]) |*list| {
+                if (list.items[0].at != 0) ok(list.insert(l.arena, 0, .{ .at = 0, .value = own }));
+                if (list.items[list.items.len - 1].at != out.seconds) ok(list.append(l.arena, .{ .at = out.seconds, .value = own, .ease = ease }));
+                list.items[0].ease = .linear;
             }
             for (0..pc.count) |k| ok(anim_tracks.append(l.arena, .{ .channel = @intCast(pc.first + k), .keys = keys[k].items }));
         }
         for (kf.stops) |stop| for (stop.decl_first..stop.decl_first + stop.decl_count) |di| {
             const nm = l.c.decls.items(.name)[di];
-            const known = for ([_][]const u8{ "background-color", "background", "border-color", "color", "opacity" }) |k| {
-                if (std.mem.eql(u8, k, nm)) break true;
-            } else false;
-            if (!known) l.ds.err(l.c.decls.items(.loc)[di], "{s} in a keyframe is not lowered; background-color, border-color, color and opacity animate", .{nm});
+            var known = false;
+            for (keyframed) |pc| for (pc.props) |p| {
+                known = known or std.mem.eql(u8, p, nm);
+            };
+            if (!known) l.ds.err(l.c.decls.items(.loc)[di], "{s} in a keyframe is not lowered; colours, opacity, transform, padding, gap, border-radius, border-width, width and height animate", .{nm});
         };
         out.tracks = anim_tracks.items;
         return out;
     }
+
+    const KeyKind = enum { color, number, matrix, length, padding };
+
+    /// The properties a keyframe animates, by `controls.Fade` channel.
+    const keyframed = [_]struct { props: []const []const u8, first: u8, count: u8, kind: KeyKind }{
+        .{ .props = &.{ "background-color", "background" }, .first = 0, .count = 4, .kind = .color },
+        .{ .props = &.{"border-color"}, .first = 4, .count = 4, .kind = .color },
+        .{ .props = &.{"color"}, .first = 8, .count = 4, .kind = .color },
+        .{ .props = &.{"opacity"}, .first = 12, .count = 1, .kind = .number },
+        .{ .props = &.{"transform"}, .first = 13, .count = 6, .kind = .matrix },
+        .{ .props = &.{"padding"}, .first = 19, .count = 4, .kind = .padding },
+        .{ .props = &.{"padding-left"}, .first = 19, .count = 1, .kind = .length },
+        .{ .props = &.{"padding-top"}, .first = 20, .count = 1, .kind = .length },
+        .{ .props = &.{"padding-right"}, .first = 21, .count = 1, .kind = .length },
+        .{ .props = &.{"padding-bottom"}, .first = 22, .count = 1, .kind = .length },
+        .{ .props = &.{"gap"}, .first = 23, .count = 1, .kind = .length },
+        .{ .props = &.{"border-radius"}, .first = 24, .count = 1, .kind = .length },
+        .{ .props = &.{"border-width"}, .first = 25, .count = 1, .kind = .length },
+        .{ .props = &.{"width"}, .first = 26, .count = 1, .kind = .length },
+        .{ .props = &.{"height"}, .first = 27, .count = 1, .kind = .length },
+    };
+
+    /// Keyframe declaration `dd` on node `n` as its channels' values, or null after an error.
+    fn keyValue(l: *Lowerer, n: u32, kind: KeyKind, dd: anytype) ?[6]f32 {
+        var out: [6]f32 = @splat(0);
+        switch (kind) {
+            .color => {
+                const c = values.color(l.c, dd.first, dd.end) orelse {
+                    l.ds.err(dd.loc, "{s} in a keyframe takes a colour", .{dd.name});
+                    return null;
+                };
+                out[0..4].* = .{ @floatFromInt(c.r), @floatFromInt(c.g), @floatFromInt(c.b), @floatFromInt(c.a) };
+            },
+            .number => {
+                if (dd.end - dd.first != 1 or l.c.toks.items(.type)[dd.first] != .number) {
+                    l.ds.err(dd.loc, "{s} in a keyframe takes a number", .{dd.name});
+                    return null;
+                }
+                out[0] = @floatCast(l.c.toks.items(.num)[dd.first]);
+            },
+            // ponytail: the matrices ease channel by channel, which turns a rotation through a
+            // scale; interpolate the function lists as CSS does if that shows.
+            .matrix => out = if (values.isIdent(l.c, dd.first, "none")) .{ 1, 0, 0, 1, 0, 0 } else l.matrixOf(n, dd.first, dd.end) orelse return null,
+            .length, .padding => {
+                var got: [4]f32 = undefined;
+                var count: usize = 0;
+                var rd: values.Reader = .init(l.c, dd.first, dd.end);
+                while (rd.next()) |t| {
+                    const len = values.len(l.c, t);
+                    const v = if (len) |x| values.px(x, l.text[n].px, l.root_px) else null;
+                    if (v == null or count == (if (kind == .length) @as(usize, 1) else 4)) {
+                        l.ds.err(dd.loc, "{s} in a keyframe takes {s} in px, em or rem", .{ dd.name, if (kind == .length) "a length" else "one to four lengths" });
+                        return null;
+                    }
+                    got[count] = v.?;
+                    count += 1;
+                }
+                if (count == 0) {
+                    l.ds.err(dd.loc, "'{s}' has no value", .{dd.name});
+                    return null;
+                }
+                if (kind == .length) {
+                    out[0] = got[0];
+                } else {
+                    // CSS's top, right, bottom, left as left, top, right, bottom.
+                    const top = got[0];
+                    const right = if (count > 1) got[1] else top;
+                    const bottom = if (count > 2) got[2] else top;
+                    const left = if (count > 3) got[3] else right;
+                    out[0..4].* = .{ left, top, right, bottom };
+                }
+            },
+        }
+        return out;
+    }
+
+    /// The CSS properties a transition names, and the `controls.Transition` fields they set.
+    const transitioned = .{
+        .{ "background-color", .{"fill"} },
+        .{ "background", .{"fill"} },
+        .{ "border-color", .{"border_color"} },
+        .{ "color", .{"text_color"} },
+        .{ "opacity", .{"opacity"} },
+        .{ "transform", .{"transform"} },
+        .{ "padding", .{"padding"} },
+        .{ "padding-left", .{"padding"} },
+        .{ "padding-top", .{"padding"} },
+        .{ "padding-right", .{"padding"} },
+        .{ "padding-bottom", .{"padding"} },
+        .{ "gap", .{"gap"} },
+        .{ "border-radius", .{"radius"} },
+        .{ "border-width", .{"border_width"} },
+        .{ "border", .{ "border_color", "border_width" } },
+        .{ "width", .{"width"} },
+        .{ "height", .{"height"} },
+    };
 
     /// `transition: <property> <duration> [<easing>], …` as one `controls.Transition`: one
     /// duration and easing for all, colours and opacity only, no delay.
@@ -765,7 +868,7 @@ pub const Lowerer = struct {
             var item: values.Reader = .init(l.c, s0, e);
             var seconds: ?f32 = null;
             var ease: ?lcgf.tweens.Ease = null;
-            var props: [4]bool = @splat(false);
+            var props: [transitioned.len]bool = @splat(false);
             while (item.next()) |t| {
                 const ty = l.c.toks.items(.type)[t];
                 const str = l.c.toks.items(.str)[t];
@@ -794,16 +897,16 @@ pub const Lowerer = struct {
                 if (found) continue;
                 if (css.eq(str, "all")) {
                     props = @splat(true);
-                } else if (css.eq(str, "background-color") or css.eq(str, "background")) {
-                    props[0] = true;
-                } else if (css.eq(str, "border-color")) {
-                    props[1] = true;
-                } else if (css.eq(str, "color")) {
-                    props[2] = true;
-                } else if (css.eq(str, "opacity")) {
-                    props[3] = true;
-                } else if (!css.eq(str, "none")) {
-                    l.ds.err(l.c.tokLoc(t), "a transition of {s} is not lowered; background-color, border-color, color and opacity ease", .{str});
+                    continue;
+                }
+                if (css.eq(str, "none")) continue;
+                var named = false;
+                inline for (transitioned, 0..) |tp, k| if (css.eq(str, tp[0])) {
+                    props[k] = true;
+                    named = true;
+                };
+                if (!named) {
+                    l.ds.err(l.c.tokLoc(t), "a transition of {s} is not lowered; colours, opacity, transform, padding, gap, border-radius, border-width, width and height ease", .{str});
                     return null;
                 }
             }
@@ -817,10 +920,9 @@ pub const Lowerer = struct {
             out.seconds = secs;
             out.ease = ease orelse .in_out;
             if (std.mem.allEqual(bool, &props, false)) props = @splat(true); // `transition: 0.2s` is `all`
-            out.fill = out.fill or props[0];
-            out.border_color = out.border_color or props[1];
-            out.text_color = out.text_color or props[2];
-            out.opacity = out.opacity or props[3];
+            inline for (transitioned, 0..) |tp, k| if (props[k]) inline for (tp[1]) |name| {
+                @field(out, name) = true;
+            };
         }
         return out;
     }
@@ -1144,11 +1246,13 @@ pub const Lowerer = struct {
         return if (p != none and l.doc.isElement(p, "details")) l.ir_of[p] else none;
     }
 
-    /// Recipe widgets whose builders take no Fade or Clock: a transition or animation on them
-    /// stays an error.
-    // ponytail: add Fade/Clock to the radio, search, text area, select and section builders when asked.
-    fn composite(_: *const Lowerer, kind: ir.Kind) bool {
-        return kind == .radio or kind == .search or kind == .textarea or kind == .select or kind == .section;
+    /// The IR node a transition or animation on document node `n` moves: its own, a
+    /// `<summary>`'s section (whose header is the recipe's root; the `<details>` itself moves
+    /// nothing), or a later radio's group.
+    fn movingNode(l: *const Lowerer, n: u32) u32 {
+        if (l.doc.isElement(n, "details")) return none;
+        if (l.radioLead(n)) |lead| return l.ir_of[lead];
+        return l.recipeNode(n);
     }
 
     /// The first `<input type=radio>` of document node `n`'s group when `n` is a later one.
@@ -2595,15 +2699,22 @@ pub const Lowerer = struct {
         }
         const v = l.declared(n, .transform) orelse return;
         if (values.isIdent(l.c, v.first, "none")) return;
-        var m = s.transform;
-        var rd: values.Reader = .init(l.c, v.first, v.end);
+        const f = l.matrixOf(n, v.first, v.end) orelse return;
+        s.transform = mul(s.transform, f);
+    }
+
+    /// Transform functions `first..end` on node `n` folded into one 2D matrix, or null after
+    /// an error.
+    fn matrixOf(l: *Lowerer, n: u32, first: u32, end: u32) ?[6]f32 {
+        var m: [6]f32 = .{ 1, 0, 0, 1, 0, 0 };
+        var rd: values.Reader = .init(l.c, first, end);
         while (rd.next()) |t| {
             if (l.c.toks.items(.type)[t] != .function) {
-                l.badValue(t, .transform, v.end);
-                return;
+                l.badValue(t, .transform, end);
+                return null;
             }
             const name = l.c.toks.items(.str)[t];
-            const close = values.closeOf(l.c, t, v.end);
+            const close = values.closeOf(l.c, t, end);
             var args: [6]f32 = @splat(0);
             var count: usize = 0;
             var ar: values.Reader = .init(l.c, t + 1, close - 1);
@@ -2638,11 +2749,11 @@ pub const Lowerer = struct {
                 f = args;
             } else {
                 l.ds.err(l.c.tokLoc(t), "{s}() is not a 2D transform function LCGF folds", .{name});
-                return;
+                return null;
             }
             m = mul(m, f);
         }
-        s.transform = m;
+        return m;
     }
 
     fn container(l: *Lowerer, n: u32, parent: u32, disp: Display) void {

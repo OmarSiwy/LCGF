@@ -69,6 +69,15 @@ pub const Transition = struct {
     border_color: bool = false,
     text_color: bool = false,
     opacity: bool = false,
+    transform: bool = false,
+    /// Padding, gap, radius and border width, and width and height while both ends are px:
+    /// they ease through layout, which runs after the style each frame.
+    padding: bool = false,
+    gap: bool = false,
+    radius: bool = false,
+    border_width: bool = false,
+    width: bool = false,
+    height: bool = false,
 
     /// `t` under the platform's reduced motion: no time, so every change lands at once.
     pub fn under(t: Transition, reduced_motion: bool) Transition {
@@ -76,19 +85,34 @@ pub const Transition = struct {
         if (reduced_motion) out.seconds = 0;
         return out;
     }
+
+    /// The `Fade` channels it eases.
+    pub fn mask(t: Transition) [Fade.channels]bool {
+        var m: [Fade.channels]bool = @splat(false);
+        inline for (.{ .{ "fill", 0, 4 }, .{ "border_color", 4, 4 }, .{ "text_color", 8, 4 }, .{ "opacity", 12, 1 }, .{ "transform", 13, 6 }, .{ "padding", 19, 4 }, .{ "gap", 23, 1 }, .{ "radius", 24, 1 }, .{ "border_width", 25, 1 }, .{ "width", 26, 1 }, .{ "height", 27, 1 } }) |f| {
+            if (@field(t, f[0])) @memset(m[f[1]..][0..f[2]], true);
+        }
+        return m;
+    }
 };
 
 /// What a transitioning control painted: the eased properties' last leg, which the caller
 /// keeps (a field of the State, a variable of the app). Both front ends step it once a frame
 /// by the input's `dt`, so they paint the same values.
 pub const Fade = struct {
-    /// Fill, border and text colours as 0 to 255 channels, then opacity.
+    /// The root's animatable properties, one float each (`read`).
     from: [channels]f32 = @splat(0),
     to: [channels]f32 = @splat(0),
     elapsed: f32 = 0,
     live: bool = false,
 
-    pub const channels = 13;
+    /// Fill 0-3, border colour 4-7 and text colour 8-11 as 0 to 255 channels, opacity 12,
+    /// transform 13-18, padding 19-22 (left, top, right, bottom), gap 23, radius 24, border
+    /// width 25, width 26 and height 27 (px; `unset` when a size is not px).
+    pub const channels = 28;
+    /// A size that is not px, which jumps instead of easing as CSS's `auto` does; as a
+    /// keyframe's value, the property's own value (`Clock`). Not NaN, so values compare equal.
+    pub const unset = -std.math.inf(f32);
 
     /// The next state toward `target`, whose transitioned properties it eases in place: a new
     /// target starts a leg from the value painted now.
@@ -102,7 +126,7 @@ pub const Fade = struct {
             out.elapsed = 0;
         }
         out.elapsed = @min(out.elapsed + dt, t.seconds);
-        write(target, out.value(t), t);
+        write(target, out.value(t), t.mask());
         return out;
     }
 
@@ -116,7 +140,7 @@ pub const Fade = struct {
         const k = tweens.ease_table[@backingInt(t.ease)];
         const e = ((k[0] * u + k[1]) * u + k[2]) * u;
         var out: [channels]f32 = undefined;
-        for (&out, fade.from, fade.to) |*o, a, b| o.* = a + (b - a) * e;
+        for (&out, fade.from, fade.to) |*o, a, b| o.* = if (a == unset or b == unset) b else a + (b - a) * e;
         return out;
     }
 
@@ -126,14 +150,34 @@ pub const Fade = struct {
             out[k * 4 ..][0..4].* = .{ @floatFromInt(col.r), @floatFromInt(col.g), @floatFromInt(col.b), @floatFromInt(col.a) };
         }
         out[12] = c.box.opacity;
+        out[13..19].* = c.box.transform;
+        out[19..23].* = c.box.pad;
+        out[23] = c.box.gap;
+        out[24] = c.box.radius;
+        out[25] = c.box.border;
+        inline for (.{ 26, 27 }, 0..) |at, axis| {
+            const size = c.box.size[axis];
+            out[at] = if (size.kind == .px) size.v else unset;
+        }
         return out;
     }
 
-    pub fn write(c: *style.Computed, v: [channels]f32, t: Transition) void {
-        if (t.fill) c.box.fill = color(v[0..4].*);
-        if (t.border_color) c.box.border_color = color(v[4..8].*);
-        if (t.text_color) c.text.color = color(v[8..12].*);
-        if (t.opacity) c.box.opacity = v[12];
+    /// The channels `mask` takes from `v` into `c`.
+    pub fn write(c: *style.Computed, v: [channels]f32, mask: [channels]bool) void {
+        if (mask[0]) c.box.fill = color(v[0..4].*);
+        if (mask[4]) c.box.border_color = color(v[4..8].*);
+        if (mask[8]) c.text.color = color(v[8..12].*);
+        if (mask[12]) c.box.opacity = v[12];
+        if (mask[13]) c.box.transform = v[13..19].*;
+        for (0..4) |k| if (mask[19 + k]) {
+            c.box.pad[k] = v[19 + k];
+        };
+        if (mask[23]) c.box.gap = v[23];
+        if (mask[24]) c.box.radius = v[24];
+        if (mask[25]) c.box.border = v[25];
+        inline for (.{ 26, 27 }, 0..) |at, axis| if (mask[at] and v[at] != unset) {
+            c.box.size[axis] = .px(v[at]);
+        };
     }
 
     fn color(v: [4]f32) types.Color {
@@ -141,9 +185,9 @@ pub const Fade = struct {
     }
 };
 
-/// CSS `animation` on a recipe control: keyframes over its root's colours and opacity, by
-/// `Fade` channel (fill 0-3, border colour 4-7, text colour 8-11 as 0 to 255, opacity 12),
-/// `at` in seconds of one iteration. The animated channels override the resolved values.
+/// CSS `animation` on a recipe control: keyframes over its root's properties, by `Fade`
+/// channel, `at` in seconds of one iteration. The animated channels override the resolved
+/// values; a key whose value is `Fade.unset` takes the resolved value.
 pub const Animation = struct {
     tracks: []const Track = &.{},
     /// One iteration.
@@ -154,6 +198,8 @@ pub const Animation = struct {
     alternate: bool = false,
 
     pub const Track = struct { channel: u8, keys: []const keyframes.Key };
+    /// Keys a track reads; past this many the rest are ignored.
+    pub const max_keys = 16;
 
     /// Seconds into the current iteration at `elapsed`: the last iteration holds at its end.
     pub fn local(a: Animation, elapsed: f32) f32 {
@@ -187,9 +233,27 @@ pub const Clock = struct {
         var out = clock;
         out.elapsed = if (reduced_motion) (if (std.math.isInf(a.iterations)) 0 else a.seconds * a.iterations) else clock.elapsed + dt;
         var v = Fade.read(target.*);
+        var mask: [Fade.channels]bool = @splat(false);
         const t = a.local(out.elapsed);
-        for (a.tracks) |track| v[track.channel] = keyframes.sample(track.keys, t);
-        Fade.write(target, v, .{ .fill = true, .border_color = true, .text_color = true, .opacity = true });
+        for (a.tracks) |track| {
+            // A key of `Fade.unset` is the property's own value now, as a missing from or to
+            // keyframe is in CSS.
+            // A size that is not px has no value to ease from: it keeps its own.
+            var buf: [Animation.max_keys]keyframes.Key = undefined;
+            const n = @min(track.keys.len, Animation.max_keys);
+            var own = false;
+            for (buf[0..n], track.keys[0..n]) |*k, key| {
+                k.* = key;
+                if (key.value == Fade.unset) {
+                    k.value = v[track.channel];
+                    own = true;
+                }
+            }
+            if (own and v[track.channel] == Fade.unset) continue;
+            v[track.channel] = keyframes.sample(buf[0..n], t);
+            mask[track.channel] = true;
+        }
+        Fade.write(target, v, mask);
         return out;
     }
 };
@@ -214,6 +278,8 @@ pub const Options = struct {
     /// CSS `transition` of the root, and the state it keeps between frames; both or neither.
     transition: Transition = .{},
     fade: ?*Fade = null,
+    /// A radio group's instead of `fade`: one per option, which `transition` eases.
+    fades: []Fade = &.{},
     /// A box only: the widget whose hover, press and focus it takes instead of its own, as a
     /// shadow drawn before the box it belongs to does.
     follows: types.Id = .none,

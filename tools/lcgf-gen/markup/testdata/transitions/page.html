@@ -5,10 +5,10 @@
   <style>
     button { transition: background-color 100ms linear, color 100ms linear; }
     #go:hover { background-color: #c86400; }
-    .card { padding: 8px; background-color: #303440; transition: opacity 0.2s; }
-    .card:hover { opacity: 0.5; }
+    .card { padding: 8px; background-color: #303440; transition: opacity 0.2s, padding 0.2s, transform 0.2s; }
+    .card:hover { opacity: 0.5; padding: 12px; transform: translateY(2px); }
     .pulse { padding: 4px; animation: pulse 0.2s linear infinite alternate; }
-    @keyframes pulse { from { opacity: 1; } 50% { opacity: 0.6; } to { opacity: 0.2; } }
+    @keyframes pulse { 50% { opacity: 0.6; } to { opacity: 0.2; transform: translateX(4px); } }
     #glow { animation: glow 0.1s 2 forwards; }
     @keyframes glow { from { background-color: #000000; } to { background-color: #ff8000; } }
   </style>

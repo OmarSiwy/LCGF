@@ -181,6 +181,14 @@ pub fn textarea(f: *Frame, id: types.Id, field: anytype, rows: u32, hint: []cons
         states.invalid = options.states.invalid or options.validation.invalid(field.text());
         r = try resolveArea(f, recipe, options, states);
     }
+    if (options.fade) |fade| {
+        fade.* = r.fade_next;
+        f.ctx.motion = @max(f.ctx.motion, fade.remaining(options.transition.under(f.ctx.settings.reduced_motion)));
+    }
+    if (options.clock) |clock| {
+        clock.* = r.clock_next;
+        if (options.animation.running(clock.elapsed)) f.ctx.motion = @max(f.ctx.motion, f.in.dt);
+    }
     var root = r.root;
     const content = r.content;
     const placeholder = r.placeholder;
@@ -232,12 +240,17 @@ pub fn textarea(f: *Frame, id: types.Id, field: anytype, rows: u32, hint: []cons
     return response;
 }
 
-const Area = struct { root: style.Computed, content: style.Computed, placeholder: style.Computed, selection: style.Computed, caret: style.Computed, focus: style.Computed, metrics: @import("../widgets/base.zig").Theme };
+const Area = struct { root: style.Computed, content: style.Computed, placeholder: style.Computed, selection: style.Computed, caret: style.Computed, focus: style.Computed, metrics: @import("../widgets/base.zig").Theme, fade_next: controls.Fade, clock_next: controls.Clock };
 
 fn resolveArea(f: *Frame, recipe: model.Recipe, options: controls.Options, states: style.States) style.Error!Area {
     const use = controls.useFor(f, options, states);
     var a: Area = undefined;
     a.root = try recipe.resolve(Parts.root, use, null);
+    // The eased root is what the parts inherit, as a control's; `textarea` keeps the step, so
+    // resolving twice in a frame steps once.
+    const reduced = f.ctx.settings.reduced_motion;
+    a.fade_next = if (options.fade) |fade| fade.next(&a.root, options.transition.under(reduced), f.in.dt) else .{};
+    a.clock_next = if (options.clock) |clock| clock.next(&a.root, options.animation, f.in.dt, reduced) else .{};
     var inside = use;
     inside.parent = &a.root;
     inside.local = &.{};

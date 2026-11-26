@@ -6223,6 +6223,7 @@ The custom widgets (`Spec.widget`) of `ct.select` and `ct.list`: the button's `s
 
 ### `ComptimeWith(..).Button` (struct)
 
+- `wakeAfter = if (Face) |F| (if (@hasDecl(F, "wakeAfter")) F.wakeAfter else {}) else {}`: A Face that eases its look asks for frames while it moves.
 - `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
 - `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`

@@ -136,7 +136,8 @@ fn rowResponse(f: *Frame, id: types.Id, recipe: model.Recipe, use: model.Use, st
     return response;
 }
 
-fn radioBuild(target: Target, id: types.Id, selected: u32, captions: []const []const u8, recipe: model.Recipe, use: model.Use, visual: Visual, focus_offset: f32, semantic: ?*a11y.Semantics) style.Error!types.Node {
+/// `fades`, one per option or none, ease each option's row along `transition` by `dt`.
+fn radioBuild(target: Target, id: types.Id, selected: u32, captions: []const []const u8, recipe: model.Recipe, use: model.Use, visual: Visual, focus_offset: f32, semantic: ?*a11y.Semantics, transition: controls.Transition, fades: []controls.Fade, dt: f32) style.Error!types.Node {
     if (captions.len == 0 or captions.len > std.math.maxInt(u32) or selected >= captions.len) return error.InvalidValue;
     const nodes = std.math.mul(usize, captions.len, radio_rows) catch return error.NoSpace;
     var bytes: usize = 0;
@@ -154,7 +155,8 @@ fn radioBuild(target: Target, id: types.Id, selected: u32, captions: []const []c
         item_use.states = visual.states(use.states, @intCast(index));
         item_use.states.checked = selected == index;
         item_use.states.selected = selected == index;
-        const option = try recipe.resolve(Parts.row, item_use, null);
+        var option = try recipe.resolve(Parts.row, item_use, null);
+        if (index < fades.len) fades[index] = fades[index].next(&option, transition, dt);
         const inside = childUse(item_use, &option);
         const background = try recipe.resolve(Parts.background, inside, null);
         const indicator = try recipe.resolve(Parts.indicator, inside, null);
@@ -295,7 +297,9 @@ pub fn radio(f: *Frame, id: types.Id, selected: *u32, captions: []const []const 
         next = move.value;
         visual.focused = move.focus;
     }
-    const group = try radioBuild(Target.frame(f), id, next, captions, recipe, use, visual, options.focus_offset, options.semantics);
+    const transition = options.transition.under(f.ctx.settings.reduced_motion);
+    const group = try radioBuild(Target.frame(f), id, next, captions, recipe, use, visual, options.focus_offset, options.semantics, transition, options.fades, f.in.dt);
+    for (options.fades) |fade| f.ctx.motion = @max(f.ctx.motion, fade.remaining(transition));
     selected.* = next;
     if (moved) |move| f.ctx.inter.focus = @backingInt(radio_native.optionId(id, move.focus));
     if (visual.hovered != none) f.setCursor(f.tree().cursor(group.ix() + 1 + radio_rows * visual.hovered) orelse .pointer, true);
@@ -462,6 +466,20 @@ pub const ct = struct {
 fn RadioWidget(comptime name: []const u8, comptime bind: []const u8, comptime captions: anytype, comptime config: Config) type {
     return struct {
         const B = Binding(.radio, config);
+        pub const wakeAfter = if (config.fade_field != null) wake else {};
+
+        /// The options' fades: `config.fade_field` names a `[captions.len]controls.Fade`.
+        fn fades(ui: anytype) []controls.Fade {
+            const f = config.fade_field orelse return &.{};
+            return &@field(ui.signals.state, f);
+        }
+
+        fn wake(ui: anytype, in: *const Input) f32 {
+            _ = in;
+            const transition = config.transition.under(ui.frame_settings.reduced_motion);
+            for (fades(ui)) |fade| if (fade.remaining(transition) > 0) return 0;
+            return types.inf;
+        }
         pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
             if (B.check(State)) |err| return err;
             return radio_native.bindError(State, field);
@@ -476,7 +494,7 @@ fn RadioWidget(comptime name: []const u8, comptime bind: []const u8, comptime ca
                 response.focused = ui.focus == @field(Ui.Events.Widget, childName(name, i));
                 visual.add(i, response);
             }
-            const group = radioBuild(targetUi(ui, parent), .hash(name), @field(ui.signals.state, bind), &labels, B.recipe(ui), B.use(ui, in), visual, config.focus_offset, null) catch |err| {
+            const group = radioBuild(targetUi(ui, parent), .hash(name), @field(ui.signals.state, bind), &labels, B.recipe(ui), B.use(ui, in), visual, config.focus_offset, null, config.transition.under(ui.frame_settings.reduced_motion), fades(ui), in.dt) catch |err| {
                 ui.fail(err);
                 failedRows(ui, node, parent, next, .hash(name));
                 return;

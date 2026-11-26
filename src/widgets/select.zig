@@ -367,6 +367,9 @@ pub fn ComptimeWith(comptime th: Theme, comptime id: [:0]const u8, comptime fiel
         pub const def = positional(opts.texts.len);
 
         pub const Button = struct {
+            /// A Face that eases its look asks for frames while it moves.
+            pub const wakeAfter = if (Face) |F| (if (@hasDecl(F, "wakeAfter")) F.wakeAfter else {}) else {};
+
             pub fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8 {
                 return base.fieldError(State, "select", bound, SelectState);
             }
