@@ -16,6 +16,28 @@ const progress_zig = @import("../widgets/progress.zig");
 const textfield_zig = @import("../widgets/textfield.zig");
 const Parts = style.Parts;
 
+/// HTML constraint validation of a text control (`required`, `minlength`, `maxlength`): it
+/// sets `States.required`, and `States.invalid` from the text, so `:invalid`, `:valid` and
+/// `:required` rules can match. Lengths count code points. The default validates nothing.
+pub const Validation = struct {
+    required: bool = false,
+    min_length: u32 = 0,
+    max_length: u32 = std.math.maxInt(u32),
+
+    pub fn invalid(v: Validation, text: []const u8) bool {
+        const n = std.unicode.utf8CountCodepoints(text) catch text.len;
+        return (v.required and n == 0) or (n > 0 and n < v.min_length) or n > v.max_length;
+    }
+
+    /// `base` with the validation's states for `text`.
+    pub fn states(v: Validation, base_states: style.States, text: []const u8) style.States {
+        var out = base_states;
+        out.required = out.required or v.required;
+        out.invalid = out.invalid or v.invalid(text);
+        return out;
+    }
+};
+
 pub const Options = struct {
     recipe: ?model.Recipe = null,
     tokens: style.tokens.Table = .{},
@@ -31,6 +53,8 @@ pub const Options = struct {
     /// Gap between the control's border box and its independently painted focus outline.
     focus_offset: f32 = 0,
     color_policy: model.ColorPolicy = .automatic,
+    /// Text controls only.
+    validation: Validation = .{},
 };
 
 pub const OpenControl = struct {
@@ -338,13 +362,14 @@ pub fn progress(f: *Frame, value: f32, options: Options) style.Error!types.Node 
 /// caller's existing read-only policy is retained; options may restrict it further.
 pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u8, options: Options) style.Error!types.Response {
     try checkSemantics(f, options);
-    const response = try policyResponse(f, id, options.recipe orelse model.input, options, options.states);
-    const states = statesFor(options.states, response, visibleFocus(f, options));
-    var control = try resolvedControl(f, options.recipe orelse model.input, options, states);
-    const content = try control.part(Parts.content, null);
-    const hint = try control.part(Parts.placeholder, null);
-    const selection = try control.part(Parts.selection, null);
-    const caret = try control.part(Parts.caret, null);
+    const recipe = options.recipe orelse model.input;
+    const response = try policyResponse(f, id, recipe, options, options.states);
+    var states = options.validation.states(statesFor(options.states, response, visibleFocus(f, options)), field.text());
+    var control = try resolvedControl(f, recipe, options, states);
+    var content = try control.part(Parts.content, null);
+    var hint = try control.part(Parts.placeholder, null);
+    var selection = try control.part(Parts.selection, null);
+    var caret = try control.part(Parts.caret, null);
     var th = model.metrics(control.root);
     th.text_px = content.text.px;
     th.text = content.text.color;
@@ -355,7 +380,20 @@ pub fn textfield(f: *Frame, id: types.Id, field: anytype, placeholder: []const u
     var last = f.lastRect(id);
     last.x1 -= control.root.box.pad[2] - control.root.box.pad[0];
     last.y0 += control.root.box.pad[1] - textfield_zig.padding(&th)[1];
+    const was_invalid = options.validation.invalid(field.text());
     textfield_zig.behave(field, &th, id, response, last, f.in);
+    // The comptime front end resolves after this frame's edit: validity follows the new text.
+    if (options.validation.invalid(field.text()) != was_invalid) {
+        states.invalid = options.states.invalid or options.validation.invalid(field.text());
+        control = try resolvedControl(f, recipe, options, states);
+        content = try control.part(Parts.content, null);
+        hint = try control.part(Parts.placeholder, null);
+        selection = try control.part(Parts.selection, null);
+        caret = try control.part(Parts.caret, null);
+        th = model.metrics(control.root);
+        th.text_px = content.text.px;
+        th.text = content.text.color;
+    }
     textfield_zig.platform(f, field);
     control.root.box.role = .text_input;
     control.root.box.scroll = .{ field.scroll, 0 };

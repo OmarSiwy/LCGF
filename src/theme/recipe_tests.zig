@@ -356,3 +356,45 @@ test "a recipe box is focus-within while a widget inside it has focus, in both f
     output = try run.frame(&input);
     try std.testing.expect(output.runtime.tree.c.look[group].fill != Within.lit.bitsOf());
 }
+
+test "a required text field is invalid while empty, in both front ends as it is typed into" {
+    @setEvalBranchQuota(200_000);
+    const Valid = struct {
+        const bad: types.Color = .rgb(220, 20, 20);
+        const rules = model.input_rules ++ [_]style.Rule{.{ .part = style.Parts.root, .require = .{ .invalid = true }, .declarations = &.{style.set(.border_color, bad)} }};
+        const recipe: model.Recipe = .{ .parts = model.input.parts, .rules = &rules };
+        const validation: controls.Validation = .{ .required = true, .max_length = 3 };
+        const App = struct {
+            pub fn build(_: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.textfield(f, .from("name"), &name, "Name", .{ .recipe = recipe, .validation = validation }) catch unreachable;
+                f.close();
+            }
+            var name: textfield_zig.Text(16) = .{};
+        };
+        const State_ = struct { name: textfield_zig.Text(16) = .{} };
+        const VUi = base.ComptimeUi(State_, spec.col(panel, .{ct.textfield(.name, .name, "Name", .{ .recipe = recipe, .validation = validation })}), .default);
+        const VRun = base.Harness(App, VUi, .{ .nodes = 64, .texts = 16, .customs = 2, .strings = 256, .depth = 8 });
+        var run: VRun = .{};
+    };
+    const run = &Valid.run;
+    Valid.App.name = .{};
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 } };
+    var output = try run.frame(&input);
+    const field = output.runtime.tree.find(.from("name"));
+    try std.testing.expectEqual(Valid.bad.bitsOf(), output.runtime.tree.c.look[field].border_color);
+    const r = output.runtime.tree.rect(field);
+    input.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    input.buttons.left = true;
+    output = try run.frame(&input);
+    input.buttons.left = false;
+    output = try run.frame(&input);
+    input.text = "ab";
+    input.events = &.{.{ .kind = .text, .at = 0, .len = 2 }};
+    output = try run.frame(&input);
+    try std.testing.expect(output.runtime.tree.c.look[field].border_color != Valid.bad.bitsOf());
+    input.text = "cd";
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Valid.bad.bitsOf(), output.runtime.tree.c.look[field].border_color);
+}

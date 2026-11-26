@@ -34,6 +34,8 @@ pub const Config = struct {
     local: []const style.Declaration = &.{},
     focus_offset: f32 = 0,
     color_policy: model.ColorPolicy = .automatic,
+    /// Text controls only: `controls.Validation`.
+    validation: controls.Validation = .{},
     /// Optional fields of the application's State. Their types are checked by the builder.
     states_field: ?[]const u8 = null,
     environment_field: ?[]const u8 = null,
@@ -189,7 +191,9 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                 const value = checkbox_zig.Check.of(@field(ui.signals.state, bind));
                 states.checked = value == .on;
                 states.indeterminate = value == .mixed;
-            } else if (kind == .switch_control) states.checked = @field(ui.signals.state, bind);
+            } else if (kind == .switch_control) {
+                states.checked = @field(ui.signals.state, bind);
+            } else if (kind == .input) states = config.validation.states(states, @field(ui.signals.state, bind).text());
             return .{
                 .tokens = if (config.tokens_field) |field| @field(ui.signals.state, field) else config.tokens,
                 .scope = config.scope,
