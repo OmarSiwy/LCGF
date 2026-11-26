@@ -493,15 +493,16 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
             // sorted by span; this is one pass.
             const j = first + gs.it.cell[a][it];
             const n = gs.it.span[a][it];
+            // A subgrid item takes its child grid's track contents instead. One loop for both:
+            // contents are never below 0, so a share of 0 leaves the child's tracks alone, and
+            // reading its own tracks leaves a plain item's share alone.
             const child = gs.it.subgrid[a][it];
-            if (child != none) {
-                const source = gs.g.first[a][child];
-                for (0..n) |offset| gs.tr.content[j + offset] = @max(gs.tr.content[j + offset], gs.tr.content[source + offset]);
-                continue;
-            }
+            const sub = child != none;
+            const source = simd.selU(sub, gs.g.first[a][simd.selU(sub, child, k)], j);
             const gap = gs.g.gap[a][k];
             const share = @max(nat[gs.it.node[it]] - gap * @as(f32, @floatFromInt(n - 1)), 0) / @as(f32, @floatFromInt(n));
-            for (gs.tr.content[j..][0..n]) |*v| v.* = @max(v.*, share);
+            const floor = simd.selF(sub, 0, share);
+            for (0..n) |offset| gs.tr.content[j + offset] = @max(gs.tr.content[j + offset], @max(gs.tr.content[source + offset], floor));
         }
         t.c.fit[a][node] = sizeTracks(gs, k, a, 0);
     }
