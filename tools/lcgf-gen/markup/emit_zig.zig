@@ -265,6 +265,7 @@ pub const Emit = struct {
             .label, .text, .heading => !std.meta.eql(n.text_style, n.base_text),
             else => false,
         };
+        if (n.spans.len > 0) e.write("s.spans(");
         if (n.decoration != null) e.write("s.decorated(");
         if (n.paragraph != null) e.write("s.paragraph(");
         if (text_styled) e.write("s.textStyled(");
@@ -418,6 +419,11 @@ pub const Emit = struct {
         if (n.decoration) |d| {
             e.write(", ");
             e.decoration(d);
+            e.write(")");
+        }
+        if (n.spans.len > 0) {
+            e.write(", ");
+            e.spanList(n.spans);
             e.write(")");
         }
         var all: std.ArrayList(u8) = .empty;
@@ -708,7 +714,7 @@ pub const Emit = struct {
                 return "accordion.close(f);";
             },
             .label, .heading, .text => {
-                const plain = n.kind == .label and n.paragraph == null and n.decoration == null and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
+                const plain = n.kind == .label and !styled(n) and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
                 if (plain) {
                     e.print("_ = {s}.label(f, &theme, ", .{e.use("label")});
                     e.rtCaption(n.text_kind, n.text);
@@ -730,7 +736,7 @@ pub const Emit = struct {
                 e.write(", ");
                 e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                 e.write(");");
-                if (n.paragraph != null or n.decoration != null) e.print(" ui.paragraphs.rows[ui.paragraphs.len] = f.texts().len - 1; ui.paragraphs.styles[ui.paragraphs.len] = {d}; ui.paragraphs.len += 1;", .{e.paragraphIndex(n)});
+                if (styled(n)) e.print(" ui.paragraphs.rows[ui.paragraphs.len] = f.texts().len - 1; ui.paragraphs.styles[ui.paragraphs.len] = {d}; ui.paragraphs.len += 1;", .{e.paragraphIndex(n)});
                 return "";
             },
             .button, .link => {
@@ -1122,7 +1128,16 @@ pub const Emit = struct {
             e.write("\n/// The page's paragraph styles, indexed by `Ui.paragraphs.styles`.\nconst paragraph_table = [_]lcgf.text_stack.Paragraph{");
             for (e.paragraphTable()) |pa| {
                 e.write(" ");
-                e.paragraph(pa.paragraph orelse .{});
+                e.paragraph(pa.paragraph);
+                e.write(",");
+            }
+            e.write(" };\n");
+        }
+        if (e.anySpans()) {
+            e.write("/// Their style runs, row for row.\nconst span_table = [_][]const lcgf.protocol.Span{");
+            for (e.paragraphTable()) |pa| {
+                e.write(" ");
+                e.spanList(pa.spans);
                 e.write(",");
             }
             e.write(" };\n");
@@ -1131,7 +1146,7 @@ pub const Emit = struct {
             e.write("/// Their decorations, row for row.\nconst decoration_table = [_]lcgf.text_decorations.Style{");
             for (e.paragraphTable()) |pa| {
                 e.write(" ");
-                e.decoration(pa.decoration orelse .{});
+                e.decoration(pa.decoration);
                 e.write(",");
             }
             e.write(" };\n");
@@ -1470,36 +1485,65 @@ pub const Emit = struct {
         return out.items;
     }
 
-    const Styled = struct { paragraph: ?lcgf.text_stack.Paragraph, decoration: ?lcgf.text_decorations.Style };
+    const Styled = struct { paragraph: lcgf.text_stack.Paragraph, decoration: lcgf.text_decorations.Style, spans: []const lcgf.protocol.Span };
 
-    /// The distinct (paragraph, decoration) pairs of the page's labels, in first-use order:
-    /// `ComptimeUi`'s table, so both frontends index it alike.
+    /// A label `MonoParagraphs` measures: a paragraph style, a decoration or inline runs.
+    fn styled(n: ir.Node) bool {
+        return n.paragraph != null or n.decoration != null or n.spans.len > 0;
+    }
+
+    fn styledOf(n: ir.Node) Styled {
+        return .{ .paragraph = n.paragraph orelse .{}, .decoration = n.decoration orelse .{}, .spans = n.spans };
+    }
+
+    fn sameStyled(a: Styled, b: Styled) bool {
+        if (!std.meta.eql(a.paragraph, b.paragraph) or !std.meta.eql(a.decoration, b.decoration) or a.spans.len != b.spans.len) return false;
+        for (a.spans, b.spans) |x, y| if (!std.meta.eql(x, y)) return false;
+        return true;
+    }
+
+    /// The distinct (paragraph, decoration, spans) of the page's styled labels, in first-use
+    /// order: `ComptimeUi`'s table, so both frontends index it alike.
     fn paragraphTable(e: *Emit) []const Styled {
         var out: std.ArrayList(Styled) = .empty;
-        for (e.page.nodes.items(.paragraph), e.page.nodes.items(.decoration)) |p, d| if (p != null or d != null) {
-            const st = norm(.{ .paragraph = p, .decoration = d });
+        for (0..e.page.nodes.len) |i| {
+            const n = e.page.nodes.get(i);
+            if (!styled(n)) continue;
+            const st = styledOf(n);
             for (out.items) |q| {
-                if (std.meta.eql(st, q)) break;
+                if (sameStyled(st, q)) break;
             } else out.append(e.arena, st) catch unreachable;
-        };
+        }
         return out.items;
     }
 
-    fn norm(st: Styled) Styled {
-        return .{ .paragraph = st.paragraph orelse .{}, .decoration = st.decoration orelse .{} };
+    fn paragraphIndex(e: *Emit, n: ir.Node) usize {
+        for (e.paragraphTable(), 0..) |q, i| if (sameStyled(styledOf(n), q)) return i;
+        unreachable;
     }
 
-    fn paragraphIndex(e: *Emit, n: ir.Node) usize {
-        const st = norm(.{ .paragraph = n.paragraph, .decoration = n.decoration });
-        for (e.paragraphTable(), 0..) |q, i| if (std.meta.eql(st, q)) return i;
-        unreachable;
+    fn anySpans(e: *Emit) bool {
+        for (e.page.nodes.items(.spans)) |sp| if (sp.len > 0) return true;
+        return false;
+    }
+
+    /// `&.{ .{ .start = k, .style = .{…} }, … }`.
+    fn spanList(e: *Emit, spans: []const lcgf.protocol.Span) void {
+        e.write("&.{");
+        for (spans, 0..) |sp, k| {
+            e.print("{s} .{{ .start = {d}, .style = ", .{ if (k == 0) "" else ",", sp.start });
+            e.structure(sp.style, types.TextStyle{});
+            e.write(" }");
+        }
+        e.write(if (spans.len > 0) " }" else "}");
     }
 
     /// The font `Ui.end` measures with: `font`, or the page's `MonoParagraphs` over it.
     fn fontExpr(e: *Emit, paragraphs: bool) []const u8 {
         if (!paragraphs) return "font";
-        return std.fmt.allocPrint(e.arena, ".{{ .mono = font, .rows = ui.paragraphs.rows[0..ui.paragraphs.len], .styles = ui.paragraphs.styles[0..ui.paragraphs.len], .table = &paragraph_table{s} }}", .{
+        return std.fmt.allocPrint(e.arena, ".{{ .mono = font, .rows = ui.paragraphs.rows[0..ui.paragraphs.len], .styles = ui.paragraphs.styles[0..ui.paragraphs.len], .table = &paragraph_table{s}{s} }}", .{
             if (e.anyDecoration()) ", .decorations = &decoration_table" else "",
+            if (e.anySpans()) ", .spans = &span_table" else "",
         }) catch unreachable;
     }
 

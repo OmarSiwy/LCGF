@@ -1,0 +1,12 @@
+inline.html:3:16: error: <button> inside a paragraph of inline runs is not lowered; inline runs take text and phrasing elements (span, strong, em, b, i, code, …)
+  <p>Text with <button>a button</button> and <u>part</u> decorated, <span style="letter-spacing: 2px">spaced</span>.</p>
+               ^
+inline.html:3:46: error: text-decoration on part of a paragraph is not lowered yet; decorate the whole <p>
+  <p>Text with <button>a button</button> and <u>part</u> decorated, <span style="letter-spacing: 2px">spaced</span>.</p>
+                                             ^
+inline.html:3:69: error: line-height, letter-spacing and word-spacing apply to the whole paragraph of inline runs; set them on the <p>
+  <p>Text with <button>a button</button> and <u>part</u> decorated, <span style="letter-spacing: 2px">spaced</span>.</p>
+                                                                    ^
+inline.html:4:6: error: bound text inside a paragraph of inline runs is not lowered yet; put it in its own element
+  <p>Bound {name} text <b>bold</b>.</p>
+     ^

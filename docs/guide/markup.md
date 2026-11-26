@@ -264,6 +264,16 @@ the element, adding up with its ancestors' (`none` removes none), as in CSS. It 
 as solid quads, one per line (`MonoParagraphs.decorate`). The UA sheet underlines `<u>` and
 `<ins>` and strikes `<s>` and `<del>` (`testdata/decorations`).
 
+### Inline runs
+
+A `<p>` of text and phrasing elements (`span`, `strong`, `b`, `em`, `i`, `code`, `small`,
+`mark`, …, nested or not) is one paragraph: one label whose text is all of it, white space
+collapsed across the elements, with a style run (`spec.spans`, `protocol.Span`) at every change
+of size, colour or font. It wraps as one paragraph, each byte in its run's size and colour
+(`MonoParagraphs`), and a line is as tall as its largest size (`testdata/inline`). For now the
+paragraph has one paragraph style and one decoration, set on the `<p>`, and no bound text;
+other elements inside it are errors.
+
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20

@@ -376,6 +376,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     const paragraph_styles = comptime paragraphDistinct(spec);
     const paragraph_table = comptime paragraph_styles.paragraphs[0..paragraph_styles.paragraphs.len].*;
     const decoration_table = comptime paragraph_styles.decorations[0..paragraph_styles.decorations.len].*;
+    const span_table = comptime paragraph_styles.spans[0..paragraph_styles.spans.len].*;
     const paragraph_slots = comptime paragraphCount(spec);
     return struct {
         const Self = @This();
@@ -644,6 +645,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 .styles = ui.paragraphs.styles[0..ui.paragraphs.len],
                 .table = &paragraph_table,
                 .decorations = if (comptime anyDecoration(spec)) &decoration_table else &.{},
+                .spans = if (comptime anySpans(spec)) &span_table else &.{},
                 .strings = tb.strings.buf[0..tb.strings.len],
             } else ui.font;
             font.measure(tx);
@@ -748,7 +750,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                         break :blk sp;
                     } else tb.strings.add(spec_zig.labelBytes(n, state));
                     tb.t.c.text[i] = tb.tx.push(i, span, if (comptime tokened) &tok.text else &(n.text_style orelse labelText(&th)));
-                    if (comptime n.paragraph != null or n.decoration != null) {
+                    if (comptime styledLabel(n)) {
                         const slot = &ui.paragraphs;
                         slot.rows[slot.len] = tb.t.c.text[i];
                         slot.styles[slot.len] = comptime paragraphIndex(paragraph_styles, n);
@@ -895,9 +897,20 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     };
 }
 
-/// Labels in `n` with a paragraph style or a decoration.
+/// A label `MonoParagraphs` measures: one with a paragraph style, a decoration or spans.
+fn styledLabel(comptime n: Spec) bool {
+    return n.kind == .label and (n.paragraph != null or n.decoration != null or n.spans.len > 0);
+}
+
+fn anySpans(comptime n: Spec) bool {
+    if (n.kind == .label and n.spans.len > 0) return true;
+    for (n.children) |c| if (anySpans(c)) return true;
+    return false;
+}
+
+/// Labels in `n` that `MonoParagraphs` measures.
 fn paragraphCount(comptime n: Spec) u32 {
-    var k: u32 = @intFromBool(n.kind == .label and (n.paragraph != null or n.decoration != null));
+    var k: u32 = @intFromBool(styledLabel(n));
     for (n.children) |c| k += paragraphCount(c);
     return k;
 }
@@ -909,9 +922,10 @@ fn anyDecoration(comptime n: Spec) bool {
 }
 
 const Decoration = @import("../text/layout/decorations.zig").Style;
-const ParagraphStyles = struct { paragraphs: []const Paragraph = &.{}, decorations: []const Decoration = &.{} };
+const Span = @import("../text/protocol.zig").Span;
+const ParagraphStyles = struct { paragraphs: []const Paragraph = &.{}, decorations: []const Decoration = &.{}, spans: []const []const Span = &.{} };
 
-/// The distinct (paragraph, decoration) pairs of `n`'s labels, in first-use order.
+/// The distinct (paragraph, decoration, spans) of `n`'s styled labels, in first-use order.
 fn paragraphDistinct(comptime n: Spec) ParagraphStyles {
     comptime {
         var out: ParagraphStyles = .{};
@@ -921,13 +935,20 @@ fn paragraphDistinct(comptime n: Spec) ParagraphStyles {
 }
 
 fn paragraphWalk(comptime n: Spec, comptime out: *ParagraphStyles) void {
-    if (n.kind == .label and (n.paragraph != null or n.decoration != null)) {
+    if (styledLabel(n)) {
         if (paragraphIndexIn(out.*, n) == null) {
             out.paragraphs = out.paragraphs ++ .{n.paragraph orelse Paragraph{}};
             out.decorations = out.decorations ++ .{n.decoration orelse Decoration{}};
+            out.spans = out.spans ++ .{n.spans};
         }
     }
     for (n.children) |c| paragraphWalk(c, out);
+}
+
+fn spansEql(comptime a: []const Span, comptime b: []const Span) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!std.meta.eql(x, y)) return false;
+    return true;
 }
 
 fn paragraphIndex(comptime styles: ParagraphStyles, comptime n: Spec) u16 {
@@ -937,7 +958,7 @@ fn paragraphIndex(comptime styles: ParagraphStyles, comptime n: Spec) u16 {
 fn paragraphIndexIn(comptime styles: ParagraphStyles, comptime n: Spec) ?u16 {
     const p = n.paragraph orelse Paragraph{};
     const d = n.decoration orelse Decoration{};
-    for (styles.paragraphs, styles.decorations, 0..) |q, e, i| if (std.meta.eql(q, p) and std.meta.eql(e, d)) return i;
+    for (styles.paragraphs, styles.decorations, styles.spans, 0..) |q, e, sp, i| if (std.meta.eql(q, p) and std.meta.eql(e, d) and spansEql(sp, n.spans)) return i;
     return null;
 }
 
@@ -1891,4 +1912,29 @@ test "decorated: one bar per line, painted right after its run, in both front en
         else => {},
     };
     try std.testing.expect(text_at != null);
+}
+
+test "spans: one paragraph in two sizes and colours lays out the same in both front ends" {
+    const th: Theme = .default;
+    const runs = comptime [_]@import("../text/protocol.zig").Span{ .{ .start = 4, .style = .{ .px = 28, .color = .rgb(255, 0, 0) } }, .{ .start = 7, .style = labelText(&Theme.default) } };
+    const spec = comptime spec_zig.col(.{}, .{spec_zig.spans(spec_zig.label("one two three"), &runs)});
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        rows: [1]u32 = undefined,
+        pub fn build(app: *@This(), f: *Frame) void {
+            _ = f.open(.none, .{});
+            _ = f.textStyled("one two three", labelText(&th), .{});
+            app.rows[0] = f.texts().len - 1;
+            f.close();
+        }
+        pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
+            return f.endParagraphs(.{ .mono = font, .rows = &app.rows, .styles = &.{0}, .table = &.{.{}}, .spans = &.{&runs} });
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 8, .texts = 2, .strings = 64, .depth = 4 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    const t = (try h.frame(&in)).comptime_.tree;
+    // Ten bytes at 14 px and "two" at 28: 10 * 8.4 + 3 * 16.8.
+    try std.testing.expectApproxEqAbs(10 * 8.4 + 3 * 16.8, t.rect(2).w(), 1);
 }

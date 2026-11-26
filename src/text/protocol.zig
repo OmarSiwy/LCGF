@@ -32,6 +32,7 @@ const Quad = draw_list.Quad;
 const Paragraph = @import("layout/stack.zig").Paragraph;
 const Decoration = @import("layout/decorations.zig").Style;
 const paint = @import("../draw/paint.zig");
+const types = @import("../core/types.zig");
 
 const W = simd.lanes;
 
@@ -162,15 +163,19 @@ pub const Mono = struct {
     }
 };
 
+/// One style run of a paragraph: from byte `start` of its text on (to the next span's
+/// start), `style`'s size, colour and font instead of the run's. Spans are sorted by `start`.
+pub const Span = struct { start: u32, style: types.TextStyle };
+
 /// `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes
-/// `table[styles[i]]` (`rows` ascending; draw list run k is texts row k). Of `stack.Paragraph`, Mono honours
-/// `line_height` (and `leading`), `letter_spacing`, `word_spacing` (after every space byte),
-/// `max_lines` and `ellipsis` ("..." at the cut); the rest is for a real shaper's `Stack`.
-/// Measure and wrap run Mono's passes over every run, then rewrite only the listed runs by
-/// walking their bytes, so a frame without styled runs costs what Mono costs. `quads` places
-/// glyphs by the same walk. Mono's own rules hold: every byte is one cell and lines break
-/// between any two bytes. `decorate` adds underlines, overlines and line-throughs to the
-/// draw list as solid quads.
+/// `table[styles[i]]` (`rows` ascending; draw list run k is texts row k). Of `stack.Paragraph`,
+/// Mono honours `line_height` (and `leading`), `letter_spacing`, `word_spacing` (after every
+/// space byte), `max_lines` and `ellipsis` ("..." at the cut); the rest is for a real shaper's
+/// `Stack`. Measure and wrap run Mono's passes over every run, then rewrite only the listed
+/// runs by walking their bytes, so a frame without styled runs costs what Mono costs. `quads`
+/// places glyphs by the same walk. Mono's own rules hold: every byte is one cell and lines
+/// break between any two bytes. `decorate` adds underlines, overlines and line-throughs to
+/// the draw list as solid quads.
 pub const MonoParagraphs = struct {
     mono: Mono = .{},
     rows: []const u32,
@@ -179,6 +184,10 @@ pub const MonoParagraphs = struct {
     /// Empty, or one row per `table` row: its runs' decoration lines (`text_decorations.Style`;
     /// Mono draws `underline`, `overline` and `strike` solid, in `color` and `thickness`).
     decorations: []const Decoration = &.{},
+    /// Empty, or one row per `table` row: its runs' style spans (inline runs: one paragraph in
+    /// several sizes, colours and fonts). With `line_height = .font` a line is as tall as the
+    /// largest size's, else as the paragraph says.
+    spans: []const []const Span = &.{},
     /// The bytes the runs' `start` and `bytes` index: the frame's strings (`Frame` sets it).
     strings: []const u8 = "",
 
@@ -187,10 +196,10 @@ pub const MonoParagraphs = struct {
         p.mono.measure(tx);
         const c = &tx.c;
         for (p.rows, p.styles) |k, i| {
-            const st = p.table[i];
-            const f = fit(p.mono, st, p.strings[c.start[k]..][0..c.bytes[k]], c.px[k], std.math.inf(f32), false);
+            const w = p.walker(i, c.px[k]);
+            const f = w.fit(p.strings[c.start[k]..][0..c.bytes[k]], std.math.inf(f32), false);
             c.w[k] = f.w;
-            c.h[k] = lineOf(p.mono, st, c.px[k]);
+            c.h[k] = w.line();
         }
     }
 
@@ -200,16 +209,17 @@ pub const MonoParagraphs = struct {
         p.mono.wrap(tx);
         const c = &tx.c;
         for (p.rows, p.styles) |k, i| {
-            const st = p.table[i];
+            const w = p.walker(i, c.px[k]);
             const wraps = c.wrap[k] > 0;
             const avail = c.avail[k];
-            const f = fit(p.mono, st, p.strings[c.start[k]..][0..c.bytes[k]], c.px[k], avail, wraps);
-            c.w[k] = if (wraps or st.ellipsis) @min(f.w, avail) else f.w;
-            c.h[k] = @as(f32, @floatFromInt(f.lines)) * lineOf(p.mono, st, c.px[k]);
+            const f = w.fit(p.strings[c.start[k]..][0..c.bytes[k]], avail, wraps);
+            c.w[k] = if (wraps or w.st.ellipsis) @min(f.w, avail) else f.w;
+            c.h[k] = @as(f32, @floatFromInt(f.lines)) * w.line();
         }
     }
 
-    /// `Mono.quads` with the styled runs laid out as `wrap` measured them.
+    /// `Mono.quads` with the styled runs laid out as `wrap` measured them, each glyph in its
+    /// span's size and colour.
     pub fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32 {
         std.debug.assert(out.len >= 1);
         var n: u32 = 0;
@@ -217,37 +227,50 @@ pub const MonoParagraphs = struct {
         for (0..d.run_len) |k_| {
             const k: u32 = @intCast(k_);
             const styled = next < p.rows.len and p.rows[next] == k;
-            n = if (styled) p.appendStyled(d, k, p.table[p.styles[next]], out, glyphs, n) else p.mono.appendRun(FullGrid, d, k, out, glyphs, n) catch unreachable;
+            n = if (styled) p.appendStyled(d, k, p.styles[next], out, glyphs, n) else p.mono.appendRun(FullGrid, d, k, out, glyphs, n) catch unreachable;
             next += @intFromBool(styled);
         }
         return n;
     }
 
-    fn appendStyled(p: MonoParagraphs, d: *const DrawList, k: u32, st: Paragraph, out: []Quad, glyphs: Mono.Glyphs, start: u32) u32 {
+    fn walker(p: MonoParagraphs, style: u16, px: f32) Walk {
+        return .{ .mono = p.mono, .st = p.table[style], .spans = if (p.spans.len > 0) p.spans[style] else &.{}, .px = px };
+    }
+
+    /// The run's layout as `quads` and `decorate` draw it: the walker, whether it wrapped, and
+    /// the walk's result.
+    fn placed(p: MonoParagraphs, d: *const DrawList, k: u32, style: u16) struct { w: Walk, wraps: bool, f: Fit, bytes: []const u8, avail: f32 } {
         const r = d.runs[k];
+        const w = p.walker(style, r.px);
         const bytes = d.strings[r.start..][0..r.bytes];
         const avail = r.rect[2] - r.rect[0];
         // A run laid out on one line keeps to it; one taller than a line wrapped.
         // ponytail: the draw list carries no wrap flag, so this reads it off the height; add
         // one to TextRun if a run ever needs a different answer.
-        const line = lineOf(p.mono, st, r.px);
-        const wraps = r.rect[3] - r.rect[1] > line * 1.5;
-        const f = fit(p.mono, st, bytes, r.px, avail, wraps);
-        const adv = r.px * p.mono.advance;
-        const cell = r.px * p.mono.line;
-        const top = (line - cell) * std.math.clamp(st.leading, 0, 1);
+        const wraps = r.rect[3] - r.rect[1] > w.line() * 1.5;
+        return .{ .w = w, .wraps = wraps, .f = w.fit(bytes, avail, wraps), .bytes = bytes, .avail = avail };
+    }
+
+    fn appendStyled(p: MonoParagraphs, d: *const DrawList, k: u32, style: u16, out: []Quad, glyphs: Mono.Glyphs, start: u32) u32 {
+        const r = d.runs[k];
+        const l = p.placed(d, k, style);
+        const w = l.w;
         const last: u32 = @intCast(out.len - 1);
         var n = start;
         glyphs.first[k] = n;
         var at: Pen = .{};
-        for (bytes[0..f.cut]) |b| {
-            at.advance(adv, st, b, avail, wraps);
-            n = glyph(out, n, last, r, at.x - advanceOf(adv, st, b), r.rect[1] + top + @as(f32, @floatFromInt(at.line)) * line, adv, cell, b);
+        const dots: u32 = if (l.f.cut < l.bytes.len and w.st.ellipsis) 3 else 0;
+        for (0..l.f.cut + dots) |j| {
+            // The ellipsis takes the style of the last byte kept.
+            const b = if (j < l.f.cut) l.bytes[j] else '.';
+            const at_byte: u32 = @intCast(@min(j, @max(l.f.cut, 1) - 1));
+            const span = w.styleAt(at_byte, r);
+            at.advance(w, at_byte, b, l.avail, l.wraps and j < l.f.cut);
+            const adv = span.px * w.mono.advance;
+            const cell = span.px * w.mono.line;
+            const y = r.rect[1] + @as(f32, @floatFromInt(at.line)) * w.line() + (w.line() - cell) * std.math.clamp(w.st.leading, 0, 1);
+            n = glyph(out, n, last, r, at.x - w.width(at_byte, b), y, adv, cell, b, span.color);
         }
-        if (f.cut < bytes.len and st.ellipsis) for (0..3) |_| {
-            at.x += advanceOf(adv, st, '.');
-            n = glyph(out, n, last, r, at.x - advanceOf(adv, st, '.'), r.rect[1] + top + @as(f32, @floatFromInt(at.line)) * line, adv, cell, '.');
-        };
         glyphs.count[k] = n - start;
         return n;
     }
@@ -263,9 +286,8 @@ pub const MonoParagraphs = struct {
             if (d.op.kind[j] != @backingInt(DrawList.Kind.text)) continue;
             const k = d.op.ref[j];
             const at = std.mem.indexOfScalar(u32, p.rows, k) orelse continue;
-            const deco = p.decorations[p.styles[at]];
             const first = d.quad_len;
-            p.decorationQuads(d, k, p.table[p.styles[at]], deco);
+            p.decorationQuads(d, k, p.styles[at]);
             // The new quads' ops go right after the text op, the later ops after them.
             const added = @min(d.quad_len - first, @as(u32, @intCast(d.op.kind.len)) - d.op_len);
             d.quad_len = first + added;
@@ -285,39 +307,35 @@ pub const MonoParagraphs = struct {
         paint.encode(d);
     }
 
-    fn decorationQuads(p: MonoParagraphs, d: *DrawList, k: u32, st: Paragraph, deco: Decoration) void {
+    fn decorationQuads(p: MonoParagraphs, d: *DrawList, k: u32, style: u16) void {
+        const deco = p.decorations[style];
         const r = d.runs[k];
-        const bytes = d.strings[r.start..][0..r.bytes];
-        const avail = r.rect[2] - r.rect[0];
-        const line = lineOf(p.mono, st, r.px);
-        const wraps = r.rect[3] - r.rect[1] > line * 1.5;
-        const f = fit(p.mono, st, bytes, r.px, avail, wraps);
-        const adv = r.px * p.mono.advance;
-        const cell = r.px * p.mono.line;
-        const top = (line - cell) * std.math.clamp(st.leading, 0, 1);
+        const l = p.placed(d, k, style);
+        const w = l.w;
+        const cell = r.px * w.mono.line;
+        const top = (w.line() - cell) * std.math.clamp(w.st.leading, 0, 1);
         const thickness = deco.thickness orelse @max(1, @round(r.px / 14));
         const color = if (deco.color) |authored| paint.fade(authored, r.opacity) else r.color;
         // Where each line ends: the walk `quads` makes, dots included.
         var pen: Pen = .{};
         var line_end: f32 = 0;
         var line_no: u32 = 0;
-        const dots: u32 = if (f.cut < bytes.len and st.ellipsis) 3 else 0;
-        for (0..f.cut + dots) |i| {
-            const b = if (i < f.cut) bytes[i] else '.';
+        const dots: u32 = if (l.f.cut < l.bytes.len and w.st.ellipsis) 3 else 0;
+        for (0..l.f.cut + dots) |i| {
+            const b = if (i < l.f.cut) l.bytes[i] else '.';
             const before = pen.line;
-            pen.advance(adv, st, b, avail, wraps and i < f.cut);
+            pen.advance(w, @intCast(@min(i, @max(l.f.cut, 1) - 1)), b, l.avail, l.wraps and i < l.f.cut);
             if (pen.line != before) {
-                p.bars(d, r, line_no, line_end, line, top, cell, thickness, color, deco);
+                bars(d, r, line_no, line_end, w.line(), top, cell, thickness, color, deco);
                 line_no = pen.line;
             }
             line_end = pen.x;
         }
-        if (f.cut + dots > 0) p.bars(d, r, line_no, line_end, line, top, cell, thickness, color, deco);
+        if (l.f.cut + dots > 0) bars(d, r, line_no, line_end, w.line(), top, cell, thickness, color, deco);
     }
 
     /// The decoration bars of one line, `width` px long.
-    fn bars(p: MonoParagraphs, d: *DrawList, r: draw_list.TextRun, line_no: u32, width: f32, line: f32, top: f32, cell: f32, thickness: f32, color: u32, deco: Decoration) void {
-        _ = p;
+    fn bars(d: *DrawList, r: draw_list.TextRun, line_no: u32, width: f32, line: f32, top: f32, cell: f32, thickness: f32, color: u32, deco: Decoration) void {
         const cell_top = r.rect[1] + @as(f32, @floatFromInt(line_no)) * line + top;
         // Mono has no face metrics: the underline below the baseline, the strike through
         // the x-height's middle, the overline at the cell's top.
@@ -341,14 +359,14 @@ pub const MonoParagraphs = struct {
         }
     }
 
-    fn glyph(out: []Quad, n: u32, last: u32, r: draw_list.TextRun, x_: f32, y: f32, adv: f32, cell: f32, b: u8) u32 {
+    fn glyph(out: []Quad, n: u32, last: u32, r: draw_list.TextRun, x_: f32, y: f32, adv: f32, cell: f32, b: u8, color: u32) u32 {
         const x = r.rect[0] + x_;
         out[n] = .{
             .rect = .{ x, y, x + adv, y + cell },
             .clip = r.clip,
             .params = .{ 0, 0, 0, 0 },
             .uv = FullGrid.uv(b) catch unreachable,
-            .fill = r.color,
+            .fill = color,
             .border_color = 0,
             .radii = @splat(0),
             .border = 0,
@@ -359,73 +377,100 @@ pub const MonoParagraphs = struct {
         return @min(n + 1, last);
     }
 
+    /// One run's style: its paragraph, spans and own size.
+    const Walk = struct {
+        mono: Mono,
+        st: Paragraph,
+        spans: []const Span,
+        px: f32,
+
+        fn line(w: Walk) f32 {
+            var px = w.px;
+            for (w.spans) |sp| px = @max(px, sp.style.px);
+            return switch (w.st.line_height) {
+                .font => px * w.mono.line,
+                .px => |v| v,
+                .multiple => |v| v * w.px,
+            };
+        }
+
+        /// The size and colour of byte `j`: its span's, else the run's (`r` for the colour).
+        /// ponytail: a scan over the spans per byte; keep a cursor if paragraphs get many.
+        fn styleAt(w: Walk, j: u32, r: draw_list.TextRun) struct { px: f32, color: u32 } {
+            var out: @TypeOf(w.styleAt(j, r)) = .{ .px = w.px, .color = r.color };
+            for (w.spans) |sp| if (sp.start <= j) {
+                out = .{ .px = sp.style.px, .color = paint.fade(sp.style.color.bitsOf(), r.opacity) };
+            };
+            return out;
+        }
+
+        fn pxAt(w: Walk, j: u32) f32 {
+            var px = w.px;
+            for (w.spans) |sp| px = simd.selF(sp.start <= j, sp.style.px, px);
+            return px;
+        }
+
+        /// The advance of byte `b` at `j`: its cell, letter spacing and, after a space, word
+        /// spacing.
+        fn width(w: Walk, j: u32, b: u8) f32 {
+            return w.pxAt(j) * w.mono.advance + w.st.letter_spacing + simd.b2f(b == ' ') * w.st.word_spacing;
+        }
+
+        fn fit(w: Walk, bytes: []const u8, avail: f32, wraps: bool) Fit {
+            var total: f32 = 0;
+            for (bytes, 0..) |b, j| total += w.width(@intCast(j), b);
+            var pen: Pen = .{};
+            var cut: u32 = @intCast(bytes.len);
+            for (bytes, 0..) |b, j| {
+                const before = pen;
+                pen.advance(w, @intCast(j), b, avail, wraps);
+                if (pen.line >= w.st.max_lines) {
+                    pen = before;
+                    cut = @intCast(j);
+                    break;
+                }
+            }
+            const lines = pen.line + 1;
+            const overflow = cut < bytes.len or (!wraps and total > avail);
+            if (w.st.ellipsis and overflow) {
+                // Back off until "..." fits after the last byte kept on the last line.
+                var x = pen.x;
+                var j = if (cut < bytes.len) cut else visible: {
+                    var x_end: f32 = 0;
+                    var m: u32 = 0;
+                    while (m < bytes.len and x_end + w.width(m, bytes[m]) <= avail) : (m += 1) x_end += w.width(m, bytes[m]);
+                    x = x_end;
+                    break :visible m;
+                };
+                while (j > 0 and x + 3 * w.width(j - 1, '.') > avail) {
+                    j -= 1;
+                    x -= w.width(j, bytes[j]);
+                }
+                cut = j;
+            }
+            return .{ .w = total, .lines = lines, .cut = cut };
+        }
+    };
+
     /// Where the walk is: x after the last byte placed, on line `line`.
     const Pen = struct {
         x: f32 = 0,
         line: u32 = 0,
 
-        /// Places a byte: on this line if it fits within `avail` (half a cell of slack, as
-        /// Mono rounds), else first on the next one. The first byte of a line always fits.
-        fn advance(pen: *Pen, adv: f32, st: Paragraph, b: u8, avail: f32, wraps: bool) void {
-            const w = advanceOf(adv, st, b);
-            const next = wraps and pen.x > 0 and pen.x + w > avail + @max(adv, 1e-6) * 0.5;
+        /// Places byte `b` (at `j`): on this line if it fits within `avail` (half a cell of
+        /// slack, as Mono rounds), else first on the next one. A line's first byte always fits.
+        fn advance(pen: *Pen, w: Walk, j: u32, b: u8, avail: f32, wraps: bool) void {
+            const bw = w.width(j, b);
+            const slack = @max(w.pxAt(j) * w.mono.advance, 1e-6) * 0.5;
+            const next = wraps and pen.x > 0 and pen.x + bw > avail + slack;
             pen.line += @intFromBool(next);
-            pen.x = if (next) w else pen.x + w;
+            pen.x = if (next) bw else pen.x + bw;
         }
     };
 
     /// The walk's result: single-line width, lines shown (clamped to `max_lines`) and the
     /// bytes drawn before the ellipsis (all of them when nothing is cut).
     const Fit = struct { w: f32, lines: u32, cut: u32 };
-
-    fn fit(mono: Mono, st: Paragraph, bytes: []const u8, px: f32, avail: f32, wraps: bool) Fit {
-        const adv = px * mono.advance;
-        var w: f32 = 0;
-        for (bytes) |b| w += advanceOf(adv, st, b);
-        var pen: Pen = .{};
-        var cut: u32 = @intCast(bytes.len);
-        for (bytes, 0..) |b, j| {
-            const before = pen;
-            pen.advance(adv, st, b, avail, wraps);
-            if (pen.line >= st.max_lines) {
-                pen = before;
-                cut = @intCast(j);
-                break;
-            }
-        }
-        const lines = pen.line + 1;
-        const overflow = cut < bytes.len or (!wraps and w > avail);
-        if (st.ellipsis and overflow) {
-            // Back off until "..." fits after the last byte kept on the last line.
-            const dots = 3 * advanceOf(adv, st, '.');
-            var x = pen.x;
-            var j = if (cut < bytes.len) cut else visible: {
-                var x_end: f32 = 0;
-                var m: u32 = 0;
-                while (m < bytes.len and x_end + advanceOf(adv, st, bytes[m]) <= avail) : (m += 1) x_end += advanceOf(adv, st, bytes[m]);
-                x = x_end;
-                break :visible m;
-            };
-            while (j > 0 and x + dots > avail) {
-                j -= 1;
-                x -= advanceOf(adv, st, bytes[j]);
-            }
-            cut = j;
-        }
-        return .{ .w = w, .lines = lines, .cut = cut };
-    }
-
-    fn advanceOf(adv: f32, st: Paragraph, b: u8) f32 {
-        return adv + st.letter_spacing + simd.b2f(b == ' ') * st.word_spacing;
-    }
-
-    fn lineOf(mono: Mono, st: Paragraph, px: f32) f32 {
-        return switch (st.line_height) {
-            .font => px * mono.line,
-            .px => |v| v,
-            .multiple => |v| v * px,
-        };
-    }
 };
 
 fn cellUv(index: u8, comptime columns: usize, comptime rows: usize) [4]f32 {
@@ -1021,4 +1066,41 @@ test "MonoParagraphs: letter and word spacing, line height, a clamp and an ellip
     // "ab..." with the cell 2 px into the 16 px line.
     try testing.expectEqual([4]f32{ 10, 62, 15, 74 }, out[first[2] + 2].rect);
     try testing.expectEqual(FullGrid.uv('.') catch unreachable, out[first[2] + 4].uv);
+}
+
+test "MonoParagraphs: spans size and colour their bytes in one paragraph" {
+    var fx: Fixture(2) = .{};
+    var tx = fx.texts();
+    // "ab" at 10 px, "CD" at 20 px in red: 5 + 5 + 10 + 10 px wide.
+    _ = tx.push(0, .{ .start = 0, .bytes = 4 }, &.{ .px = 10 });
+    const red: types.Color = .rgb(255, 0, 0);
+    const spans = [_]Span{.{ .start = 2, .style = .{ .px = 20, .color = red } }};
+    const font: MonoParagraphs = .{
+        .mono = .{ .advance = 0.5, .line = 1.2 },
+        .rows = &.{0},
+        .styles = &.{0},
+        .table = &.{.{}},
+        .spans = &.{&spans},
+        .strings = "abCD",
+    };
+    font.measure(&tx);
+    try testing.expectEqual(30, tx.c.w[0]);
+    // In 22 px "ab" and "C" fit (the half-cell slack), "D" wraps.
+    tx.c.avail[0] = 22;
+    tx.c.wrap[0] = 1;
+    font.wrap(&tx);
+    // Lines as tall as the 20 px span's.
+    try testing.expectEqual(48, tx.c.h[0]);
+    var runs = [_]draw_list.TextRun{.{ .rect = .{ 0, 0, 22, 48 }, .clip = .{ 0, 0, 100, 100 }, .start = 0, .bytes = 4, .px = 10, .color = 0xffffffff, .font = 0 }};
+    var d = testList(&runs, "abCD");
+    var out: [8]Quad = undefined;
+    var first: [1]u32 = undefined;
+    var count: [1]u32 = undefined;
+    _ = font.quads(&d, &out, .{ .first = &first, .count = &count });
+    try testing.expectEqual([4]f32{ 10, 0, 20, 24 }, out[2].rect);
+    try testing.expectEqual(red.bitsOf(), out[2].fill);
+    // The 10 px cells sit in the middle of the 24 px line.
+    try testing.expectEqual([4]f32{ 0, 6, 5, 18 }, out[0].rect);
+    try testing.expectEqual(0xffffffff, out[0].fill);
+    try testing.expectEqual([4]f32{ 0, 24, 10, 48 }, out[3].rect);
 }

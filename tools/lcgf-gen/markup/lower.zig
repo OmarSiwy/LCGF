@@ -64,6 +64,10 @@ pub const Lowerer = struct {
 
     /// Per document node: the text decoration its text shows (its own and its ancestors').
     deco: []Decoration = &.{},
+    /// Per document node inside a paragraph of inline runs (F11): that paragraph's element.
+    inline_of: []u32 = &.{},
+    /// The paragraphs of inline runs, as their text is gathered: bytes and each byte's style.
+    inlines: std.ArrayList(Inline) = .empty,
 
     const Shadow = struct { x: f32, y: f32, blur: f32, spread: f32, color: types.Color };
     const Outline = struct { width: f32, offset: f32, color: types.Color };
@@ -450,10 +454,14 @@ pub const Lowerer = struct {
             l.deco[i] = if (p == none) .{} else l.deco[p];
             l.current = i;
             if (kinds[i] == .text) {
-                l.textNode(i);
+                if (l.inline_of[i] != none) l.inlineText(i) else l.textNode(i);
                 continue;
             }
             l.computeText(i);
+            if (l.inline_of[i] != none) {
+                l.inlineElement(i);
+                continue;
+            }
             const t = l.tag(i);
             if (std.mem.eql(u8, t, "html")) {
                 if (l.attr(i, "lcgf-page")) |name| l.page.name = name;
@@ -479,6 +487,7 @@ pub const Lowerer = struct {
             }
             l.element(i, l.irParent(i));
         }
+        l.finishInlines();
         l.checkFields();
         l.checkRegions();
         l.checkProps();
@@ -1159,11 +1168,7 @@ pub const Lowerer = struct {
             l.label(n, parent, heading);
             return;
         }
-        if (std.mem.eql(u8, t, "p") and content_.text and content_.elements > 0) {
-            if (!l.refused("feature", "inline-runs", "p", l.loc(n))) {}
-            l.skip[n] = true;
-            return;
-        }
+        if (std.mem.eql(u8, t, "p") and content_.text and content_.elements > 0) return l.inlineRuns(n, parent);
         if (std.mem.eql(u8, t, "hr")) {
             l.separator(n, parent);
             return;
@@ -1708,6 +1713,112 @@ pub const Lowerer = struct {
         l.ir_of[n] = l.addNode(node);
     }
 
+    /// `<p>` with text and phrasing elements (F11): one label whose text is all of it, in
+    /// style runs (`spec.spans`). Its descendants add their text as the walk reaches them
+    /// (`inlineText`, `inlineElement`), with their computed styles; `finishInlines` collapses
+    /// the white space and cuts the runs.
+    fn inlineRuns(l: *Lowerer, n: u32, parent: u32) void {
+        const th = &l.page.theme;
+        const base_style = lcgf.widgets_label.labelStyle(th);
+        var params: []const u8 = "";
+        var margin: ?[4]f32 = null;
+        const s = l.boxStyle(n, base_style, l.parentDir(parent), &params, &margin);
+        const node: ir.Node = .{
+            .kind = .label,
+            .parent = parent,
+            .loc = l.loc(n),
+            .style = s,
+            .base_style = base_style,
+            .params_expr = params,
+            .text_style = l.text[n],
+            .base_text = lcgf.widgets_label.labelText(th),
+            .paragraph = l.paragraphOf(n),
+            .decoration = l.decorationOf(n),
+            .text_kind = .literal,
+            .name = l.accessibleName(n),
+            .margin = margin,
+        };
+        l.ir_of[n] = l.addNode(node);
+        const owner: u32 = @intCast(l.inlines.items.len);
+        ok(l.inlines.append(l.arena, .{ .element = n, .ir = l.ir_of[n] }));
+        for (n + 1..l.k.end[n]) |i| l.inline_of[i] = owner;
+    }
+
+    fn inlineText(l: *Lowerer, i: u32) void {
+        const p = l.doc.nodes.items(.parent)[i];
+        const bytes = l.doc.nodes.items(.name)[i];
+        const in = &l.inlines.items[l.inline_of[i]];
+        if (std.mem.indexOfScalar(u8, bytes, '{') != null) {
+            l.ds.err(.{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[i] }, "bound text inside a paragraph of inline runs is not lowered yet; put it in its own element", .{});
+            return;
+        }
+        ok(in.bytes.appendSlice(l.arena, bytes));
+        for (bytes) |_| ok(in.styles.append(l.arena, l.text[p]));
+    }
+
+    fn inlineElement(l: *Lowerer, i: u32) void {
+        const in = &l.inlines.items[l.inline_of[i]];
+        const t = l.tag(i);
+        const phrasing = [_][]const u8{ "span", "strong", "b", "em", "i", "code", "small", "mark", "kbd", "samp", "var", "abbr", "cite", "q", "time", "data", "bdi", "bdo", "dfn", "u", "s", "ins", "del", "sub", "sup", "br", "wbr" };
+        const known = for (phrasing) |x| {
+            if (std.mem.eql(u8, t, x)) break true;
+        } else false;
+        if (!known) {
+            l.ds.err(l.loc(i), "<{s}> inside a paragraph of inline runs is not lowered; inline runs take text and phrasing elements (span, strong, em, b, i, code, …)", .{t});
+            l.skip[i] = true;
+            return;
+        }
+        if (std.mem.eql(u8, t, "br")) {
+            ok(in.bytes.append(l.arena, 0));
+            ok(in.styles.append(l.arena, l.text[i]));
+            return;
+        }
+        // One paragraph style and one decoration for the whole paragraph, for now.
+        const e = in.element;
+        if (!std.meta.eql(l.deco[i], l.deco[e])) l.ds.err(l.loc(i), "text-decoration on part of a paragraph is not lowered yet; decorate the whole <p>", .{});
+        var a = l.para[i];
+        var b = l.para[e];
+        a.ellipsis = false;
+        b.ellipsis = false;
+        if (!std.meta.eql(a, b)) l.ds.err(l.loc(i), "line-height, letter-spacing and word-spacing apply to the whole paragraph of inline runs; set them on the <p>", .{});
+    }
+
+    /// Each paragraph of inline runs: white space collapsed as `label` does, then one span at
+    /// every change of style (a span back to the paragraph's own style included).
+    fn finishInlines(l: *Lowerer) void {
+        for (l.inlines.items) |in| {
+            var text: std.ArrayList(u8) = .empty;
+            var styles: std.ArrayList(TextStyle) = .empty;
+            var space = false;
+            var space_style: TextStyle = .{};
+            for (in.bytes.items, in.styles.items) |ch, st| {
+                if (std.ascii.isWhitespace(ch)) {
+                    if (!space) space_style = st;
+                    space = text.items.len > 0;
+                    continue;
+                }
+                // No space next to a line break, as `breaks` drops it.
+                if (space and ch != 0 and (text.items.len == 0 or text.items[text.items.len - 1] != '\n')) {
+                    ok(text.append(l.arena, ' '));
+                    ok(styles.append(l.arena, space_style));
+                }
+                space = false;
+                ok(text.append(l.arena, if (ch == 0) '\n' else ch));
+                ok(styles.append(l.arena, st));
+            }
+            const base = l.text[in.element];
+            var spans: std.ArrayList(lcgf.protocol.Span) = .empty;
+            var prev = base;
+            for (styles.items, 0..) |st, k| {
+                if (!std.meta.eql(st, prev)) ok(spans.append(l.arena, .{ .start = @intCast(k), .style = st }));
+                prev = st;
+            }
+            const nodes = l.page.nodes.slice();
+            nodes.items(.text)[in.ir] = text.items;
+            nodes.items(.spans)[in.ir] = spans.items;
+        }
+    }
+
     /// `<template lcgf-if|lcgf-each|lcgf-switch|lcgf-case>`: a region over its content. A
     /// template without lcgf-* is inert, as in a browser.
     fn template(l: *Lowerer, n: u32, parent: u32) void {
@@ -1905,10 +2016,10 @@ pub const Lowerer = struct {
         const kinds = l.page.nodes.items(.kind);
         const parents = l.page.nodes.items(.parent);
         // A run-time region builds in a Context of its own, without the page's paragraph rows.
-        for (l.page.nodes.items(.paragraph), l.page.nodes.items(.decoration), 0..) |pa, de, i| if (pa != null or de != null) {
+        for (l.page.nodes.items(.paragraph), l.page.nodes.items(.decoration), l.page.nodes.items(.spans), 0..) |pa, de, sp, i| if (pa != null or de != null or sp.len > 0) {
             var p = parents[i];
             while (p != none) : (p = parents[p]) if (kinds[p] == .each) {
-                l.ds.err(l.page.nodes.items(.loc)[i], "paragraph styles and text decorations inside lcgf-each are not supported yet", .{});
+                l.ds.err(l.page.nodes.items(.loc)[i], "paragraph styles, text decorations and inline runs inside lcgf-each are not supported yet", .{});
                 break;
             };
         };
@@ -2746,7 +2857,9 @@ pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: 
         .font = Lowerer.ok(arena.alloc(FontState, n)),
         .para = Lowerer.ok(arena.alloc(Paragraph, n)),
         .deco = Lowerer.ok(arena.alloc(Decoration, n)),
+        .inline_of = Lowerer.ok(arena.alloc(u32, n)),
     };
+    @memset(l.inline_of, none);
     @memset(l.ir_of, none);
     @memset(l.skip, false);
     return l;
@@ -2754,6 +2867,14 @@ pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: 
 
 const Paragraph = lcgf.text_stack.Paragraph;
 const Decoration = lcgf.text_decorations.Style;
+
+/// A paragraph of inline runs while its text is gathered.
+const Inline = struct {
+    element: u32,
+    ir: u32,
+    bytes: std.ArrayList(u8) = .empty,
+    styles: std.ArrayList(TextStyle) = .empty,
+};
 
 /// The inherited font properties of an element.
 const FontState = struct {

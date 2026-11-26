@@ -34,6 +34,8 @@ pub const Spec = struct {
     paragraph: ?@import("../text/layout/stack.zig").Paragraph = null,
     /// Underline, overline or line-through of this label (`decorated`); null for none.
     decoration: ?@import("../text/layout/decorations.zig").Style = null,
+    /// Style runs of this label's text (inline runs: `spans`); empty for one style.
+    spans: []const @import("../text/protocol.zig").Span = &.{},
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
     /// Flex item and container rules beyond `style` (margins, wrap, align-self, aspect,
@@ -315,6 +317,16 @@ pub fn decorated(comptime s: Spec, comptime d: @import("../text/layout/decoratio
     if (s.kind != .label) @compileError("decorated: only a label has a text decoration");
     var out = s;
     out.decoration = d;
+    return out;
+}
+
+/// Label `s` as one paragraph in several styles: from each span's `start` byte on, its text
+/// style's size, colour and font: `spans(label("a bold word"), &.{ .{ .start = 2, .style = bold
+/// }, .{ .start = 6, .style = plain } })`. Measured and drawn by `protocol.MonoParagraphs`.
+pub fn spans(comptime s: Spec, comptime runs: []const @import("../text/protocol.zig").Span) Spec {
+    if (s.kind != .label) @compileError("spans: only a label has style runs");
+    var out = s;
+    out.spans = runs;
     return out;
 }
 

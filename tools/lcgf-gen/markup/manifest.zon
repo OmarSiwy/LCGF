@@ -32,7 +32,7 @@
         .{ .kind = "element", .name = "h1", .status = .mapped, .target = "spec.heading(1, …) spec.zig:123 + spec.textStyled (UA 2em)", .fixture = "hello" },
         .{ .kind = "element", .name = "h2", .status = .mapped, .target = "spec.heading(2, …), UA 1.5em", .fixture = "landmarks" },
         .{ .kind = "element", .name = "p", .status = .mapped, .target = "widgets_label.ct.label + text_style.wrap (UA white-space: normal)", .fixture = "hello" },
-        .{ .kind = "feature", .name = "inline-runs", .applies_to = "p", .status = .planned, .diagnostic = "inline formatting inside <p> needs inline runs (F11): split the text or use one element", .spec = "F11" },
+        .{ .kind = "feature", .name = "inline-runs", .applies_to = "p", .status = .mapped, .target = "one label in style runs (spec.spans, protocol.Span: size, colour, font per run) over span, strong, em, b, i, code and the other phrasing elements; MonoParagraphs", .fixture = "inline" },
         .{ .kind = "element", .name = "span", .status = .mapped, .target = "widgets_label.ct.label", .fixture = "counter" },
         .{ .kind = "element", .name = "br", .status = .mapped, .target = "\\n in the label's literal", .fixture = "hello" },
         .{ .kind = "element", .name = "hr", .status = .mapped, .target = "widgets_separator.ct.separator w/separator:52, orientation from the parent axis", .fixture = "landmarks" },
@@ -268,5 +268,6 @@
         .{ .name = "faces" },
         .{ .name = "fields" },
         .{ .name = "decorations" },
+        .{ .name = "inline" },
     },
 }
