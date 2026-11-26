@@ -350,6 +350,7 @@ pub const Emit = struct {
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(")");
             },
+            .each => e.print("lcgf.ct_interop.region(.{f}, {s})", .{ std.zig.fmtId(n.id), e.styleText(n.style, n.params_expr) }),
             .spinner => unreachable,
         }
         if (restyle and !has_children) {
@@ -391,6 +392,8 @@ pub const Emit = struct {
         for (0..nodes.len) |i_| {
             const i: u32 = @intCast(i_);
             const parent = nodes.items(.parent)[i];
+            // A run-time region's content is built at run time (`Page.frame`), not in the spec.
+            if (e.eachOf(parent) != none) continue;
             while (stack.items.len > 0 and stack.items[stack.items.len - 1].node != parent) {
                 const top = stack.pop().?;
                 e.indent(stack.items.len);
@@ -437,11 +440,12 @@ pub const Emit = struct {
 
     /// The handler's function type, as the app writes it.
     fn signature(e: *Emit, h: ir.Handler, comptime H: []const u8) []const u8 {
-        const extra = if (h.payload) |p| std.fmt.allocPrint(e.arena, ", value: {s}", .{fieldType(p)}) catch unreachable else "";
+        const extra = if (h.each.len > 0) ", index: u32" else if (h.payload) |p| std.fmt.allocPrint(e.arena, ", value: {s}", .{fieldType(p)}) catch unreachable else "";
         return std.fmt.allocPrint(e.arena, "pub fn {s}(h: *{s}, ui: *Ui{s}) void", .{ h.name, H, extra }) catch unreachable;
     }
 
     fn fnType(e: *Emit, h: ir.Handler) []const u8 {
+        if (h.each.len > 0) return "fn (*H, *Ui, u32) void";
         return std.fmt.allocPrint(e.arena, "fn (*H, *Ui{s}{s}) void", .{ if (h.payload != null) ", " else "", if (h.payload) |p| fieldType(p) else "" }) catch unreachable;
     }
 
@@ -452,11 +456,10 @@ pub const Emit = struct {
         e.spec();
         std.mem.swap(std.ArrayList(u8), &body, &e.out);
         var rt: std.ArrayList(u8) = .empty;
-        if (e.runtime) {
-            std.mem.swap(std.ArrayList(u8), &rt, &e.out);
-            e.runtimeUi();
-            std.mem.swap(std.ArrayList(u8), &rt, &e.out);
-        }
+        // Generated before the imports, which list the widget modules these use.
+        std.mem.swap(std.ArrayList(u8), &rt, &e.out);
+        if (e.runtime) e.runtimeUi() else e.page_fn();
+        std.mem.swap(std.ArrayList(u8), &rt, &e.out);
         e.print("//! Generated from {s} by lcgf-gen ({s} frontend); do not edit.\n\n", .{ std.fs.path.basename(source), if (e.runtime) "runtime" else "spec" });
         e.write("const lcgf = @import(\"lcgf\");\nconst s = lcgf.spec;\nconst w = lcgf.widgets_base;\n");
         var it = e.modules.iterator();
@@ -500,7 +503,7 @@ pub const Emit = struct {
                 e.write("\npub const Ui = w.ComptimeUiTokens(State, spec, theme, Tokens);\npub const Widget = Ui.Events.Widget;\n\n")
             else
                 e.write("\npub const Ui = w.ComptimeUi(State, spec, theme);\npub const Widget = Ui.Events.Widget;\n\n");
-            e.page_fn();
+            e.write(rt.items);
         }
         e.checkBlock();
         return e.out.items;
@@ -509,7 +512,26 @@ pub const Emit = struct {
     // ---- runtime frontend -----------------------------------------------------------------
 
     /// `ui.signals.state.<name>`.
+    /// The `each` region node `i` is in (itself included), or none.
+    fn eachOf(e: *Emit, i: u32) u32 {
+        var k = i;
+        const nodes = e.page.nodes.slice();
+        while (k != none) : (k = nodes.items(.parent)[k]) if (nodes.items(.kind)[k] == .each) return k;
+        return none;
+    }
+
+    /// A style literal as text.
+    fn styleText(e: *Emit, st: types.Style, params: []const u8) []const u8 {
+        var buf: std.ArrayList(u8) = .empty;
+        std.mem.swap(std.ArrayList(u8), &buf, &e.out);
+        e.fields(st, types.Style{}, &.{}, params);
+        std.mem.swap(std.ArrayList(u8), &buf, &e.out);
+        return buf.items;
+    }
+
     fn stateRef(e: *Emit, name: []const u8) []const u8 {
+        // `item.field` of an lcgf-each item: the loop's capture, not the view state.
+        if (std.mem.indexOfScalar(u8, name, '.') != null) return name;
         return std.fmt.allocPrint(e.arena, "ui.signals.state.{f}", .{std.zig.fmtId(name)}) catch unreachable;
     }
 
@@ -595,7 +617,10 @@ pub const Emit = struct {
                 const h = e.clickHandler(n.id);
                 e.print("{s}{s}.button(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use("button"), e.rtId(n.id, list_depth) });
                 e.rtCaption(n.text_kind, n.text);
-                if (h != null) e.print(").clicked) ui.events.{f} = true;", .{std.zig.fmtId(n.id)}) else e.write(");");
+                if (h == null) e.write(");") else if (e.eachOf(i) != none)
+                    e.print(").clicked) events.{f} = @intCast(copy0);", .{std.zig.fmtId(n.id)})
+                else
+                    e.print(").clicked) ui.events.{f} = true;", .{std.zig.fmtId(n.id)});
                 return "";
             },
             .checkbox, .@"switch", .toggle => {
@@ -665,7 +690,7 @@ pub const Emit = struct {
                 e.print("_ = f.open(.none, .{{}}); switch ({s}) {{", .{e.stateRef(n.bind)});
                 return "} f.close();";
             },
-            .spacer, .spinner => unreachable,
+            .spacer, .spinner, .each => unreachable,
         }
     }
 
@@ -703,7 +728,6 @@ pub const Emit = struct {
     /// `Ui` of the runtime frontend: the state store the comptime page has (`signals`), and
     /// `build(ui, f)`, which builds the page into a runtime `Frame` and records its events.
     fn runtimeUi(e: *Emit) void {
-        const nodes = e.page.nodes.slice();
         const tokens = e.page.tokens.items;
         e.write(
             \\
@@ -767,20 +791,36 @@ pub const Emit = struct {
             \\        const fx = &ui.flex.?;
             \\
         );
+        e.rtWalk(none, 0);
+        e.write("    }\n\n");
+        e.rtDispatch();
+    }
+
+    /// The runtime statements of every node (`within` none), or of the descendants of
+    /// `within`, nested `depth` levels below the function body, inside `lists` repeats.
+    fn rtWalk(e: *Emit, within: u32, lists_: u32) void {
+        const nodes = e.page.nodes.slice();
+        const base: usize = if (within == none) 2 else 4;
         var stack: std.ArrayList(struct { node: u32, close: []const u8 }) = .empty;
-        var lists: u32 = 0;
-        for (0..nodes.len) |i_| {
+        var lists: u32 = lists_;
+        const first: u32 = if (within == none) 0 else within + 1;
+        for (first..nodes.len) |i_| {
             const i: u32 = @intCast(i_);
             const parent = nodes.items(.parent)[i];
+            if (within != none) {
+                var k = parent;
+                while (k != none and k != within) k = nodes.items(.parent)[k];
+                if (k == none) break;
+            }
             while (stack.items.len > 0 and stack.items[stack.items.len - 1].node != parent) {
                 const top = stack.pop().?;
                 if (nodes.items(.kind)[top.node] == .list) lists -= 1;
-                e.indent(stack.items.len + 2);
+                e.indent(stack.items.len + base);
                 e.print("{s}\n", .{top.close});
             }
             // An alternative of a choice is one prong of its switch.
             const in_choice = parent != none and nodes.items(.kind)[parent] == .choice;
-            e.indent(stack.items.len + 2);
+            e.indent(stack.items.len + base);
             if (in_choice) {
                 var k: usize = 0;
                 for (nodes.items(.parent)[0..i]) |p| k += @intFromBool(p == parent);
@@ -799,15 +839,17 @@ pub const Emit = struct {
                 else => true,
             };
             if (leaf and in_choice) {
-                e.indent(stack.items.len + 2);
+                e.indent(stack.items.len + base);
                 e.write("},\n");
             } else if (!leaf) stack.append(e.arena, .{ .node = i, .close = close }) catch unreachable;
         }
         while (stack.pop()) |top| {
-            e.indent(stack.items.len + 2);
+            e.indent(stack.items.len + base);
             e.print("{s}\n", .{top.close});
         }
-        e.write("    }\n\n");
+    }
+
+    fn rtDispatch(e: *Emit) void {
         // Dispatch: clicks, then value changes, in tree order.
         e.write("    /// Calls the handlers of the frame `build` made.\n    pub fn dispatch(ui: *Ui, h: anytype) void {\n");
         if (e.page.handlers.items.len == 0) e.write("        _ = ui;\n        _ = h;\n");
@@ -888,30 +930,113 @@ pub const Emit = struct {
             \\    return struct {
             \\        ui: Ui = .{},
             \\
-            \\        pub fn frame(p: *@This(), h: *H, in: *const lcgf.input.Input) Ui.Output {
-            \\
         );
+        const each = for (e.page.nodes.items(.kind), 0..) |k, i| {
+            if (k == .each) break @as(u32, @intCast(i));
+        } else none;
+        if (each != none) e.eachFields(each);
+        e.write(if (each != none) "        pub fn frame(p: *@This(), h: *H, in: *const lcgf.input.Input, data: anytype) Ui.Output {\n" else "        pub fn frame(p: *@This(), h: *H, in: *const lcgf.input.Input) Ui.Output {\n");
         var changes = false;
         var clicks: u32 = 0;
         for (hs) |h| {
             changes = changes or h.event == .change;
             clicks += @intFromBool(h.event == .click);
         }
+        var item_clicks: u32 = 0;
+        for (hs) |h| item_clicks += @intFromBool(h.each.len > 0);
+        clicks -= item_clicks;
         if (hs.len == 0) e.write("            _ = h;\n");
         if (changes) e.write("            const before = p.ui.signals.state;\n");
-        e.write("            const out = p.ui.frame(in);\n");
+        e.write(if (each != none) "            var out = p.ui.frame(in);\n" else "            const out = p.ui.frame(in);\n");
+        if (each != none) e.eachFrame(each);
         // Clicks: one prong per widget with a click handler.
         if (clicks > 0) {
             e.write("            if (out.event) |event| switch (event) {\n");
-            for (hs) |h| if (h.event == .click) e.print("                .{f} => h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
+            for (hs) |h| if (h.event == .click and h.each.len == 0) e.print("                .{f} => h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
             var widgets: u32 = 0;
-            for (e.page.nodes.items(.id)) |id| widgets += @intFromBool(id.len > 0);
+            for (e.page.nodes.items(.id), 0..) |id, k| widgets += @intFromBool(id.len > 0 and (e.eachOf(@intCast(k)) == none or e.page.nodes.items(.kind)[k] == .each));
             if (widgets > clicks) e.write("                else => {},\n");
             e.write("            };\n");
         }
+        for (hs) |h| if (h.event == .click and h.each.len > 0)
+            e.print("            if (events.{f}) |index| h.{f}(&p.ui, index); // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
         for (hs) |h| if (h.event == .change)
             e.print("            if (p.ui.signals.state.{f} != before.{f}) h.{f}(&p.ui, p.ui.signals.state.{f}); // {s}\n", .{ std.zig.fmtId(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), std.zig.fmtId(h.field), e.where(h.loc) });
         e.write("            return out;\n        }\n    };\n}\n\n");
+    }
+
+    /// The Page fields of its run-time region: the region's runtime Context, and the draw list
+    /// the page's and the region's draw lists are composed into.
+    fn eachFields(e: *Emit, each: u32) void {
+        const n = e.page.nodes.get(each);
+        e.print(
+            \\        /// The run-time region `{s}` (lcgf-each="{s} in {s}"): its own runtime Context, and the
+            \\        /// draw list the page and the region are composed into. A Page does not move once used.
+            \\        region_buf: [lcgf.context.Context.requiredBytes(region_limits)]u8 align(lcgf.mem.column_align) = undefined,
+            \\        region: ?lcgf.context.Context = null,
+            \\        draw_buf: [draw_bytes]u8 align(lcgf.mem.column_align) = undefined,
+            \\        draw: lcgf.draw_list.DrawList = undefined,
+            \\        draw_carved: bool = false,
+            \\        strings: [region_limits.strings + 8192]u8 = undefined,
+            \\
+            \\        const region_limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = 16384, .depth = 64 }};
+            \\        const draw_rows = {d} + region_limits.nodes;
+            \\        const draw_bytes = blk: {{
+            \\            var carver: lcgf.mem.Carver = .{{ .buf = null }};
+            \\            _ = lcgf.draw_list.DrawList.init(&carver, draw_rows, draw_rows, 8);
+            \\            break :blk carver.off;
+            \\        }};
+            \\
+            \\
+        , .{ n.id, n.text, n.bind, n.max, @as(u32, @intFromFloat(n.range[0])), 8 * e.page.nodes.len + 16 });
+    }
+
+    /// `Page.frame`'s run-time region: built after the page, in the region's rect, from the app's
+    /// `data.<list>`, and composed into the page's draw list.
+    fn eachFrame(e: *Emit, each: u32) void {
+        const n = e.page.nodes.get(each);
+        // The item fields the page reads, checked with the HTML location.
+        var seen: std.StringHashMapUnmanaged(void) = .empty;
+        e.print("            comptime {{\n                const Item = @import(\"std\").meta.Elem(@TypeOf(data.{f}));\n", .{std.zig.fmtId(n.bind)});
+        for (e.page.item_fields.items) |f| {
+            if (seen.contains(f.field)) continue;
+            seen.put(e.arena, f.field, {}) catch unreachable;
+            e.print("                if (!@hasField(Item, \"{s}\")) @compileError(\"{s}: the items of '{s}' have no field '{s}'\");\n", .{ f.field, e.whereFull(f.loc), n.bind, f.field });
+        }
+        e.write("            }\n");
+        var events: std.ArrayList(u8) = .empty;
+        for (e.page.handlers.items) |h| if (h.each.len > 0) events.print(e.arena, " {f}: ?u32 = null,", .{std.zig.fmtId(h.widget)}) catch unreachable;
+        e.print("            var events: struct {{{s} }} = .{{}};\n", .{events.items});
+        // The copies' statements first: they name `ui` only when they read the view state.
+        var body: std.ArrayList(u8) = .empty;
+        std.mem.swap(std.ArrayList(u8), &body, &e.out);
+        e.rtWalk(each, 1);
+        std.mem.swap(std.ArrayList(u8), &body, &e.out);
+        if (std.mem.indexOf(u8, body.items, "ui.") != null) e.write("            const ui = &p.ui;\n");
+        e.print(
+            \\            if (p.region == null) p.region = lcgf.context.Context.init(&p.region_buf, region_limits) catch unreachable;
+            \\            if (!p.draw_carved) {{
+            \\                var carver: lcgf.mem.Carver = .{{ .buf = &p.draw_buf }};
+            \\                p.draw = lcgf.draw_list.DrawList.init(&carver, draw_rows, draw_rows, 8);
+            \\                p.draw_carved = true;
+            \\            }}
+            \\            const rect = out.tree.rect(out.tree.find(.from("{s}")));
+            \\            const region_in = lcgf.ct_interop.regionInput(in, .{{ rect.x0, rect.y0, rect.x1, rect.y1 }});
+            \\            var region_frame = p.region.?.begin(&region_in);
+            \\            const f = &region_frame;
+            \\            // The copies are laid out in the region as its CSS says.
+            \\            _ = f.open(.none, {s});
+            \\            for (data.{f}, 0..) |{f}, copy0| {{ // {s}
+            \\
+        , .{ n.id, e.styleText(.{ .size = .{ .fill, .fill }, .dir = n.style.dir, .gap = n.style.gap, .pad = n.style.pad, .main = n.style.main, .cross = n.style.cross }, ""), std.zig.fmtId(n.bind), std.zig.fmtId(n.text), e.where(n.loc) });
+        e.write(body.items);
+        e.print(
+            \\            }}
+            \\            f.close();
+            \\            const region_out = f.end(.{{}});
+            \\            if (lcgf.ct_interop.compose(&p.draw, out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings)) out.draw = &p.draw else |_| {{}}
+            \\
+        , .{n.id});
     }
 
     /// The check block: each handler the markup names, with the signature it must have.

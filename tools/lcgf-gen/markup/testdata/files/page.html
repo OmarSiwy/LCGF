@@ -1,0 +1,19 @@
+<!doctype html>
+<html lcgf-page="files">
+<head>
+  <title>Files</title>
+  <style>
+    .list { width: 300px; height: 200px; gap: 2px; }
+    .file { display: flex; gap: 6px; }
+  </style>
+</head>
+<body>
+  <h2>{folder}</h2>
+  <template lcgf-each="file in files" class="list">
+    <div class="file">
+      <button id="open" on:click="open">{file.name}</button>
+      <span>{file.size:.1} kB</span>
+    </div>
+  </template>
+</body>
+</html>

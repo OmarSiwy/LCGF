@@ -109,7 +109,7 @@
         .{ .kind = "attribute", .name = "lcgf-switch", .applies_to = "template", .status = .mapped, .target = "spec.choice spec.zig:286 over a generated enum of the lcgf-case names", .fixture = "todo" },
         .{ .kind = "attribute", .name = "lcgf-case", .applies_to = "template", .status = .mapped, .target = "one alternative of spec.choice", .fixture = "todo" },
         .{ .kind = "attribute", .name = "lcgf-else", .status = .planned, .diagnostic = "lcgf-else is not lowered yet: spec.choice takes no bool selector (engine spec T4); use lcgf-switch", .spec = "T4" },
-        .{ .kind = "attribute", .name = "lcgf-each", .applies_to = "in", .status = .planned, .diagnostic = "lcgf-each=\"item in items\" needs a run-time region (interop.region), not lowered yet; use lcgf-each=\"count\" lcgf-max=\"N\"" },
+        .{ .kind = "attribute", .name = "lcgf-each", .applies_to = "in", .status = .mapped, .target = "ct_interop.region in the Spec, sized by its CSS; Page.frame(h, in, data) builds data.<list> into a runtime Context in the region's rect (regionInput) and composes the draw lists (ct_interop.compose); {item.field} reads the item, handlers get the index", .fixture = "files" },
 
         // ---- text
         .{ .kind = "syntax", .name = "{field}", .status = .mapped, .target = "widgets_label.ct.label(theme, .field), str", .fixture = "counter" },
@@ -228,6 +228,7 @@
         .{ .name = "controls" },
         .{ .name = "runtime" },
         .{ .name = "tokens", .runtime_vars = "t-" },
+        .{ .name = "files", .spec_only = true },
         .{ .name = "form" },
         .{ .name = "flexitems" },
     },

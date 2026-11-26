@@ -1032,9 +1032,8 @@ pub const Lowerer = struct {
             l.field(f, .bool, l.valueLoc(n, "lcgf-if"), "lcgf-if");
             node.bind = f;
         } else if (l.attr(n, "lcgf-each")) |f| {
-            if (std.mem.indexOf(u8, f, " in ") != null) {
-                _ = l.refused("attribute", "lcgf-each", "in", l.valueLoc(n, "lcgf-each"));
-                l.skip[n] = true;
+            if (std.mem.indexOf(u8, f, " in ")) |at_in| {
+                l.eachRegion(n, parent, std.mem.trim(u8, f[0..at_in], " "), std.mem.trim(u8, f[at_in + 4 ..], " "));
                 return;
             }
             if (!l.identifier(f, l.valueLoc(n, "lcgf-each"))) return;
@@ -1089,6 +1088,10 @@ pub const Lowerer = struct {
             switch (kind) {
                 .container, .landmark, .label, .text, .heading => continue,
                 .when, .list, .choice => continue,
+                .each => {
+                    l.ds.err(nodes.items(.loc)[i], "lcgf-each regions are lowered on comptime pages only so far; this page asks for the runtime frontend", .{});
+                    continue;
+                },
                 else => {},
             }
             if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
@@ -1105,6 +1108,41 @@ pub const Lowerer = struct {
             else => if (nodes.items(.uses)[i].len > 0)
                 l.ds.err(nodes.items(.loc)[i], "run-time theme tokens set only containers and text; this widget's builder makes its own rows", .{}),
         };
+    }
+
+    /// `<template lcgf-each="item in items">`: a run-time region in the comptime page, sized by
+    /// its CSS (it is laid out before its content exists), built each frame from the app's
+    /// `items` (plan §3.5, M8.2).
+    fn eachRegion(l: *Lowerer, n: u32, parent: u32, item: []const u8, list: []const u8) void {
+        const at = l.valueLoc(n, "lcgf-each");
+        if (!l.identifier(item, at) or !l.identifier(list, at)) return;
+        for (l.page.nodes.items(.kind)) |k| if (k == .each) {
+            l.ds.err(at, "one lcgf-each region per page for now", .{});
+            return;
+        };
+        var params: []const u8 = "";
+        var margin: ?[4]f32 = null;
+        var style = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
+        l.uses.clearRetainingCapacity();
+        // The copies stack in a column.
+        if (l.px(n, .@"row-gap")) |g| style.gap = g;
+        if (style.size[0].kind == .fit or style.size[1].kind == .fit)
+            l.ds.err(l.loc(n), "a run-time region is laid out before its items exist: give it a width and a height, or flex-grow (and align-self: stretch)", .{});
+        const nodes = if (l.attr(n, "lcgf-nodes")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 256;
+        const texts = if (l.attr(n, "lcgf-texts")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 64;
+        if (nodes == 0 or texts == 0 or texts > 255 * 64) l.ds.err(at, "lcgf-nodes and lcgf-texts take positive counts", .{});
+        const id = ok(std.fmt.allocPrint(l.arena, "each_{s}", .{list}));
+        l.ir_of[n] = l.addNode(.{ .kind = .each, .parent = parent, .loc = l.loc(n), .style = style, .base_style = style, .params_expr = params, .bind = list, .text = item, .id = id, .max = nodes, .range = .{ @floatFromInt(texts), 0, 0 } });
+    }
+
+    /// The `each` region around document node `n`, as its IR node, or none.
+    fn eachOf(l: *const Lowerer, n: u32) u32 {
+        var i = n;
+        while (i != none) : (i = l.doc.nodes.items(.parent)[i]) {
+            const r = l.ir_of[i];
+            if (r != none and l.page.nodes.items(.kind)[r] == .each) return r;
+        }
+        return none;
     }
 
     /// Regions whose content is not exactly one element; checked after the walk.
@@ -1167,6 +1205,19 @@ pub const Lowerer = struct {
             const hole = std.mem.trim(u8, bytes[i + 1 .. close], " ");
             const colon = std.mem.indexOfScalar(u8, hole, ':');
             const name = if (colon) |c_| hole[0..c_] else hole;
+            // `{item.field}` inside an lcgf-each reads the app's item, not the view state.
+            if (std.mem.indexOfScalar(u8, name, '.')) |dot| {
+                const each = l.eachOf(l.current);
+                if (each == none or !std.mem.eql(u8, name[0..dot], l.page.nodes.items(.text)[each]) or !l.identifier(name[dot + 1 ..], at)) {
+                    l.ds.err(at, "'{s}' names no item: `{{x.field}}` reads the item of an enclosing lcgf-each=\"x in xs\"", .{name});
+                    return;
+                }
+                ok(l.page.item_fields.append(l.arena, .{ .each = l.page.nodes.items(.id)[each], .field = name[dot + 1 ..], .loc = at }));
+                if (colon) |c_| ok(fmt_.print(l.arena, "{{{s}}}", .{hole[c_ + 1 ..]})) else ok(fmt_.appendSlice(l.arena, "{}"));
+                ok(args.append(l.arena, name));
+                i = close + 1;
+                continue;
+            }
             if (!l.identifier(name, at)) return;
             if (colon) |c_| {
                 const spec = hole[c_ + 1 ..];
@@ -1264,7 +1315,8 @@ pub const Lowerer = struct {
                     l.ds.err(doc.attrLoc(a), "on:click is for buttons; use on:change for a control's value", .{});
                     continue;
                 }
-                ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .click, .widget = id, .loc = at }));
+                const each = l.eachOf(n);
+                ok(l.page.handlers.append(l.arena, .{ .name = handler, .event = .click, .widget = id, .loc = at, .each = if (each == none) "" else l.page.nodes.items(.id)[each] }));
             } else if (std.mem.eql(u8, event, "change")) {
                 if (bind.len == 0) {
                     l.ds.err(doc.attrLoc(a), "on:change needs a bound value (bind:value or bind:checked)", .{});
@@ -1345,6 +1397,10 @@ pub const Lowerer = struct {
         const name = std.fmt.bufPrint(&buf, "bind:{s}", .{what}) catch unreachable;
         const f = l.attr(n, name) orelse return "";
         const at = l.valueLoc(n, name);
+        if (l.eachOf(n) != none) {
+            l.ds.err(at, "a control inside lcgf-each cannot bind view state yet: per-item state is the app's", .{});
+            return "";
+        }
         if (!l.identifier(f, at)) return "";
         l.field(f, ty, at, why);
         return f;

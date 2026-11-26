@@ -39,6 +39,21 @@ Every entry is tier 1 (src/comptime/spec.zig, src/runtime/frame.zig) or tier 2 (
 | T-RT | landed (this branch) | `lcgf.theme_table.ThemeTable(Tokens)`: `values: Tokens`, `generation: u32`, `set(t, comptime token, value)` (bumps the generation), `changedSince(t, seen) bool`. Tier 2, src/theme/table.zig. Under `--runtime-vars=t-`, the runtime frontend emits `pub const Tokens` (one field per `--t-*` the page reads, defaulting to its CSS value), `ThemeTable` and `default_tokens`. `Ui` gets `tokens: *const ThemeTable` and `themeChanged()`, and the style fields `ui.tokens.values.<name>` (pad, gap, size, min, max, border, radius, fill, border colour, text size and colour). | 2, theme/table.zig | tokens |
 | T-CT | landed (this branch) | `spec.tokened(s, uses: []const spec.TokenUse) Spec` sets `Spec.tokens`, where `TokenUse = struct { target: TokenTarget, token: []const u8 }` names a field of `Tokens`. `TokenTarget` covers pad (four sides), gap, width, height, min, max, border, radius, fill, border_color, text_px and text_color. `widgets_base.ComptimeUiTokens(State, spec, theme, Tokens)` has `tokens: *const ThemeTable(Tokens)` (default `default_tokens`) and `themeChanged()`. Its push writes a container's or label's token fields from the table (`spec.applyTokens`), and every frame pushes every row, so a changed table lays out on the next frame. `ComptimeUi` is `ComptimeUiTokens(…, void)`: no field and no code, so token-free pages compile byte for byte as before. | 1, spec.zig; 2, base.zig | tokens |
 
+### Run-time regions in comptime pages (M8.2)
+
+These need no engine change:
+- `<template lcgf-each="x in xs">` is `ct_interop.region(.each_xs, style)` in the Spec.
+- `Page.frame(h, in, data)` builds `data.xs` into a second runtime `Context`, owned by the
+  Page, through `ct_interop.regionInput`, and merges it with `ct_interop.compose` into a draw
+  list the Page owns.
+- The item fields are checked with `@hasField`, and the error carries the HTML location.
+
+Requests, by usage:
+- **E1:** a Spec region whose content is laid out by its parent, so the region could be
+  `fit`-sized. Today it must have a definite size, because the comptime layout runs before
+  the region's content exists.
+- **E2:** `compose` into several regions in one pass. Today a page has one region.
+
 ### What the runtime frontend emits
 
 There is no engine change for these:

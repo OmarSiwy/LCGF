@@ -45,6 +45,11 @@ pub const Kind = enum(u8) {
     list,
     /// `widgets_spacer.ct.spacer(axis)`: free space for `justify-content: space-*`.
     spacer,
+    /// `<template lcgf-each="item in items">`: a run-time region (`ct_interop.region`) the page
+    /// fills with one copy of its content per element of the app's `items`. `bind` is the
+    /// list, `text` the item's name, `id` the region's id; `max` and `level` its node and text
+    /// capacity.
+    each,
 };
 
 /// Where a caption's text comes from.
@@ -146,8 +151,13 @@ pub const Handler = struct {
     widget: []const u8,
     field: []const u8 = "",
     payload: ?FieldType = null,
+    /// The run-time region the widget is repeated in (its handler also gets the item's index).
+    each: []const u8 = "",
     loc: diag.Loc,
 };
+
+/// A field of an `each` item the page reads (`{file.name}`), checked against the app's type.
+pub const ItemField = struct { each: []const u8, field: []const u8, loc: diag.Loc };
 
 pub const Page = struct {
     /// `<html lcgf-page>`, or the file's stem.
@@ -158,6 +168,7 @@ pub const Page = struct {
     fields: std.ArrayList(Field) = .empty,
     handlers: std.ArrayList(Handler) = .empty,
     tokens: std.ArrayList(Token) = .empty,
+    item_fields: std.ArrayList(ItemField) = .empty,
     theme: Theme = .{},
     /// `<html lcgf-frontend="runtime">`: the page asks for the runtime frontend.
     runtime: bool = false,

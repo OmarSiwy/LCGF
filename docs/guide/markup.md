@@ -74,6 +74,7 @@ lcgf-gen --mappings                    # what every element, attribute and prope
 | `on:change="name"` | Calls `pub fn name(h: *H, ui: *Ui, value: T) void` with the new value. |
 | `<template lcgf-if="f">` | `spec.when` over a `bool`. |
 | `<template lcgf-each="n" lcgf-max="N">` | `spec.list`: up to N copies, `n` (`u32`) of them live. |
+| `<template lcgf-each="file in files">` | A run-time region of the comptime page, sized by its CSS (width and height, or flex-grow). `Page.frame(h, in, .{ .files = slice })` builds one copy per item into the region and composes it into the page's draw list. `{file.name}` reads the item, checked against your item type at the HTML location; a click handler inside gets the item's `index: u32`. One region per page, comptime pages only, for now. `lcgf-nodes`/`lcgf-texts` size it (default 256/64). |
 | `<template lcgf-switch="mode">` with `<template lcgf-case="a">` | `spec.choice` over a generated enum of the cases. |
 | `id="x"` | The widget's id. Without one, a widget takes its bound field's name, or its click handler's. |
 

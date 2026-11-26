@@ -114,7 +114,7 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
                 cost.dependOn(&b.addInstallFile(obj.getEmittedBin(), b.fmt("markup-cost/{s}-{s}.o", .{ f.name, side[0] })).step);
             }
             // A page with no `--t-*` token is the same runtime page with --runtime-vars.
-            if (f.runtime_vars.len == 0) {
+            if (f.runtime_vars.len == 0 and !f.spec_only) {
                 const with_vars = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .runtime_vars = "t-" });
                 for ([_]struct { []const u8, *Build.Module }{ .{ "rt", page_rt }, .{ "rtvars", with_vars } }) |side| {
                     const obj = b.addObject(.{ .name = b.fmt("{s}-{s}", .{ f.name, side[0] }), .root_module = b.createModule(.{
