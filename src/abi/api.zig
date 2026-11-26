@@ -182,6 +182,7 @@ pub const frame: Container = .{ .prefix = "frame", .T = Frame, .file = "src/runt
     .{ "endText", later_a7 },
     .{ "layoutText", later_a7 },
     .{ "endTextRounded", later_a7 },
+    .{ "endTextStyled", later_a7 },
     .{ "layoutTextRounded", later_a7 },
     .{ "arrangeText", later_a7 },
     .{ "finish", later_a7 },
