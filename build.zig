@@ -311,6 +311,27 @@ pub fn build(b: *std.Build) void {
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ct_csrc.root_module })).step);
+    // tools/abi-gen: liblcgf's generated C header (src/abi/lcgf_api.h, from src/abi/api.zig),
+    // committed. `zig build abi-gen` writes it; the test fails when it is stale, when a pub fn
+    // of a container api.zig lists is neither exported nor skipped (the tripwire), or when the
+    // header does not compile as C.
+    const abi_gen = b.addExecutable(.{ .name = "abi-gen", .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/abi-gen/main.zig"),
+        .target = b.graph.host,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_host }},
+    }) });
+    const abi_gen_write = b.addRunArtifact(abi_gen);
+    abi_gen_write.addDirectoryArg(b.path("."));
+    b.step("abi-gen", "Write liblcgf's generated C header (tools/abi-gen)").dependOn(&abi_gen_write.step);
+    const abi_gen_check = b.addRunArtifact(abi_gen);
+    abi_gen_check.addArg("--check");
+    abi_gen_check.addDirectoryArg(b.path("."));
+    abi_gen_check.has_side_effects = true;
+    test_step.dependOn(&abi_gen_check.step);
+    const abi_h_check = b.addObject(.{ .name = "lcgf_api_h", .root_module = b.createModule(.{ .target = b.graph.host }) });
+    abi_h_check.root_module.addCSourceFile(.{ .file = b.path("tools/abi-gen/check.c"), .flags = &.{ "-std=c11", "-Wall", "-Werror" } });
+    abi_h_check.root_module.addIncludePath(b.path("src/abi"));
+    test_step.dependOn(&abi_h_check.step);
     test_step.dependOn(&b.addRunArtifact(tests).step);
     if (markup_step) |s| test_step.dependOn(s);
     // For targets this machine cannot run (ci/run.sh cross).

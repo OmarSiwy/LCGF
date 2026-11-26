@@ -37,7 +37,7 @@ pub fn Words(comptime T: type) type {
 /// A type the mapping passes through as it is: C has the same thing.
 fn isDirect(comptime T: type) bool {
     return switch (@typeInfo(T)) {
-        .int, .float, .bool, .void => true,
+        .int, .float, .bool, .void, .@"opaque" => true,
         .@"struct" => |s| s.layout == .@"extern",
         .pointer => |p| p.size != .slice and isDirect(p.child),
         .optional => |o| @typeInfo(o.child) == .pointer and isDirect(o.child),
@@ -71,8 +71,16 @@ fn isHandle(comptime T: type, comptime handles: anytype) ?type {
     return null;
 }
 
-/// The C result of a Zig result `T`; a slice returns its pointer and writes its length out.
+/// A result with no C layout: written to an out parameter as its words.
+fn isWordsResult(comptime T: type) bool {
+    const info = @typeInfo(T);
+    return info == .@"struct" and info.@"struct".layout == .auto;
+}
+
+/// The C result of a Zig result `T`; a slice returns its pointer and writes its length out, and
+/// a struct of no C layout writes its words out.
 pub fn CResult(comptime T: type) type {
+    if (isWordsResult(T)) return void;
     return switch (@typeInfo(T)) {
         .bool => c_int,
         .@"enum" => u32,
@@ -88,12 +96,14 @@ fn isSlice(comptime T: type) bool {
 }
 
 /// Every C parameter of `F`'s export, in order: each Zig parameter's, then `*usize` for a slice
-/// result's length.
+/// result's length or `*Words(R)` for a words result.
 pub fn cParamsOf(comptime F: type, comptime handles: anytype) []const type {
     const info = @typeInfo(F).@"fn";
     var out: []const type = &.{};
     for (info.param_types) |P| out = out ++ CParams(P.?, handles);
-    if (isSlice(info.return_type.?)) out = out ++ &[_]type{*usize};
+    const R = info.return_type.?;
+    if (isSlice(R)) out = out ++ &[_]type{*usize};
+    if (isWordsResult(R)) out = out ++ &[_]type{*Words(R)};
     return out;
 }
 
@@ -117,6 +127,7 @@ pub fn fromC(comptime T: type, comptime handles: anytype, c: anytype, comptime a
 
 /// Zig result `v` as its C result.
 pub fn toC(comptime T: type, v: T) CResult(T) {
+    if (comptime isWordsResult(T)) comptime unreachable;
     return switch (@typeInfo(T)) {
         .bool => @intFromBool(v),
         .@"enum" => @backingInt(v),
@@ -147,6 +158,7 @@ fn invoke(comptime f: anytype, comptime handles: anytype, c: anytype) CResult(@t
     }
     const r = @call(.always_inline, f, args);
     if (comptime isSlice(R)) c[at].* = r.len;
+    if (comptime isWordsResult(R)) return words.put(R, r, &c[at].w);
     return toC(R, r);
 }
 

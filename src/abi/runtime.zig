@@ -101,7 +101,7 @@ pub const CView = extern struct {
 pub const depth_bit: u5 = @bitOffsetOf(context.Status, "depth");
 
 /// The context, its frame in progress, and the theme and font the widgets use.
-const Runtime = struct {
+pub const Runtime = struct {
     ctx: context.Context,
     frame: Frame = undefined,
     /// The frame's input: `Frame` reads it until `end`, so it lives here, not on cBegin's stack.
@@ -131,11 +131,11 @@ fn textStyle(words: [*]const u32) TextStyle {
     return plan.get(TextStyle, words[0..text_style_words]);
 }
 
-fn cLimitsBytes(l: *const CLimits) callconv(.c) usize {
+pub fn cLimitsBytes(l: *const CLimits) callconv(.c) usize {
     return Runtime.work(context.Context.requiredBytes(l.limits()));
 }
 
-fn cInit(buf: [*]u8, len: usize, l: *const CLimits) callconv(.c) c_int {
+pub fn cInit(buf: [*]u8, len: usize, l: *const CLimits) callconv(.c) c_int {
     if (@intFromPtr(buf) % mem.column_align != 0) return @backingInt(seam.Status.unaligned);
     if (len < cLimitsBytes(l)) return @backingInt(seam.Status.buffer_too_small);
     const off = std.mem.alignForward(usize, @sizeOf(Runtime), mem.column_align);
@@ -146,12 +146,12 @@ fn cInit(buf: [*]u8, len: usize, l: *const CLimits) callconv(.c) c_int {
 }
 
 /// `int`, as lcgf.h declares it: a C `bool` return would leave the caller reading the upper bits.
-fn cNeedsFrame(p: *anyopaque, in: *const seam.CInput) callconv(.c) c_int {
+pub fn cNeedsFrame(p: *anyopaque, in: *const seam.CInput) callconv(.c) c_int {
     const input = in.input();
     return @intFromBool(rt(p).ctx.needsFrame(&input));
 }
 
-fn cBegin(p: *anyopaque, in: *const seam.CInput) callconv(.c) void {
+pub fn cBegin(p: *anyopaque, in: *const seam.CInput) callconv(.c) void {
     const r = rt(p);
     r.input = in.input();
     r.frame = r.ctx.begin(&r.input);
@@ -160,11 +160,11 @@ fn cBegin(p: *anyopaque, in: *const seam.CInput) callconv(.c) void {
 
 /// Bytes `lcgf_rt_enable_canvas` needs for `l`: the context's canvas rows and their palettes,
 /// two generations of `customs` each.
-fn cCanvasBytes(l: *const CLimits) callconv(.c) usize {
+pub fn cCanvasBytes(l: *const CLimits) callconv(.c) usize {
     return 2 * @as(usize, l.customs) * (@sizeOf(draw_list.CanvasDraw) + @sizeOf(canvas.Palette));
 }
 
-fn cEnableCanvas(p: *anyopaque, buf: [*]u8, len: usize) callconv(.c) c_int {
+pub fn cEnableCanvas(p: *anyopaque, buf: [*]u8, len: usize) callconv(.c) c_int {
     const r = rt(p);
     const n = 2 * @as(usize, r.ctx.limits.customs);
     if (@intFromPtr(buf) % @alignOf(draw_list.CanvasDraw) != 0) return @backingInt(seam.Status.unaligned);
@@ -177,7 +177,7 @@ fn cEnableCanvas(p: *anyopaque, buf: [*]u8, len: usize) callconv(.c) c_int {
 
 /// `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of
 /// them the caller's until the frame is drawn. LCGF_NO_WIDGET past `customs` canvases a frame.
-fn cCanvas(p: *anyopaque, id: u32, s: [*]const u32, shapes: *const canvas.Instances, o: *const abi_canvas.COptions) callconv(.c) u32 {
+pub fn cCanvas(p: *anyopaque, id: u32, s: [*]const u32, shapes: *const canvas.Instances, o: *const abi_canvas.COptions) callconv(.c) u32 {
     const r = rt(p);
     const n = r.palettes.len / 2;
     if (r.palette_len >= n) return std.math.maxInt(u32);
@@ -187,13 +187,13 @@ fn cCanvas(p: *anyopaque, id: u32, s: [*]const u32, shapes: *const canvas.Instan
     return r.frame.canvas(@fromBackingInt(id), style(s), shapes, .{ .camera = o.cam(), .palette = pal, .ranges = o.spans(), .overrides = o.marks() }).ix();
 }
 
-fn cEnd(p: *anyopaque, out: *seam.CFrame) callconv(.c) void {
+pub fn cEnd(p: *anyopaque, out: *seam.CFrame) callconv(.c) void {
     const r = rt(p);
     const o = r.frame.end(r.font);
     out.* = .{ .draw = seam.cDraw(o.draw), .widget = seam.none_widget, .value = 0, .focus = seam.none_widget, .wake = o.wake };
 }
 
-fn cOpen(p: *anyopaque, id: u32, s: [*]const u32) callconv(.c) u32 {
+pub fn cOpen(p: *anyopaque, id: u32, s: [*]const u32) callconv(.c) u32 {
     return rt(p).frame.open(@fromBackingInt(id), style(s)).ix();
 }
 
@@ -212,7 +212,7 @@ fn cCustomRow(p: *anyopaque, id: u32, r: *const FlatRow, data: u64) callconv(.c)
     return rt(p).frame.customRow(@fromBackingInt(id), r, data).ix();
 }
 
-fn cView(p: *anyopaque, out: *CView) callconv(.c) void {
+pub fn cView(p: *anyopaque, out: *CView) callconv(.c) void {
     const r = rt(p);
     const ctx = &r.ctx;
     const t = r.frame.tree();
@@ -241,7 +241,7 @@ fn cView(p: *anyopaque, out: *CView) callconv(.c) void {
 
 /// `Template.from`: the row of a style, for C callers and for the gate that holds the C++ and
 /// Rust ports to it.
-fn cRowFromStyle(s: [*]const u32, out: [*]u32) callconv(.c) void {
+pub fn cRowFromStyle(s: [*]const u32, out: [*]u32) callconv(.c) void {
     const st = style(s);
     plan.put(Template, .from(&st), out[0..row_words]);
 }
@@ -256,7 +256,7 @@ fn cLayout() callconv(.c) u32 {
     return layout;
 }
 
-fn cClose(p: *anyopaque) callconv(.c) void {
+pub fn cClose(p: *anyopaque) callconv(.c) void {
     rt(p).frame.close();
 }
 
@@ -276,7 +276,7 @@ fn cCustom(p: *anyopaque, id: u32, s: [*]const u32, data: u64) callconv(.c) u32 
     return rt(p).frame.custom(@fromBackingInt(id), style(s), data).ix();
 }
 
-fn cAnimate(p: *anyopaque, id: u32, target: f32, stiffness: f32, damping: f32) callconv(.c) f32 {
+pub fn cAnimate(p: *anyopaque, id: u32, target: f32, stiffness: f32, damping: f32) callconv(.c) f32 {
     return rt(p).frame.animate(@fromBackingInt(id), target, .{ .stiffness = stiffness, .damping = damping });
 }
 
@@ -313,7 +313,7 @@ fn cLabel(p: *anyopaque, str: [*]const u8, len: usize) callconv(.c) u32 {
     return base.label(&r.frame, &r.theme, str[0..len]).ix();
 }
 
-fn cButton(p: *anyopaque, id: u32, str: [*]const u8, len: usize) callconv(.c) u8 {
+pub fn cButton(p: *anyopaque, id: u32, str: [*]const u8, len: usize) callconv(.c) u8 {
     const r = rt(p);
     return response(base.button(&r.frame, &r.theme, @fromBackingInt(id), str[0..len]));
 }
@@ -323,7 +323,7 @@ fn cCheckbox(p: *anyopaque, id: u32, value: *bool, str: [*]const u8, len: usize)
     return response(base.checkbox(&r.frame, &r.theme, @fromBackingInt(id), value, str[0..len]));
 }
 
-fn cSlider(p: *anyopaque, id: u32, value: *f32, lo: f32, hi: f32) callconv(.c) u8 {
+pub fn cSlider(p: *anyopaque, id: u32, value: *f32, lo: f32, hi: f32) callconv(.c) u8 {
     const r = rt(p);
     return response(base.slider(&r.frame, &r.theme, @fromBackingInt(id), value, lo, hi));
 }

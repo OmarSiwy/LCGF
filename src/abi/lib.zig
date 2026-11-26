@@ -5,5 +5,6 @@ const lcgf = @import("lcgf");
 comptime {
     lcgf.abi_seam.exportAll();
     lcgf.abi_runtime.exportAll();
+    lcgf.abi_api.exportAll();
     lcgf.abi_ct.exportAll();
 }
