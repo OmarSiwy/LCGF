@@ -296,15 +296,18 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
 /// of the page, so it is drawn on top. Escape closes it first. The panel is a modal focus layer
 /// (`focus.Scopes.trap`): Tab stays inside it.
 pub fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool {
-    return beginFace(f, th, name, open, panelStyle(th));
+    return beginFace(f, th, name, open, panelStyle(th), dim);
 }
 
-/// `begin` with the panel laid out by `face` instead of `panelStyle(th)`, as
-/// `ct.dialogFace` lays out the comptime one (CSS on a `<dialog>`).
-pub fn beginFace(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, face: Style) bool {
+/// `begin` with the panel laid out by `face` instead of `panelStyle(th)` and the backdrop
+/// filled with `backdrop` instead of `dim`, as `ct.dialogFace` lays out the comptime one (CSS
+/// on a `<dialog>` and its `::backdrop`).
+pub fn beginFace(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, face: Style, backdrop: Color) bool {
     open.* = open.* and !popover.keyPressed(f.in, popover.keys.escape);
     if (!open.*) return false;
-    _ = f.interact(f.open(.from(partName(name, "backdrop")), backdropStyle(th, f.in.viewport)), popover.overlay_sense);
+    var back = backdropStyle(th, f.in.viewport);
+    back.fill = backdrop;
+    _ = f.interact(f.open(.from(partName(name, "backdrop")), back), popover.overlay_sense);
     const panel = f.open(.from(partName(name, "panel")), face);
     _ = f.interact(panel, popover.overlay_sense);
     f.tree().c.role[panel.ix()] = @backingInt(role);
@@ -323,18 +326,19 @@ pub const ct = struct {
     /// nodes, as `spec.col` takes them). Put it last in the page's root so it is drawn above
     /// the rest. Escape closes it (sets `open`); Tab and Shift+Tab stay among its widgets.
     pub fn dialog(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec {
-        return dialogFace(th, id, open, panelStyle(&th), children);
+        return dialogFace(th, id, open, panelStyle(&th), dim, children);
     }
 
-    /// `dialog` with its panel laid out by `face` instead of `panelStyle(th)` (CSS on a
-    /// `<dialog>`); the runtime twin is `beginFace`.
-    pub fn dialogFace(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime face: Style, comptime children: anytype) Spec {
+    /// `dialog` with its panel laid out by `face` instead of `panelStyle(th)` and its backdrop
+    /// filled with `backdrop` instead of `dim` (CSS on a `<dialog>` and its `::backdrop`); the
+    /// runtime twin is `beginFace`.
+    pub fn dialogFace(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime face: Style, comptime backdrop: Color, comptime children: anytype) Spec {
         const name = @tagName(id);
         var panel = spec_zig.col(face, children);
         panel.style.dir = face.dir;
         panel.id = partName(name, "panel");
         const rows = 1 + @import("../comptime/flatten.zig").count(panel);
-        return spec_zig.when(open, .{ .kind = .col, .id = partName(name, "backdrop"), .bind = @tagName(open), .widget = Modal(th, name, @tagName(open), rows), .children = &.{panel} });
+        return spec_zig.when(open, .{ .kind = .col, .id = partName(name, "backdrop"), .bind = @tagName(open), .widget = ModalFill(th, name, @tagName(open), rows, backdrop), .children = &.{panel} });
     }
 };
 
@@ -344,6 +348,11 @@ pub const ct = struct {
 /// widget in Tab order, or its last after Shift+Tab).
 /// `rows` is the backdrop's subtree, itself included.
 pub fn Modal(comptime th: Theme, comptime name: [:0]const u8, comptime open: []const u8, comptime rows: u32) type {
+    return ModalFill(th, name, open, rows, dim);
+}
+
+/// `Modal` with its backdrop filled with `backdrop` (`ct.dialogFace`).
+pub fn ModalFill(comptime th: Theme, comptime name: [:0]const u8, comptime open: []const u8, comptime rows: u32, comptime backdrop: Color) type {
     return struct {
         pub const holds_content = true;
 
@@ -379,7 +388,9 @@ pub fn Modal(comptime th: Theme, comptime name: [:0]const u8, comptime open: []c
 
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
             const t = &ui.tables.t;
-            const b = t.push(parent, .hash(partName(name, "backdrop")), &backdropStyle(&th, in.viewport));
+            var back = backdropStyle(&th, in.viewport);
+            back.fill = backdrop;
+            const b = t.push(parent, .hash(partName(name, "backdrop")), &back);
             const p = t.push(b, .hash(partName(name, "panel")), &n.children[0].style);
             t.c.role[p] = @backingInt(role);
             next.* += 2;

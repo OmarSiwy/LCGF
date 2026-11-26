@@ -431,10 +431,10 @@ pub const Emit = struct {
                 e.write(")");
             },
             .dialog => {
-                if (restyle) {
+                if (restyle or n.backdrop != null) {
                     e.print("{s}.ct.dialogFace(theme, .{f}, .{f}, ", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                     e.fields(n.style, types.Style{}, &.{}, n.params_expr);
-                    e.write(", .{");
+                    e.print(", {s}, .{{", .{e.backdrop(n)});
                 } else e.print("{s}.ct.dialog(theme, .{f}, .{f}, .{{", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
@@ -1002,7 +1002,8 @@ pub const Emit = struct {
                 return "";
             },
             .dialog => {
-                const face = e.rtFace(n);
+                const style = if (e.rtFace(n).len == 0 and n.backdrop != null) std.fmt.allocPrint(e.arena, ", {s}", .{e.styleText(n.style, n.params_expr)}) catch unreachable else e.rtFace(n);
+                const face = if (style.len > 0) std.fmt.allocPrint(e.arena, "{s}, {s}", .{ style, e.backdrop(n) }) catch unreachable else "";
                 e.print("if ({s}.{s}(f, &theme, \"{s}\", &{s}{s})) {{", .{ e.use("dialog"), e.faced("begin", face), n.id, e.stateRef(n.bind), face });
                 return e.arena.dupe(u8, "dialog.end(f); }") catch unreachable;
             },
@@ -1022,6 +1023,12 @@ pub const Emit = struct {
     fn rtFace(e: *Emit, n: ir.Node) []const u8 {
         if (std.meta.eql(n.style, n.base_style) and n.params_expr.len == 0) return "";
         return std.fmt.allocPrint(e.arena, ", {s}", .{e.styleText(n.style, n.params_expr)}) catch unreachable;
+    }
+
+    /// A dialog's backdrop fill: its `::backdrop` colour, or `dialog.dim`.
+    fn backdrop(e: *Emit, n: ir.Node) []const u8 {
+        const c = n.backdrop orelse return std.fmt.allocPrint(e.arena, "{s}.dim", .{e.use("dialog")}) catch unreachable;
+        return @import("lower.zig").colorExpr(e.arena, c);
     }
 
     /// The runtime function `name`, or `<name>Face` when the widget is restyled (`face`).

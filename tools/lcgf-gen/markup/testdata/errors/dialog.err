@@ -1,6 +1,18 @@
-dialog.html:9:3: error: a <dialog> is centred over the page: margins and flex item rules do not apply; set its width or padding
+dialog.html:7:24: error: custom property '--shade' on ::backdrop is not lowered; declare it on the <dialog>
+    dialog::backdrop { --shade: red; }
+                       ^
+dialog.html:12:3: error: a <dialog> is centred over the page: margins and flex item rules do not apply; set its width or padding
   <dialog id="d" bind:open="d"><span>Hi</span></dialog>
   ^
-dialog.html:9:3: error: box-shadow and outline on a <dialog> are not lowered; give its panel a border
+dialog.html:12:3: error: box-shadow and outline on a <dialog> are not lowered; give its panel a border
   <dialog id="d" bind:open="d"><span>Hi</span></dialog>
   ^
+dialog.html:6:38: error: a <dialog>'s ::backdrop takes a background-color, not an image or a gradient
+    dialog::backdrop { padding: 4px; background: linear-gradient(#000, #fff); }
+                                     ^
+dialog.html:6:24: error: 'padding' on <dialog>::backdrop is not lowered: ::backdrop takes background-color, on a <dialog>
+    dialog::backdrop { padding: 4px; background: linear-gradient(#000, #fff); }
+                       ^
+dialog.html:8:22: error: 'background-color' on <span>::backdrop is not lowered: ::backdrop takes background-color, on a <dialog>
+    span::backdrop { background-color: red; }
+                     ^

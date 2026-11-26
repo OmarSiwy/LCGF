@@ -28,7 +28,10 @@ pub const Cascade = struct {
     customs: [][]const u8,
     custom_table: []Entry,
     dynamic: std.ArrayList(Dynamic),
-    /// Rules matching a pseudo-element (`::before`): node, declaration, element.
+    /// `::backdrop`'s longhands, as `table` holds the element's: from its static rules.
+    backdrop: []Entry,
+    /// Other rules matching a pseudo-element (`::before`, or `::backdrop` under a state or a
+    /// condition, or setting a custom property): node, declaration, element.
     elements: std.ArrayList(Dynamic),
     /// Precomputed tree links, for the structural pseudo-classes and combinators.
     prev_el: []u32,
@@ -76,6 +79,7 @@ pub fn run(arena: std.mem.Allocator, doc: *const html.Doc, c: *css.Css) Cascade 
         .customs = &.{},
         .custom_table = &.{},
         .dynamic = .empty,
+        .backdrop = ok(arena.alloc(Entry, n * values.prop_count)),
         .elements = .empty,
         .prev_el = ok(arena.alloc(u32, n)),
         .next_el = ok(arena.alloc(u32, n)),
@@ -83,6 +87,7 @@ pub fn run(arena: std.mem.Allocator, doc: *const html.Doc, c: *css.Css) Cascade 
         .end = ok(arena.alloc(u32, n)),
     };
     @memset(k.table, .{});
+    @memset(k.backdrop, .{});
     @memset(k.prev_el, none);
     @memset(k.next_el, none);
     @memset(k.first_el, none);
@@ -138,11 +143,15 @@ pub fn run(arena: std.mem.Allocator, doc: *const html.Doc, c: *css.Css) Cascade 
                 const cond = rules.items(.cond)[r];
                 for (rules.items(.decl_first)[r]..rules.items(.decl_first)[r] + rules.items(.decl_count)[r]) |d| {
                     const dyn: Dynamic = .{ .node = node, .decl = @intCast(d), .sel = s, .cond = cond, .element = element };
-                    if (element.len > 0) {
+                    const kk = key(c, @intCast(d), c.sels.items(.specificity)[s], layers);
+                    const custom = std.mem.startsWith(u8, c.decls.items(.name)[d], "--");
+                    if (std.mem.eql(u8, element, "backdrop") and !res.dynamic and cond == none and !custom) {
+                        apply(&k, k.backdrop, c, node, @intCast(d), kk);
+                    } else if (element.len > 0) {
                         ok(k.elements.append(arena, dyn));
                     } else if (res.dynamic or cond != none) {
                         ok(k.dynamic.append(arena, dyn));
-                    } else apply(&k, c, node, @intCast(d), key(c, @intCast(d), c.sels.items(.specificity)[s], layers));
+                    } else apply(&k, k.table, c, node, @intCast(d), kk);
                 }
             }
         }
@@ -152,12 +161,12 @@ pub fn run(arena: std.mem.Allocator, doc: *const html.Doc, c: *css.Css) Cascade 
     for (0..rules.len) |r| if (rules.items(.origin)[r] == .inline_style) {
         const node = rules.items(.sel_count)[r];
         for (rules.items(.decl_first)[r]..rules.items(.decl_first)[r] + rules.items(.decl_count)[r]) |d|
-            apply(&k, c, node, @intCast(d), key(c, @intCast(d), 0, layers));
+            apply(&k, k.table, c, node, @intCast(d), key(c, @intCast(d), 0, layers));
     };
     return k;
 }
 
-fn apply(k: *Cascade, c: *const css.Css, node: u32, d: u32, kk: u64) void {
+fn apply(k: *Cascade, table: []Entry, c: *const css.Css, node: u32, d: u32, kk: u64) void {
     const name = c.decls.items(.name)[d];
     if (std.mem.startsWith(u8, name, "--")) {
         for (k.customs, 0..) |x, i| if (std.mem.eql(u8, x, name)) {
@@ -167,16 +176,16 @@ fn apply(k: *Cascade, c: *const css.Css, node: u32, d: u32, kk: u64) void {
         return;
     }
     if (std.meta.stringToEnum(Prop, name)) |p| {
-        set(k, node, p, .{ .decl = d, .key = kk });
+        set(table, node, p, .{ .decl = d, .key = kk });
         return;
     }
     for (values.shorthands, 0..) |sh, i| if (std.mem.eql(u8, sh.name, name)) {
-        for (sh.longhands) |p| set(k, node, p, .{ .decl = d, .shorthand = @intCast(i), .key = kk });
+        for (sh.longhands) |p| set(table, node, p, .{ .decl = d, .shorthand = @intCast(i), .key = kk });
     };
 }
 
-fn set(k: *Cascade, node: u32, p: Prop, e: Entry) void {
-    const slot = &k.table[node * values.prop_count + @backingInt(p)];
+fn set(table: []Entry, node: u32, p: Prop, e: Entry) void {
+    const slot = &table[node * values.prop_count + @backingInt(p)];
     if (slot.decl == none or e.key > slot.key) slot.* = e;
 }
 

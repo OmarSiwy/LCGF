@@ -1,7 +1,8 @@
 //! overlays, written by hand: a select with a group of options, a button's tooltip (title=),
 //! a dialog of any content, a popover and a menu (engine spec F10), each moved last into a
 //! root over the viewport so they float from its origin and draw above the page. CSS on the
-//! select restyles its button, and on the dialog its panel, in both frontends.
+//! select restyles its button, and on the dialog its panel and
+//! backdrop, in both frontends.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -60,7 +61,8 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
     }),
     select.ct.list(theme, .shape, .shape, shapes),
     tooltip.ct.tooltip(theme, .settings, .settings_tip, "Open the preferences"),
-    dialog.ct.dialogFace(theme, .prefs, .prefs_open, prefs_face, .{
+    // `dialog::backdrop { background-color: #10182080 }` fills its backdrop.
+    dialog.ct.dialogFace(theme, .prefs, .prefs_open, prefs_face, .rgba(16, 24, 32, 128), .{
         label.ct.label(theme, "Preferences"),
         checkbox.ct.checkbox(theme, .snap, .snap, "Snap"),
         button.ct.button(theme, .done, "Done"),

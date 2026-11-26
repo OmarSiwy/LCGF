@@ -152,6 +152,8 @@ pub const Node = struct {
     props: []const Prop = &.{},
     /// A `<details>`'s header, as CSS on its `<summary>` restyles it; null for the theme's.
     header: ?Style = null,
+    /// A `<dialog>`'s backdrop fill, as `::backdrop`'s background-color sets it; null for `dim`.
+    backdrop: ?lcgf.types.Color = null,
 };
 
 /// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as

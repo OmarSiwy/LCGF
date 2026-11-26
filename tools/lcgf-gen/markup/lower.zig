@@ -39,6 +39,8 @@ pub const Lowerer = struct {
     /// (element << 32 | declaration) pairs the lowering read (`declared`): an author
     /// declaration that wins on an element and is never read there is reported (`checkUnread`).
     reads: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// `declared` reads the element's `::backdrop` (`Cascade.backdrop`) instead of the element.
+    backdrop: bool = false,
     /// Text declarations `textUnlowered` reported.
     text_noted: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// Per declaration: already reported by `checkDeclarations` (unknown or refused).
@@ -221,7 +223,7 @@ pub const Lowerer = struct {
     /// The value tokens that set longhand `p` on `n`, `var()`s substituted, or null when
     /// nothing is declared. For a shorthand, the whole shorthand value (see `component`).
     fn declared(l: *Lowerer, n: u32, p: Prop) ?Value {
-        const e = l.k.get(n, p);
+        const e = if (l.backdrop) l.k.backdrop[n * values.prop_count + @backingInt(p)] else l.k.get(n, p);
         if (e.decl == none) return null;
         ok(l.reads.put(l.arena, (@as(u64, n) << 32) | e.decl, {}));
         const d = l.c.decls.get(e.decl);
@@ -425,6 +427,13 @@ pub const Lowerer = struct {
                 reported[e.decl] = true;
                 l.ds.err(l.c.decls.items(.loc)[e.decl], "'{s}' on <{s}> is not lowered: nothing on this element reads it", .{ l.c.decls.items(.name)[e.decl], l.tag(n) });
             }
+            // ponytail: reads are keyed by element and declaration, so a declaration shared by
+            // `dialog, dialog::backdrop` and read on the dialog counts as read on the backdrop.
+            for (l.k.backdrop[n * values.prop_count ..][0..values.prop_count]) |e| {
+                if (e.decl == none or reported[e.decl] or l.reads.contains((@as(u64, n) << 32) | e.decl)) continue;
+                reported[e.decl] = true;
+                l.ds.err(l.c.decls.items(.loc)[e.decl], "'{s}' on <{s}>::backdrop is not lowered: ::backdrop takes background-color, on a <dialog>", .{ l.c.decls.items(.name)[e.decl], l.tag(n) });
+            }
         }
     }
 
@@ -466,8 +475,13 @@ pub const Lowerer = struct {
             }
             _ = l.refused("selector", ":state", "", s.loc);
         }
-        for (l.c.sels.items(.element), l.c.sels.items(.loc)) |e, at| if (e.len > 0)
+        for (l.c.sels.items(.element), l.c.sels.items(.loc)) |e, at| if (e.len > 0 and !std.mem.eql(u8, e, "backdrop"))
             l.ds.err(at, "::{s} is not lowered yet", .{e});
+        // A state or a condition is refused above; a custom property would set the element's.
+        for (l.k.elements.items) |x| if (std.mem.eql(u8, x.element, "backdrop") and std.mem.startsWith(u8, l.c.decls.items(.name)[x.decl], "--") and !l.noted[x.decl]) {
+            l.noted[x.decl] = true;
+            l.ds.err(l.c.decls.items(.loc)[x.decl], "custom property '{s}' on ::backdrop is not lowered; declare it on the <dialog>", .{l.c.decls.items(.name)[x.decl]});
+        };
         for (l.c.conds.items) |cnd| _ = l.refused("at-rule", if (cnd.kind == .media) "@media" else "@supports", "", cnd.loc);
         for (l.c.keyframes.items) |kf| _ = l.refused("property", "animation", "", kf.loc);
     }
@@ -3167,6 +3181,12 @@ pub const Lowerer = struct {
             l.ds.err(l.loc(n), "box-shadow and outline on a <dialog> are not lowered; give its panel a border", .{});
         l.shadow = null;
         l.outline = null;
+        // `dialog::backdrop { background-color }` fills the backdrop, read from its own table.
+        l.backdrop = true;
+        node.backdrop = l.colorOf(n, .@"background-color");
+        if (l.declared(n, .@"background-image")) |v| if (l.component(v) != null)
+            l.ds.err(v.loc, "a <dialog>'s ::backdrop takes a background-color, not an image or a gradient", .{});
+        l.backdrop = false;
         l.ir_of[n] = l.addNode(node);
         ok(l.overlays.append(l.arena, l.ir_of[n]));
         return true;
