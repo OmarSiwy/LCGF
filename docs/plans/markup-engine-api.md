@@ -54,10 +54,11 @@ Requests, by usage:
 
 ### App components (M8.3)
 
-- **Landed (this branch):** `spec.col`/`spec.row` take a slice of specs as well as a tuple, so
-  a component passes its `children: []const Spec` prop on as it is.
+- **Landed:** `spec.col`/`spec.row` take a slice of specs as well as a tuple, so a component
+  passes its `children: []const Spec` prop on as it is. A component takes the page's `theme`
+  first; a `var(--t-*)` prop is the token's field name, for `spec.tokened` (no engine change:
+  `ComptimeUiTokens` already pushes token fields of every node).
 - **Open:**
-  - A component builds with its own theme: the page's `theme` is not passed in.
   - A runtime component (inside an lcgf-each) takes no content; a slot there would be a
     callback into the generated code.
   - The runtime frontend does not lower components: its `spec` (for `Signals`) would need the

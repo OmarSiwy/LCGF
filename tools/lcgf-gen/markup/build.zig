@@ -75,11 +75,11 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
         const app = if (f.app) b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/app.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} }) else null;
         const page = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec", .app = app, .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
         const page_rt = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .app = app, .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
-        if (f.app) {
+        if (f.app_wrong) {
             const wrong = b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/app_wrong.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
             pages.append(b.allocator, .{ .name = b.fmt("{s}_wrong", .{f.name}), .module = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec", .app = wrong }) }) catch @panic("out of memory");
         }
-        if (f.runtime_vars.len > 0) {
+        if (f.runtime_vars.len > 0 and !f.spec_only) {
             const rt_test = b.addTest(.{ .name = b.fmt("markup-{s}-tokens", .{f.name}), .root_module = b.createModule(.{
                 .root_source_file = b.path(b.fmt("{s}/{s}/runtime_test.zig", .{ dir, f.name })),
                 .target = target,

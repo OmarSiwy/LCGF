@@ -736,7 +736,7 @@ pub const Emit = struct {
     /// form `(f, .{ … })`: literals as strings, `{f}` as `.f` (the spec) or its value, `{x.f}`
     /// as the item's field; `id` names the widget its on:click is on.
     fn componentCall(e: *Emit, n: ir.Node, region: bool, list_depth: u32, children: bool) void {
-        e.print("app.components.{f}({s}.{{", .{ std.zig.fmtId(n.text), if (region) "f, " else "" });
+        e.print("app.components.{f}({s}.{{", .{ std.zig.fmtId(n.text), if (region) "f, &theme, " else "theme, " });
         var k: usize = 0;
         if (n.id.len > 0) {
             if (region) e.print(" .id = {s}", .{e.rtId(n.id, list_depth)}) else e.print(" .id = .{f}", .{std.zig.fmtId(n.id)});
@@ -771,11 +771,11 @@ pub const Emit = struct {
         const at = e.whereFull(n.loc);
         const tag = n.text;
         // Escaped for the generated string literal.
-        const want = std.fmt.allocPrint(e.arena, "pub fn @\\\"{s}\\\"({s}", .{ tag, if (region) "f: *lcgf.frame.Frame, props: anytype) …" else "comptime props: anytype) lcgf.spec.Spec" }) catch unreachable;
+        const want = std.fmt.allocPrint(e.arena, "pub fn @\\\"{s}\\\"({s}", .{ tag, if (region) "f: *lcgf.frame.Frame, th: *const lcgf.widgets_base.Theme, props: anytype) …" else "comptime th: lcgf.widgets_base.Theme, comptime props: anytype) lcgf.spec.Spec" }) catch unreachable;
         e.print("{s}if (!@hasDecl(app, \"components\")) @compileError(\"{s}: <{s}> is an app component: give addMarkup an .app module with `pub const components`\")\n", .{ pad, at, tag });
         e.print("{s}else if (!@hasDecl(app.components, \"{s}\")) @compileError(\"{s}: component <{s}> is missing from app.components: add `{s}`\")\n", .{ pad, tag, at, tag, want });
-        e.print("{s}else if (@typeInfo(@TypeOf(app.components.{f})) != .@\"fn\" or @typeInfo(@TypeOf(app.components.{f})).@\"fn\".param_types.len != {d}) @compileError(\"{s}: <{s}> must be `{s}`{s}\")\n", .{ pad, std.zig.fmtId(tag), std.zig.fmtId(tag), @as(u8, if (region) 2 else 1), at, tag, want, if (region) " inside lcgf-each" else "; inside lcgf-each it is the runtime form" });
-        e.print("{s}else if (@typeInfo(@TypeOf(app.components.{f})).@\"fn\".param_types[{d}]) |P| {{\n", .{ pad, std.zig.fmtId(tag), @as(u8, if (region) 1 else 0) });
+        e.print("{s}else if (@typeInfo(@TypeOf(app.components.{f})) != .@\"fn\" or @typeInfo(@TypeOf(app.components.{f})).@\"fn\".param_types.len != {d}) @compileError(\"{s}: <{s}> must be `{s}`{s}\")\n", .{ pad, std.zig.fmtId(tag), std.zig.fmtId(tag), @as(u8, if (region) 3 else 2), at, tag, want, if (region) " inside lcgf-each" else "; inside lcgf-each it is the runtime form" });
+        e.print("{s}else if (@typeInfo(@TypeOf(app.components.{f})).@\"fn\".param_types[{d}]) |P| {{\n", .{ pad, std.zig.fmtId(tag), @as(u8, if (region) 2 else 1) });
         // Every prop the markup passes, typed as it passes it.
         if (n.id.len > 0) e.print("{s}    if (!@hasField(P, \"id\")) @compileError(\"{s}: <{s}> has no prop 'id', so id= and on:click cannot name its widget\");\n", .{ pad, at, tag });
         if (e.hasChild(i)) e.print("{s}    if (!@hasField(P, \"children\")) @compileError(\"{s}: <{s}> takes no content: it has no prop 'children'\")\n{s}    else if (@FieldType(P, \"children\") != []const lcgf.spec.Spec) @compileError(\"{s}: the content of <{s}> is its prop 'children', which must be []const lcgf.spec.Spec\");\n", .{ pad, at, tag, pad, at, tag });

@@ -537,7 +537,12 @@ pub const Lowerer = struct {
             const v = doc.attrs.items(.value)[a];
             const at = doc.valueLoc(a);
             var prop: ir.Prop = .{ .name = name, .kind = .literal, .value = v, .loc = at };
-            if (isBound(v)) {
+            const tv = std.mem.trim(u8, v, " ");
+            if (std.mem.startsWith(u8, tv, "var(") and std.mem.endsWith(u8, tv, ")")) {
+                // `var(--t-x)`: a run-time token, passed as its `Tokens` field's name, which
+                // the component gives `spec.tokened`.
+                prop.value = l.tokenProp(n, std.mem.trim(u8, tv[4 .. tv.len - 1], " "), at) orelse continue;
+            } else if (isBound(v)) {
                 const inner = std.mem.trim(u8, std.mem.trim(u8, v, " ")[1 .. std.mem.trim(u8, v, " ").len - 1], " ");
                 if (std.mem.indexOfScalar(u8, inner, '.')) |dot| {
                     if (each == none or !std.mem.eql(u8, inner[0..dot], l.page.nodes.items(.text)[each]) or !l.identifier(inner[dot + 1 ..], at)) {
@@ -568,6 +573,25 @@ pub const Lowerer = struct {
         const id: []const u8 = if (l.attr(n, "id")) |x| (if (l.identifier(x, l.valueLoc(n, "id"))) x else "") else l.attr(n, "on:click") orelse "";
         l.ir_of[n] = l.addNode(.{ .kind = .component, .parent = parent, .loc = l.loc(n), .text = t, .id = id, .props = props.items, .margin = margin, .name = l.attr(n, "aria-label") orelse "" });
         l.handlers(n, id, "", null);
+    }
+
+    /// The `Tokens` field of run-time token `name` (`--t-x`) for a component prop, registered
+    /// from the custom property's value where the element is; null after an error.
+    fn tokenProp(l: *Lowerer, n: u32, name: []const u8, at: Loc) ?[]const u8 {
+        const runtime = l.runtime_prefix.len > 0 and std.mem.startsWith(u8, name, "--") and std.mem.startsWith(u8, name[2..], l.runtime_prefix);
+        if (!runtime) {
+            l.ds.err(at, "a component prop takes var() only for a run-time token: var(--{s}x) under --runtime-vars={s}", .{ if (l.runtime_prefix.len > 0) l.runtime_prefix else "t-", if (l.runtime_prefix.len > 0) l.runtime_prefix else "t-" });
+            return null;
+        }
+        const e = l.customOf(n, name) orelse {
+            l.ds.err(at, "{s} is not set here", .{name});
+            return null;
+        };
+        const d = l.c.decls.get(e.decl);
+        const r = l.substitute(n, d.first, d.end, d.loc) orelse return null;
+        l.runtimeToken(name[2..], r[0], r[1], at);
+        for (l.page.tokens.items) |t| if (std.mem.eql(u8, t.css, name[2..])) return t.field;
+        return null;
     }
 
     /// A `{f}` prop names a view-state field; something on the page must type it.

@@ -91,11 +91,12 @@ from the HTML: `checked`, `value`, the checked radio. Anything else starts at ze
 
 An element whose name has a hyphen (`<sfy-meter>`, anything but `lcgf-*`) is a component of
 your app module (`.app` in `addMarkup`), declared in its `pub const components`. A spec
-component is `pub fn @"sfy-meter"(comptime props: Props) lcgf.spec.Spec`, as in
+component is `pub fn @"sfy-meter"(comptime theme: lcgf.widgets_base.Theme, comptime props: Props) lcgf.spec.Spec`,
+called with the page's `theme`, as in
 `tools/lcgf-gen/markup/testdata/components/app.zig`.
 
 `<sfy-meter level="{gain}" caption="Gain"></sfy-meter>` becomes
-`app.components.@"sfy-meter"(.{ .level = .gain, .caption = "Gain" })`, inlined into the spec:
+`app.components.@"sfy-meter"(theme, .{ .level = .gain, .caption = "Gain" })`, inlined into the spec:
 
 - A literal attribute is a string, and `{f}` is the field's name, `.f`.
 - Something on the page must type `f`: a control bound to it, text that shows it, or the prop
@@ -105,18 +106,21 @@ component is `pub fn @"sfy-meter"(comptime props: Props) lcgf.spec.Spec`, as in
 - `id="zoom"` passes `.id = .zoom`. With `on:click="zoom"`, a click on the widget the
   component gives that id calls your handler. Widgets in the content call theirs as anywhere
   else.
+- Under `--runtime-vars=t-`, `pad="var(--t-space)"` passes the token's `Tokens` field name,
+  `"space"`. The component gives it to `spec.tokened`, so its Spec reads the caller's table, and a
+  changed table (`ui.themeChanged()`) lays it out again on the next frame (`testdata/themed`).
 - CSS sets only a component's margins. `aria-label` names it.
 
 Inside `<template lcgf-each="net in nets">`, a component is the runtime form,
-`pub fn @"sfy-net"(f: *lcgf.frame.Frame, props: anytype) lcgf.types.Response`, called once per
-item with `.id` made unique by the item's index and `{net.name}` as the item's value. Its
+`pub fn @"sfy-net"(f: *lcgf.frame.Frame, theme: *const lcgf.widgets_base.Theme, props: anytype) lcgf.types.Response`,
+called once per item with `.id` made unique by the item's index and `{net.name}` as the item's value. Its
 on:click reads `Response.clicked` and gets the index. It takes no content yet.
 
 Before the spec is built, the generated `checkComponents` checks each component and each prop
 against the app's declaration: whether it is present, its type, and props without a default
 that the markup does not pass. Each message starts at the HTML:
 
-    page.html:14:5: component <sfy-tool> is missing from app.components: add `pub fn @"sfy-tool"(comptime props: anytype) lcgf.spec.Spec`
+    page.html:14:5: component <sfy-tool> is missing from app.components: add `pub fn @"sfy-tool"(comptime th: lcgf.widgets_base.Theme, comptime props: anytype) lcgf.spec.Spec`
 
 Components are lowered on comptime pages only so far.
 
