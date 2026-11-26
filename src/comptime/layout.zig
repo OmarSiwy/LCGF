@@ -32,6 +32,7 @@ const tree = @import("../core/tree.zig");
 const layout = @import("../layout/layout.zig");
 const columns = @import("columns.zig");
 const dynamic = @import("dynamic.zig");
+const tables = @import("tables.zig");
 const Spec = @import("spec.zig").Spec;
 const Options = @import("validate.zig").Options;
 const RuntimeColumns = tree.Tree.Columns;
@@ -51,16 +52,17 @@ pub fn labelRows(comptime s: Spec) []const u32 {
     }
 }
 
-/// The field label row `row` of `s` shows.
-fn labelBind(comptime s: Spec, comptime row: u32) []const u8 {
+/// Whether label row `row` of `s` shows the state field `field` (its bind, or an argument of
+/// its format).
+fn labelShows(comptime s: Spec, comptime row: u32, comptime field: []const u8) bool {
     var next: u32 = 0;
-    return bindWalk(s, row, &next).?;
+    return nodeAtRow(s, row, &next).?.shows(field);
 }
 
-fn bindWalk(comptime s: Spec, comptime row: u32, comptime next: *u32) ?[]const u8 {
-    if (next.* == row) return s.bind;
+fn nodeAtRow(comptime s: Spec, comptime row: u32, comptime next: *u32) ?Spec {
+    if (next.* == row) return s;
     next.* += 1;
-    for (s.children) |c| if (bindWalk(c, row, next)) |b| return b;
+    for (s.children) |c| if (nodeAtRow(c, row, next)) |b| return b;
     return null;
 }
 
@@ -239,7 +241,7 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         pub const gap_total: [R]f32 = blk: {
             @setEvalBranchQuota(10_000 + 100 * n);
             var out: [R]f32 = @splat(0);
-            for (0..n) |i| out[i] = C.pushed.c.gap[i] * @max(C.pushed.c.nkids[i] - 1, 0);
+            tables.gapTotal(&C.pushed, n, &out);
             break :blk out;
         };
 
@@ -320,33 +322,20 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
         /// subtree.
         const boundary_of_label: [label_count]u32 = blk: {
             @setEvalBranchQuota(10_000 + 100 * n * (label_count + 1));
-            const c = C.pushed.c;
             var out: [label_count]u32 = undefined;
-            for (label_rows, &out) |l, *b| {
-                var i: u32 = l;
-                while (i != 0 and !(c.min[0][i] == c.max[0][i] and c.min[1][i] == c.max[1][i])) i = c.parent[i];
-                b.* = i;
-            }
+            tables.boundaries(&C.pushed, label_rows, &out);
             break :blk out;
         };
 
         /// The rows to lay out again when the state field `field` changes: the subtree of the
-        /// common boundary of every label bound to it. Null when no label shows it (a checkbox's
-        /// or slider's value moves no box): nothing to do. Ancestor of several boundaries: the
-        /// lowest row whose subtree holds them all.
+        /// common boundary of every label bound to it (`tables.dirtySpan`). Null when no label
+        /// shows it (a checkbox's or slider's value moves no box): nothing to do.
         pub fn dirtySpan(comptime field: []const u8) ?[2]u32 {
             return comptime blk: {
                 @setEvalBranchQuota(10_000 + 100 * n * (label_count + 1));
-                const c = C.pushed.c;
-                var root: ?u32 = null;
-                for (label_rows, boundary_of_label) |l, b| {
-                    if (!std.mem.eql(u8, labelBind(spec, l), field)) continue;
-                    var r = root orelse b;
-                    // Climb until the subtree of r holds b.
-                    while (!(r <= b and b < c.end[r])) r = c.parent[r];
-                    root = r;
-                }
-                break :blk if (root) |r| .{ r, c.end[r] } else null;
+                var changed: [label_count]bool = undefined;
+                for (label_rows, &changed) |l, *ch| ch.* = labelShows(spec, l, field);
+                break :blk tables.dirtySpan(&C.pushed, &boundary_of_label, &changed);
             };
         }
 
@@ -502,48 +491,23 @@ pub fn FoldPlan(comptime C: type) type {
     const labels = labelRows(C.specification);
     const D = dynamic.Regions(C.specification);
     const n = C.node_count;
-    const c = C.pushed.c;
+    const Plan = struct { has_label: [n]bool, indep: [n]bool, root: [n]bool, inside: [n]bool, folded_rows: usize };
+    const made: Plan = blk: {
+        @setEvalBranchQuota(10_000 + 400 * n);
+        var out: Plan = undefined;
+        const f = tables.foldPlan(&C.pushed, n, labels, &D.volatile_rows, &out.has_label, &out.indep, &out.root, &out.inside);
+        out.folded_rows = f.folded_rows;
+        break :blk out;
+    };
     return struct {
         /// A label's size is its text's, which comes from state at run time: no row with a
-        /// label in its subtree folds.
-        const has_label: [n]bool = blk: {
-            @setEvalBranchQuota(10_000 + 100 * n);
-            var out: [n]bool = @splat(false);
-            for (labels) |l| out[l] = true;
-            var i = n;
-            while (i > 1) {
-                i -= 1;
-                if (out[i]) out[c.parent[i]] = true;
-            }
-            break :blk out;
-        };
-        const indep: [n]bool = blk: {
-            @setEvalBranchQuota(10_000 + 100 * n);
-            var out: [n]bool = undefined;
-            out[0] = false;
-            for (1..n) |i| {
-                const own = c.grow[0][i] == 0 and c.grow[1][i] == 0 and c.pct[0][i] < 0 and c.pct[1][i] < 0 and
-                    (c.shrink[i] == 0 or c.flow[i] == 0);
-                out[i] = !D.volatile_rows[i] and !has_label[i] and (out[c.parent[i]] or own);
-            }
-            break :blk out;
-        };
-        pub const root: [n]bool = blk: {
-            @setEvalBranchQuota(10_000 + 100 * n);
-            var out: [n]bool = undefined;
-            for (0..n) |i| out[i] = indep[i] and !indep[c.parent[i]] and c.end[i] - i > 1;
-            break :blk out;
-        };
+        /// label in its subtree folds (`tables.foldPlan`).
+        const has_label: [n]bool = made.has_label;
+        const indep: [n]bool = made.indep;
+        pub const root: [n]bool = made.root;
         /// Rows inside a fold root's subtree, the root not counted: they leave the skeleton.
-        const inside: [n]bool = blk: {
-            @setEvalBranchQuota(10_000 + 100 * n);
-            var out: [n]bool = @splat(false);
-            for (0..n) |i| if (root[i]) for (i + 1..c.end[i]) |j| {
-                out[j] = true;
-            };
-            break :blk out;
-        };
-        const folded_rows = std.mem.count(bool, &inside, &.{true});
+        const inside: [n]bool = made.inside;
+        const folded_rows = made.folded_rows;
     };
 }
 
@@ -556,9 +520,7 @@ fn skeleton(comptime s: Spec, comptime plan: type, comptime size: anytype, compt
         next.* = i + @import("flatten.zig").count(s);
         var leaf = s;
         leaf.children = &.{};
-        leaf.style.size = .{ .px(size[0][i]), .px(size[1][i]) };
-        leaf.style.min = .{ 0, 0 };
-        leaf.style.max = .{ std.math.inf(f32), std.math.inf(f32) };
+        leaf.style = tables.foldedLeaf(s.style, .{ size[0][i], size[1][i] });
         return leaf;
     }
     var kids: [s.children.len]Spec = undefined;
@@ -629,26 +591,7 @@ pub fn Layout(comptime spec: Spec, comptime options: Options) type {
             var rel: [2][R]f32 = @splat(@splat(0));
             var size: [2][R]f32 = @splat(@splat(0));
             var keep_size: [R]f32 = @splat(1);
-            var k: u32 = 0;
-            var root_k: u32 = 0;
-            var root_row: usize = 0;
-            for (0..n) |j| {
-                if (plan.inside[j]) {
-                    base[j] = root_k;
-                    keep_size[j] = 0;
-                    for (0..2) |a| {
-                        rel[a][j] = reference.pos[a][j] - reference.pos[a][root_row];
-                        size[a][j] = reference.size[a][j];
-                    }
-                } else {
-                    base[j] = k;
-                    if (plan.root[j]) {
-                        root_k = k;
-                        root_row = j;
-                    }
-                    k += 1;
-                }
-            }
+            const k = tables.expand(n, &plan.root, &plan.inside, .{ &reference.pos[0], &reference.pos[1] }, .{ &reference.size[0], &reference.size[1] }, &base, .{ &rel[0], &rel[1] }, .{ &size[0], &size[1] }, &keep_size);
             std.debug.assert(k == S.Cols.node_count);
             break :blk .{ .base = base, .rel = rel, .size = size, .keep_size = keep_size };
         };

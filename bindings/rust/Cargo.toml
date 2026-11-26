@@ -1,0 +1,11 @@
+# LCGF for Rust: the runtime crate (`lcgf`), the `ui!` proc macro (`lcgf-macros`) and the
+# bindings' gate (`lcgf-check`, bindings/check/run.sh). Built against an installed
+# `zig build abi` prefix (LCGF_PREFIX); no Zig compiler is needed.
+[workspace]
+resolver = "3"
+members = ["lcgf", "lcgf-macros", "lcgf-check"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"

@@ -1,0 +1,16 @@
+// src/comptime/examples.zig's badge as a static UI (lcgf-gen --static), on its 96x64 display.
+.{
+    .name = "badge",
+    .viewport = .{ 96, 64 },
+    .state = .{
+        .{ .name = "name", .str = "Ada" },
+        .{ .name = "level", .f32 = 0.3 },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .size = .{ .{ .px = 96 }, .{ .px = 64 } }, .pad = .{ 2, 2, 2, 2 }, .gap = 2, .fill = .{ .rgb = .{ 255, 255, 255 } }, .clip = true },
+        .children = .{
+            .{ .label = "name" },
+            .{ .slider = .{ .id = "level", .bind = "level" } },
+        },
+    } },
+}

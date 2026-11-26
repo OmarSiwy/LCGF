@@ -18,6 +18,7 @@ const columns = @import("columns.zig");
 const draw_list = @import("../draw/draw_list.zig");
 const encode = @import("../draw/paint.zig").encode;
 const Spec = @import("spec.zig").Spec;
+const tables = @import("tables.zig");
 const Options = @import("validate.zig").Options;
 const Quad = draw_list.Quad;
 const Span = @import("../core/strings.zig").Span;
@@ -43,40 +44,24 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
     const inh: Inherited = blk: {
         @setEvalBranchQuota(10_000 + 200 * n);
         var out: Inherited = undefined;
-        out.alpha[0] = tree.Extra.defaults.alpha;
-        out.clip_radii[0] = tree.Extra.defaults.clip_radii;
-        for (1..p.xlen) |r| {
-            const i = p.x.node[r];
-            const x = p.x.row[r];
-            if (!std.mem.eql(f32, &x.transform, &identity))
-                @compileError("a comptime UI with a transform needs its laid-out rect to paint: paint it with the runtime tree");
-            const up = if (i == 0) 0 else p.c.scope[p.c.parent[i]];
-            out.alpha[r] = x.opacity * out.alpha[up];
-            const own: [4]f32 = @max(@as(V4, x.radii) - @as(V4, @splat(x.border)), @as(V4, @splat(0)));
-            out.clip_radii[r] = if (p.c.clips[i] != 0) own else out.clip_radii[up];
-        }
+        tables.inherit(&p, &out.alpha, &out.clip_radii) catch
+            @compileError("a comptime UI with a transform needs its laid-out rect to paint: paint it with the runtime tree");
         break :blk out;
     };
 
     // The rows that paint a quad, in row order: `paint.emit`'s condition without `visible`.
     const in_row_order: []const u32 = blk: {
         @setEvalBranchQuota(10_000 + 200 * n);
-        var rows: []const u32 = &.{};
-        for (0..n) |i| {
-            const look = p.c.look[i];
-            if (((look.fill | look.border_color) >> 24) != 0 and inh.alpha[p.c.scope[i]] > 0) rows = rows ++ [_]u32{i};
-        }
-        break :blk rows;
+        var rows: [n]u32 = undefined;
+        const len = tables.paintRows(&p, n, &inh.alpha, &rows);
+        const final = rows[0..len].*;
+        break :blk &final;
     };
     const m = in_row_order.len;
     const painted: [m]u32 = sortByKey(C, spec, options, in_row_order[0..m].*);
     const nb = blk: {
-        var b = 0;
-        for (painted, 0..) |i, k| {
-            const key = keyOf(p.c.look[i]);
-            if (k == 0 or key != keyOf(p.c.look[painted[k - 1]])) b += 1;
-        }
-        break :blk b;
+        @setEvalBranchQuota(10_000 + 200 * n);
+        break :blk tables.batchCount(&p, &painted);
     };
 
     return struct {
@@ -91,40 +76,18 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         pub const order: [n]u32 = blk: {
             @setEvalBranchQuota(10_000 + 20 * n * m);
             var out: [n]u32 = undefined;
-            var k = 0;
-            for (&out, 0..) |*row, i| {
-                row.* = i;
-                if (k < m and in_row_order[k] == i) {
-                    row.* = painted[k];
-                    k += 1;
-                }
-            }
+            tables.paintOrder(n, in_row_order, &painted, &out);
             break :blk out;
         };
 
         pub const label_count = labels.len;
-        const Label = struct { node: u32, parent: u32, quad_end: u32, padding: [4]f32, color: u32 };
+        const Label = tables.Label;
         // A subtree containing a label cannot fold. Its text is a boundary in the
         // sorted quad stream, including the label's own background before its run.
         const label_plans: [label_count]Label = blk: {
             @setEvalBranchQuota(10_000 + 100 * n);
             var out: [label_count]Label = undefined;
-            var k = 0;
-            var l = 0;
-            for (order) |row| {
-                if (k < m and painted[k] == row) k += 1;
-                if (l < labels.len and row == labels[l]) {
-                    out[l] = .{
-                        .node = row,
-                        .parent = p.c.parent[row],
-                        .quad_end = k,
-                        .padding = .{ p.c.pad_lo[0][row], p.c.pad_lo[1][row], -p.c.pad_hi[0][row], -p.c.pad_hi[1][row] },
-                        .color = paint.fade((types.TextStyle{}).color.bitsOf(), inh.alpha[p.c.scope[row]]),
-                    };
-                    l += 1;
-                }
-            }
-            std.debug.assert(l == label_count);
+            tables.labelPlans(&p, &order, &painted, labels, &inh.alpha, &out);
             break :blk out;
         };
         /// Row k: the node whose `child_clip` clips template k, its parent.
@@ -137,50 +100,24 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         pub const templates: [m]Quad = blk: {
             @setEvalBranchQuota(10_000 + 200 * n);
             var out: [m]Quad = undefined;
-            for (&out, node) |*q, i| {
-                const look = p.c.look[i];
-                const own = p.x.row[p.c.extra[i]];
-                q.* = .{
-                    .rect = @splat(0),
-                    .clip = @splat(0),
-                    .params = look.params,
-                    .uv = own.uv,
-                    .fill = look.fill,
-                    .border_color = look.border_color,
-                    .radii = tree.radiiOf(own.radii, look.radius),
-                    .border = own.border,
-                    .opacity = inh.alpha[p.c.scope[i]],
-                    .xform = identity,
-                    .clip_radii = inh.clip_radii[p.c.scope[p.c.parent[i]]],
-                };
-            }
+            tables.templates(&p, &node, &inh.alpha, &inh.clip_radii, &out);
             break :blk out;
         };
         /// Row k: template k's batch key, texture << 16 | material, as `DrawList.op.key`.
-        pub const keys: [m]u32 = blk: {
-            var out: [m]u32 = undefined;
-            for (&out, node) |*o, i| o.* = keyOf(p.c.look[i]);
-            break :blk out;
-        };
+        pub const keys: [m]u32 = made_batches.keys;
 
         /// The commands when every template is visible, as `paint.encode` would build them:
         /// consecutive templates with equal keys form one batch. Read-only data.
         pub const Batches = struct { first: [nb]u32, count: [nb]u32, key: [nb]u32 };
         pub const batch_count = nb;
-        pub const batches: Batches = blk: {
+        pub const batches: Batches = made_batches.b;
+        const made_batches = blk: {
             @setEvalBranchQuota(10_000 + 200 * n);
+            var k: [m]u32 = undefined;
             var out: Batches = undefined;
-            var b = 0;
-            for (keys, 0..) |key, k| {
-                if (k == 0 or key != keys[k - 1]) {
-                    out.first[b] = k;
-                    out.count[b] = 0;
-                    out.key[b] = key;
-                    b += 1;
-                }
-                out.count[b - 1] += 1;
-            }
-            break :blk out;
+            const got = tables.batches(&p, &node, &k, &out.first, &out.count, &out.key);
+            std.debug.assert(got == nb);
+            break :blk .{ .keys = k, .b = out };
         };
 
         pub const Dirty = std.bit_set.Static(m);
@@ -301,6 +238,8 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
         }
 
         inline fn emitQuads(ram: *const C.Dynamic, d: *DrawList, first: usize, end: usize, cursor: *Cursor) void {
+            // A UI that paints no quad (only text) has no templates to index.
+            if (comptime m == 0) return;
             for (first..end) |k| {
                 const i = node[k];
                 var quad = templates[k];
@@ -382,66 +321,18 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
 /// that may go next. Quads with the same key keep their order, so do any two that may overlap.
 fn sortByKey(comptime C: type, comptime spec: Spec, comptime options: Options, comptime rows: anytype) @TypeOf(rows) {
     const m = rows.len;
-    if (m < 3) return rows;
-    // With one batch key the input is already in its final order.
-    if (for (rows[1..]) |r| {
-        if (keyOf(C.pushed.c.look[r]) != keyOf(C.pushed.c.look[rows[0]])) break false;
-    } else true) return rows;
     const n = C.node_count;
-    const p = C.pushed;
     const plan = @import("layout.zig").FoldPlan(C);
     @setEvalBranchQuota(100_000 + 1_000 * n + 50 * m * m * m);
-    // The fold root each row lies under (itself for a root), or `none`.
-    var group: [n]u32 = @splat(none);
-    for (0..n) |i| if (plan.root[i]) for (i..p.c.end[i]) |j| {
-        group[j] = i;
-    };
+    var group: [n]u32 = undefined;
+    tables.foldGroups(&C.pushed, n, &plan.root, &group);
     const P = @import("layout.zig").Plain(spec, options);
     var scratch: P.Scratch = undefined;
-    P.passesLive(&scratch, .{ 1000, 1000 }, @splat(.{}));
-    const apart = struct {
-        fn f(a: u32, b: u32, comptime gr: [n]u32, sc: anytype) bool {
-            if (gr[a] == none or gr[a] != gr[b]) return false;
-            const shadow = @backingInt(@import("../draw/features.zig").Kind.shadow);
-            for ([_]u32{ a, b }) |i| {
-                if (@as(u32, @bitCast(p.c.look[i].params[0])) == shadow) return false;
-            }
-            for (0..2) |ax| {
-                const a0 = sc.pos[ax][a];
-                const b0 = sc.pos[ax][b];
-                if (a0 + sc.size[ax][a] + 1 <= b0 or b0 + sc.size[ax][b] + 1 <= a0) return true;
-            }
-            return false;
-        }
-    }.f;
+    if (m >= 3) P.passesLive(&scratch, .{ 1000, 1000 }, @splat(.{}));
     var out: [m]u32 = undefined;
-    var done: [m]bool = @splat(false);
-    var last: u32 = none;
-    for (&out) |*o| {
-        var pick: u32 = none;
-        var first_ready: u32 = none;
-        for (0..m) |k| {
-            if (done[k]) continue;
-            const ready = for (0..k) |j| {
-                if (!done[j] and !apart(rows[j], rows[k], group, &scratch)) break false;
-            } else true;
-            if (!ready) continue;
-            if (first_ready == none) first_ready = k;
-            if (keyOf(p.c.look[rows[k]]) == last) {
-                pick = k;
-                break;
-            }
-        }
-        if (pick == none) pick = first_ready;
-        done[pick] = true;
-        o.* = rows[pick];
-        last = keyOf(p.c.look[rows[pick]]);
-    }
+    var done: [m]bool = undefined;
+    tables.sortByKey(&C.pushed, &rows, &group, .{ &scratch.pos[0], &scratch.pos[1] }, .{ &scratch.size[0], &scratch.size[1] }, &out, &done);
     return out;
-}
-
-fn keyOf(look: tree.Look) u32 {
-    return (@as(u32, look.texture) << 16) | look.material;
 }
 
 inline fn f32Of(x: anytype) f32 {

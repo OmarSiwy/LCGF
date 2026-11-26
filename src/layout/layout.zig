@@ -42,7 +42,7 @@ pub fn prepare(t: anytype) void {
             simd.storeF(c.used[a], i, zero);
         }
         simd.storeF(c.cursor, i, zero);
-        const gaps = @max(simd.loadF(c.nkids, i) - simd.f(1), zero);
+        const gaps = simd.maxF(simd.loadF(c.nkids, i) - simd.f(1), zero);
         simd.storeF(c.gap_total, i, simd.loadF(c.gap, i) * gaps);
     }
 }
@@ -118,7 +118,7 @@ inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void
         if (flexed) content = baseline.content(t, fx, a, i, content);
         var nat = content + lo[i] + hi[i];
         if (flexed) nat = fx.aspectNat(t, a, i, nat);
-        nat = @min(@max(nat, min[i]), max[i]);
+        nat = simd.minF(simd.maxF(nat, min[i]), max[i]);
         nat_[i] = nat;
         if (flexed) baseline.settle(t, fx, i, nat);
         // Fold into the parent: a sum along its main axis, a max across it.
@@ -144,7 +144,7 @@ inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void
     if (flexed) content = baseline.content(t, fx, a, first, content);
     var nat = content + lo[first] + hi[first];
     if (flexed) nat = fx.aspectNat(t, a, first, nat);
-    nat_[first] = @min(@max(nat, min[first]), max[first]);
+    nat_[first] = simd.minF(simd.maxF(nat, min[first]), max[first]);
     if (flexed) baseline.settle(t, fx, first, nat_[first]);
 
     // SIMD: one reciprocal per node, so the top-down sweep has no division
@@ -154,7 +154,7 @@ inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) void
     const n = simd.padded(last);
     var j: usize = std.mem.alignBackward(usize, first, W);
     while (j < n) : (j += W) {
-        simd.storeF(grow_inv, j, simd.f(1) / @max(simd.loadF(grow_sum, j), simd.f(1e-6)));
+        simd.storeF(grow_inv, j, simd.f(1) / simd.maxF(simd.loadF(grow_sum, j), simd.f(1e-6)));
     }
 }
 
@@ -228,26 +228,26 @@ inline fn resolveOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32) 
         const k0 = nat * keep * (1 - fl * across);
         const k1 = has_pct * pct[i] + keep * fl * across;
         const k2 = keep * fl * main * grow[i] * grow_inv[p];
-        const inner = @max(size[p] - lo[p] - hi[p], 0);
-        var s = k0 + k1 * inner + k2 * @max(inner - taken, 0);
+        const inner = simd.maxF(size[p] - lo[p] - hi[p], 0);
+        var s = k0 + k1 * inner + k2 * simd.maxF(inner - taken, 0);
         // Flex only: margins are outside the node, so a stretched node fills `inner` less its
         // own; a grower may get a second-round share; a stretched child of a wrapping row fills
         // its line.
         const m = if (flexed) fx.margin(a, i) else 0;
         if (flexed) {
-            const first_round = nat + grow[i] * grow_inv[p] * @max(inner - taken, 0);
+            const first_round = nat + grow[i] * grow_inv[p] * simd.maxF(inner - taken, 0);
             const line = wrap.lineCross(t, fx, a, i, p, inner);
             s += keep * fl * (main * fx.secondShare(t, a, i, p, first_round) + across * (line - m));
         }
         // Shrinkable nodes give way when the parent has no room for them.
-        const room = @max(inner - main * (taken - nat) - (1 - main) * m, 0);
-        var cut = shrink[i] * fl * @max(s - room, 0);
+        const room = simd.maxF(inner - main * (taken - nat) - (1 - main) * m, 0);
+        var cut = shrink[i] * fl * simd.maxF(s - room, 0);
         if (flexed) cut += main * (fx.mainShrinkCut(t, a, i, p, taken - inner) - cut);
         // A wrapping row breaks a line instead of shrinking along it.
         if (flexed) cut *= 1 - fx.c.wrap[p] * main;
         s -= cut;
         if (flexed) s = fx.aspectSize(t, a, i, s);
-        s = @min(@max(s, min[i]), max[i]);
+        s = simd.minF(simd.maxF(s, min[i]), max[i]);
         size[i] = s;
         used[p] += (s + m) * fl;
         if (flexed) fx.secondRound(t, a, i);
@@ -311,12 +311,12 @@ fn placeOf(t: anytype, fx: anytype, first: u32, last: u32) void {
         if (flexed) wrap.openLine(t, fx, i, p);
         inline for (0..2) |a| {
             const inner = size[a][p] - lo[a][p] - hi[a][p];
-            const lead = @max(inner - used[a][p] - gap_total[p], 0) * align_main[p];
+            const lead = simd.maxF(inner - used[a][p] - gap_total[p], 0) * align_main[p];
             var cross = align_cross[p];
             if (flexed) cross = fx.selfCross(i, cross);
             const m_lo = if (flexed) fx.c.margin_lo[a][i] else 0;
             const m = if (flexed) fx.margin(a, i) else 0;
-            var across = @max(inner - size[a][i] - m, 0) * cross + m_lo;
+            var across = simd.maxF(inner - size[a][i] - m, 0) * cross + m_lo;
             if (flexed and a == 1) across = baseline.across(t, fx, i, p, across);
             const along = lead + cursor[p] + m_lo;
             var in_flow = across + main[a][p] * (along - across);
@@ -377,12 +377,12 @@ pub fn finalizeSpan(t: anytype, first: u32, last: u32) void {
         // that store is the pass's latency chain: keep it to one max. The clip-or-not select
         // is on the other operand, off the chain (docs/perf/chains.md).
         const inherited: V4 = child_clip[parent[i]];
-        const v = @max(r, inherited);
+        const v = simd.maxF(r, inherited);
         // Children are clipped to the area inside the border. In the
         // (min, -max) form, insetting all four edges is one add.
         const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
         const inner = @select(f32, clips, r + @as(V4, @splat(xrow[extra[i]].border)), everything);
-        child_clip[i] = @max(inherited, inner);
+        child_clip[i] = simd.maxF(inherited, inner);
         const out = v * sign;
         vis[0][i] = out[0];
         vis[1][i] = out[1];

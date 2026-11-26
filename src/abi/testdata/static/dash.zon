@@ -1,0 +1,32 @@
+// src/comptime/examples.zig's dashboard as a static UI (lcgf-gen --static).
+.{
+    .name = "dash",
+    .state = .{
+        .{ .name = "title", .str = "" },
+        .{ .name = "a", .str = "" },
+        .{ .name = "b", .str = "" },
+        .{ .name = "c", .str = "" },
+        .{ .name = "level", .f32 = 0 },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .pad = .{ 8, 8, 8, 8 }, .gap = 4 },
+        .children = .{
+            .{ .label = "title" },
+            .{ .row = .{ .style = .{ .gap = 6 }, .children = .{
+            .{ .col = .{ .style = .{ .size = .{ .{ .px = 90 }, .{ .px = 40 } }, .pad = .{ 4, 4, 4, 4 }, .clip = true }, .children = .{
+                .{ .label = "a" },
+                .{ .col = .{ .style = .{ .size = .{ .fill, .{ .px = 4 } } } } },
+            } } },
+            .{ .col = .{ .style = .{ .size = .{ .{ .px = 90 }, .{ .px = 40 } }, .pad = .{ 4, 4, 4, 4 }, .clip = true }, .children = .{
+                .{ .label = "b" },
+                .{ .col = .{ .style = .{ .size = .{ .fill, .{ .px = 4 } } } } },
+            } } },
+            .{ .col = .{ .style = .{ .size = .{ .{ .px = 90 }, .{ .px = 40 } }, .pad = .{ 4, 4, 4, 4 }, .clip = true }, .children = .{
+                .{ .label = "c" },
+                .{ .col = .{ .style = .{ .size = .{ .fill, .{ .px = 4 } } } } },
+            } } },
+            } } },
+            .{ .slider = .{ .id = "level", .bind = "level" } },
+        },
+    } },
+}

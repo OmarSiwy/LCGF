@@ -1,0 +1,35 @@
+// src/comptime/examples.zig's settings page as a static UI (lcgf-gen --static), on its fixed
+// 320x240 display.
+.{
+    .name = "settings",
+    .viewport = .{ 320, 240 },
+    .state = .{
+        .{ .name = "title", .str = "Settings" },
+        .{ .name = "wifi", .bool = true },
+        .{ .name = "bluetooth", .bool = false },
+        .{ .name = "brightness", .f32 = 0.7 },
+        .{ .name = "volume", .f32 = 0.4 },
+        .{ .name = "dark", .bool = true },
+        .{ .name = "sleep", .f32 = 0.2 },
+        .{ .name = "sounds", .bool = true },
+        .{ .name = "haptics", .bool = false },
+        .{ .name = "contrast", .f32 = 0.5 },
+        .{ .name = "location", .bool = false },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .size = .{ .{ .px = 320 }, .{ .px = 240 } }, .pad = .{ 4, 4, 4, 4 }, .gap = 2, .fill = .{ .rgb = .{ 0, 0, 0 } } },
+        .children = .{
+            .{ .label = "title" },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .checkbox = .{ .id = "wifi", .bind = "wifi" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .checkbox = .{ .id = "bluetooth", .bind = "bluetooth" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .slider = .{ .id = "brightness", .bind = "brightness" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .slider = .{ .id = "volume", .bind = "volume" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .checkbox = .{ .id = "dark", .bind = "dark" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .slider = .{ .id = "sleep", .bind = "sleep" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .checkbox = .{ .id = "sounds", .bind = "sounds" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .checkbox = .{ .id = "haptics", .bind = "haptics" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .slider = .{ .id = "contrast", .bind = "contrast" } } } } },
+            .{ .row = .{ .style = .{ .gap = 8, .size = .{ .fill, .{ .px = 20 } } }, .children = .{ .{ .label = "title" }, .{ .checkbox = .{ .id = "location", .bind = "location" } } } } },
+        },
+    } },
+}

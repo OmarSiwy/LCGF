@@ -1,0 +1,38 @@
+// src/comptime/examples.zig's to-do page as a static UI (lcgf-gen --static): a list of up to
+// 8 rows of which `len` live, a footer while `footer` holds, and one of two status lines.
+.{
+    .name = "todo",
+    .state = .{
+        .{ .name = "title", .str = "Today" },
+        .{ .name = "len", .u32 = 3 },
+        .{ .name = "footer", .bool = true },
+        .{ .name = "mode", .u8 = 0 },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .pad = .{ 4, 4, 4, 4 }, .gap = 4 },
+        .children = .{
+            .{ .row = .{ .style = .{ .gap = 8 }, .children = .{
+                .{ .label = "title" },
+                .{ .col = .{ .style = .{ .size = .{ .{ .px = 30 }, .{ .px = 10 } } } } },
+            } } },
+            .{ .list = .{ .count = "len", .max = 8, .style = .{ .gap = 2 }, .template = .{
+                .{ .row = .{ .style = .{ .gap = 4, .size = .{ .fill, .{ .px = 20 } } }, .children = .{
+                    .{ .label = "title" },
+                    .{ .col = .{ .style = .{ .size = .{ .fill, .{ .px = 8 } } } } },
+                } } },
+            } } },
+            .{ .row = .{ .when = "footer", .style = .{ .gap = 8, .pad = .{ 2, 2, 2, 2 } }, .children = .{
+                .{ .label = "title" },
+                .{ .col = .{ .style = .{ .size = .{ .{ .px = 40 }, .{ .px = 12 } } } } },
+            } } },
+            .{ .choice = .{ .select = "mode", .children = .{
+                .{ .col = .{ .style = .{ .size = .{ .{ .px = 16 }, .{ .px = 16 } } } } },
+                .{ .row = .{ .style = .{ .gap = 4, .size = .{ .fill, .fit } }, .children = .{
+                    .{ .label = "title" },
+                    .{ .col = .{ .style = .{ .size = .{ .fill, .{ .px = 6 } } } } },
+                    .{ .col = .{ .style = .{ .size = .{ .{ .px = 24 }, .{ .px = 24 } } } } },
+                } } },
+            } } },
+        },
+    } },
+}

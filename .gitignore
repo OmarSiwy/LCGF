@@ -6,3 +6,4 @@ __pycache__/
 zig-pkg/
 *.log
 .claude/
+bindings/rust/target/

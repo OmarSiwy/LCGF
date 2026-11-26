@@ -14,8 +14,9 @@ const Style = types.Style;
 const Rect = types.Rect;
 const b01 = simd.b2f;
 
-/// One row of a tree's paint extras (`Tree.Extras`).
-pub const Extra = struct {
+/// One row of a tree's paint extras (`Tree.Extras`). Extern: C++ and Rust write a row's first
+/// five fields in place (`lcgf_extra`, src/abi/runtime.zig's `CView`).
+pub const Extra = extern struct {
     /// `Style.border`. Read by finalize (children clip inside it), inherit and paint.
     border: f32,
     /// `Style.uv`.
@@ -113,8 +114,12 @@ pub const Template = struct {
         inline for (0..2) |a| {
             const k = @backingInt(s.size[a].kind);
             const v = s.size[a].v;
-            r.min[a] = @max(v * Size.k_min[k], s.min[a]);
-            r.max[a] = @min(v * Size.k_max[k] + Size.c_max[k], s.max[a]);
+            // A select, not @max/@min: on a tie or a NaN it is the style's bound on every
+            // target (one maxss/minss on x86), so a row made in C++ or Rust is the same bits.
+            const lo = v * Size.k_min[k];
+            const hi = v * Size.k_max[k] + Size.c_max[k];
+            r.min[a] = if (lo > s.min[a]) lo else s.min[a];
+            r.max[a] = if (hi < s.max[a]) hi else s.max[a];
             r.grow[a] = v * Size.k_grow[k];
             r.pct[a] = v * Size.k_pct[k] + Size.c_pct[k];
             r.pad_lo[a] = s.pad[a];
@@ -164,6 +169,62 @@ pub const Template = struct {
         return r;
     }
 };
+
+/// A `Template` as the C ABI lays it out (`lcgf_row` in src/abi/lcgf.h): one 32-bit word per
+/// field, `look` spelled out. C++ and Rust make these; `Tree.pushRow` reads one in place, field
+/// by field, so a row from across the seam is never copied into a `Template` first.
+pub const FlatRow = extern struct {
+    min: [2]f32,
+    max: [2]f32,
+    grow: [2]f32,
+    pct: [2]f32,
+    pad_lo: [2]f32,
+    pad_hi: [2]f32,
+    offset: [2]f32,
+    scroll: [2]f32,
+    main: [2]f32,
+    gap: f32,
+    flow: f32,
+    shrink: f32,
+    align_main: f32,
+    align_cross: f32,
+    clips: u32,
+    sense: u32,
+    params: [4]f32,
+    fill: u32,
+    border_color: u32,
+    radius: f32,
+    texture: u32,
+    material: u32,
+    role: u32,
+    value: f32,
+    text: u32,
+    custom: u32,
+    own: u32,
+    border: f32,
+    uv: [4]f32,
+    radii: [4]f32,
+    opacity: f32,
+    transform: [6]f32,
+};
+
+/// Field `name` of a row, `Template` or `FlatRow`, as the column of that name stores it.
+inline fn rowField(row: anytype, comptime name: []const u8) @FieldType(Template, name) {
+    const T = @FieldType(Template, name);
+    if (@TypeOf(row.*) == Template) return @field(row, name);
+    if (comptime std.mem.eql(u8, name, "look")) return .{
+        .params = row.params,
+        .fill = row.fill,
+        .border_color = row.border_color,
+        .radius = row.radius,
+        .texture = @truncate(row.texture),
+        .material = @truncate(row.material),
+    };
+    return switch (@typeInfo(T)) {
+        .int => @truncate(@field(row, name)),
+        else => @field(row, name),
+    };
+}
 
 /// Corner radii as paint reads them: a stored row's own, or, for the shared defaults row's
 /// negative corners, the node's `Look.radius` on all four.
@@ -369,12 +430,13 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// allocation. `s` must not point into the tree (`noalias`: the loads of the extras
         /// then move inside `pushRow`'s one branch).
         pub fn push(t: *Self, parent: Index, id: Id, noalias s: *const Style) Index {
-            return t.pushRow(parent, id, &.from(s));
+            return t.pushRow(parent, id, &Template.from(s));
         }
 
         /// `push` from a style already turned into its row (`Template.from`, once per style
         /// rather than once per node): the row is copied as it is, one store per column.
-        pub fn pushRow(t: *Self, parent_in: Index, id: Id, row: *const Template) Index {
+        /// `row` is a `*const Template` or a `*const FlatRow`.
+        pub fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index {
             const c = &t.c;
             const i: Index = @intCast(@min(t.len, t.cap - 1));
             t.overflow = simd.orB(t.overflow, t.len >= t.cap);
@@ -388,7 +450,7 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             c.parent[i] = parent;
             c.end[i] = i + 1;
             inline for (Template.node_fields) |name| {
-                const v = @field(row, name);
+                const v = rowField(row, name);
                 if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
                     inline for (0..2) |a| @field(c, name)[a][i] = v[a];
                 } else @field(c, name)[i] = v;

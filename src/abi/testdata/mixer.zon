@@ -1,0 +1,28 @@
+// A mixer panel: src/abi/zon.zig's `mixer_spec`, written as a C++ or Rust program writes it.
+.{
+    .name = "mixer",
+    .state = .{
+        .{ .name = "title", .str = "Mixer" },
+        .{ .name = "mute_text", .str = "Mute" },
+        .{ .name = "muted", .bool = false },
+        .{ .name = "volume", .f32 = 0.5 },
+        .{ .name = "pan", .f32 = 0 },
+    },
+    .ui = .{ .col = .{
+        .style = .{ .pad = .{ 8, 8, 8, 8 }, .gap = 4, .fill = .{ .theme = .panel } },
+        .children = .{
+            .{ .label = "title" },
+            .{ .row = .{
+                .style = .{ .size = .{ .fill, .fit }, .gap = 8, .cross = .center },
+                .children = .{
+                    .{ .checkbox = .{ .id = "mute", .bind = "muted", .text = "mute_text" } },
+                    .{ .slider = .{ .id = "volume", .bind = "volume" } },
+                },
+            } },
+            .{ .row = .{
+                .style = .{ .gap = 8 },
+                .children = .{ .{ .label = "title" }, .{ .slider = .{ .id = "pan", .bind = "pan" } } },
+            } },
+        },
+    } },
+}
