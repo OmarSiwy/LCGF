@@ -10,3 +10,6 @@ img.html:6:3: error: <img> needs alt: the picture's text, or alt="" when it only
 img.html:7:47: error: object-fit: none is not lowered; use fill, contain or cover
   <img src="../images/icon.png" alt="" style="object-fit: none">
                                               ^
+img.html:8:56: error: a background-color under a background-image is not drawn: one quad per box; set one of them
+  <div style="background-color: red; background-image: url(../images/icon.png)"></div>
+                                                       ^

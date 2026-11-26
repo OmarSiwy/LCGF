@@ -178,6 +178,7 @@
         // ---- CSS: paint
         .{ .kind = "property", .name = "background-color", .status = .mapped, .target = "Style.fill", .fixture = "counter" },
         .{ .kind = "property", .name = "background", .status = .mapped, .target = "Style.fill; linear-gradient -> fill + features.linear", .fixture = "landmarks" },
+        .{ .kind = "value", .name = "url", .applies_to = "background-image", .status = .mapped, .target = "Style.texture of the asset (as <img>), fill white, stretched to the box (background-size: 100% 100%); with a background-color an error", .fixture = "images" },
         .{ .kind = "value", .name = "linear-gradient", .applies_to = "stops", .status = .planned, .diagnostic = "gradients with more than two stops need prepared paint (P2)" },
         .{ .kind = "property", .name = "border", .status = .mapped, .target = "Style.border, border_color; dashed/dotted -> features", .fixture = "landmarks" },
         .{ .kind = "property", .name = "border-radius", .status = .mapped, .target = "Style.radius, or Style.radii for four corners", .fixture = "counter" },

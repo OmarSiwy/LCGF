@@ -1,9 +1,9 @@
 //! images, written by hand: local PNGs through the asset table. `<img>` is
 //! `image.ct.image` over the asset's picture (CSS fill by default, `object-fit: cover`, a
-//! width alone keeping the shape, no corner radius unless set). The generated table holds
-//! the pixels lcgf-gen decoded; the twin embeds those src/assets/testdata/make.py computed
-//! for the same file (icon.png is icon16.png, icon.rgba its premultiplied pixels), and they
-//! must be equal.
+//! width alone keeping the shape, no corner radius unless set); `background-image: url()`
+//! is the asset's texture over the box. The generated table holds the pixels lcgf-gen
+//! decoded; the twin embeds those src/assets/testdata/make.py computed for the same file
+//! (icon.png is icon16.png, icon.rgba its premultiplied pixels), and they must be equal.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -22,6 +22,7 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.named(image.ct.image(theme, assets[0].picture(), .{ .fit = .stretch, .radius = 0 }), "Icon"),
         image.ct.image(theme, assets[0].picture(), .{ .box = .{ 32, 20 }, .fit = .cover, .radius = 4 }),
         s.named(image.ct.image(theme, assets[0].picture(), .{ .box = .{ 40, 0 }, .fit = .stretch, .radius = 0 }), "Wide"),
+        s.col(.{ .size = .{ .px(48), .px(24) }, .texture = @fromBackingInt(1), .fill = .white }, .{}),
     }),
 });
 

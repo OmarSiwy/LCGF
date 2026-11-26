@@ -1209,11 +1209,20 @@ pub const Lowerer = struct {
     }
 
     fn gradient(l: *Lowerer, n: u32, r: [2]u32, s: *Style, params: *[]const u8) void {
-        _ = n;
         const t = r[0];
         const ty = l.c.toks.items(.type)[t];
+        // `url(x.png)` or `url("x.png")`: the asset's texture over the box, stretched to it.
+        const url: ?[]const u8 = if (ty == .url) l.c.toks.items(.str)[t] else if (ty == .function and css.eq(l.c.toks.items(.str)[t], "url") and t + 1 < r[1] and l.c.toks.items(.type)[t + 1] == .string) l.c.toks.items(.str)[t + 1] else null;
+        if (url) |src| {
+            const k = l.asset(src, l.c.tokLoc(t)) orelse return;
+            if (l.k.get(n, .@"background-color").decl != none and !std.meta.eql(s.fill, types.Color.transparent))
+                l.ds.err(l.c.tokLoc(t), "a background-color under a background-image is not drawn: one quad per box; set one of them", .{});
+            s.texture = @fromBackingInt(@as(u16, @intCast(k + 1)));
+            s.fill = .white;
+            return;
+        }
         if (ty != .function or !css.eq(l.c.toks.items(.str)[t], "linear-gradient")) {
-            l.ds.err(l.c.tokLoc(t), "background-image: only linear-gradient() with two colours is lowered", .{});
+            l.ds.err(l.c.tokLoc(t), "background-image: only url() and linear-gradient() with two colours are lowered", .{});
             return;
         }
         const close = values.closeOf(l.c, t, r[1]);
@@ -2285,7 +2294,7 @@ pub const Lowerer = struct {
         return true;
     }
 
-    /// Asset `src` as named at `at` (an `<img src>`), resolved against
+    /// Asset `src` as named at `at` (an `<img src>`, a stylesheet's `url()`), resolved against
     /// the file that names it; one entry per file. Null after reporting a remote or non-PNG one.
     fn asset(l: *Lowerer, src: []const u8, at: Loc) ?u32 {
         for ([_][]const u8{ "http:", "https:", "//", "data:" }) |p| if (std.mem.startsWith(u8, src, p)) {

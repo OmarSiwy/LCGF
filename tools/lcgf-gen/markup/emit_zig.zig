@@ -73,7 +73,8 @@ pub const Emit = struct {
             .float => if (std.math.isInf(v)) e.write("lcgf.types.inf") else e.print("{d}", .{v}),
             .int, .comptime_int => e.print("{d}", .{v}),
             .bool => e.write(if (v) "true" else "false"),
-            .@"enum" => e.print(".{f}", .{std.zig.fmtId(@tagName(v))}),
+            // A texture or material handle past the named ones (`@fromBackingInt`).
+            .@"enum" => if (std.enums.tagName(T, v)) |name| e.print(".{f}", .{std.zig.fmtId(name)}) else e.print("@fromBackingInt({d})", .{@backingInt(v)}),
             .optional => if (v) |x| e.value(x) else e.write("null"),
             .array => |a| {
                 var same = a.len > 1;
