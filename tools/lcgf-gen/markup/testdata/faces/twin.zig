@@ -1,7 +1,8 @@
 //! faces, written by hand: CSS on widgets. The comptime page restyles each widget's root with
 //! `spec.styled`; the runtime page passes the same style to the widget's `…Face` function
 //! (engine spec R1), so the two draw the same frames (`App`, and parity.zig), also under a
-//! box-shadow and an outline, which wrap the widget in a column with their floating nodes.
+//! box-shadow and an outline, which wrap the widget in a column with their floating nodes,
+//! and under a margin, a flex rule on the widget's root.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -39,7 +40,7 @@ const track: Style = .{ .dir = .x, .size = .{ .px(160), .px(12) }, .min = .{ 40,
 
 pub const spec = s.col(body, .{
     s.styled(button.ct.button(theme, .go, "Go"), face),
-    s.styled(toggle.ct.toggle(theme, .bold, .bold, "Bold"), face),
+    s.flexed(s.styled(toggle.ct.toggle(theme, .bold, .bold, "Bold"), face), .{ .margin = .{ 8, 4, 8, 4 } }),
     s.styled(checkbox.ct.checkbox(theme, .done, .done, "Done"), done_row),
     s.styled(switch_.ct.@"switch"(theme, .wifi, .wifi, ""), wifi_row),
     s.styled(slider.ct.slider(theme, .level, .level, .{}), track),
@@ -64,10 +65,28 @@ pub const App = struct {
     done: bool = false,
     wifi: bool = false,
     level: f32 = 0,
+    /// The toggle's margin is a flex rule on its root, the row it pushes first.
+    flex_buf: [flex_bytes]u8 align(lcgf.mem.column_align) = undefined,
+    flex: ?lcgf.flex.Flex = null,
+
+    const flex_bytes = blk: {
+        var carver: lcgf.mem.Carver = .{ .buf = null };
+        _ = carver.columns(lcgf.flex.Flex.Columns, lcgf.simd.rows(limits.nodes));
+        break :blk carver.off;
+    };
+
+    pub fn end(app: *App, f: *Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
+        return f.endFlex(font, &app.flex.?);
+    }
 
     pub fn build(app: *App, f: *Frame) void {
+        if (app.flex == null) {
+            var carver: lcgf.mem.Carver = .{ .buf = &app.flex_buf };
+            app.flex = lcgf.flex.Flex.init(&carver, limits.nodes);
+        }
         _ = f.open(.none, body);
         _ = button.buttonFace(f, &theme, .from("go"), "Go", label.labelText(&theme), face);
+        app.flex.?.set(f.tree().len, &.{ .margin = .{ 8, 4, 8, 4 } });
         _ = toggle.toggleFace(f, &theme, .from("bold"), &app.bold, "Bold", face);
         _ = checkbox.checkboxFace(f, &theme, .from("done"), &app.done, "Done", done_row);
         _ = switch_.switchFace(f, &theme, .from("wifi"), &app.wifi, "", wifi_row);
@@ -109,11 +128,11 @@ pub const replay =
     \\frame
     \\buttons
     \\frame
-    \\pointer 40 109
+    \\pointer 40 117
     \\frame
     \\buttons left
     \\frame
-    \\pointer 120 109
+    \\pointer 120 117
     \\frame
     \\buttons
     \\frame

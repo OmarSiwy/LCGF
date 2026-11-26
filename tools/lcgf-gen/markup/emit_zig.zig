@@ -1476,16 +1476,12 @@ pub const Emit = struct {
     /// `rtOpen`, with the node's flex rules written for the node its statement makes.
     fn rtOpenFlex(e: *Emit, i: u32, list_depth: u32) []const u8 {
         const fs = flexOf(e.page.nodes.get(i)) orelse return e.rtOpen(i, list_depth);
-        var statement: std.ArrayList(u8) = .empty;
-        std.mem.swap(std.ArrayList(u8), &statement, &e.out);
-        const close = e.rtOpen(i, list_depth);
-        std.mem.swap(std.ArrayList(u8), &statement, &e.out);
-        // lower.checkRuntime admits margins only on nodes whose statement is `_ = call;`.
-        const call = statement.items[4 .. statement.items.len - 1];
-        e.print("fx.set(@backingInt({s}), &", .{call});
+        // The rule's row is the next one pushed: the node's own, or the root a widget or a
+        // component builds first, which `spec.flexed` gives the rule on a comptime page.
+        e.write("fx.set(f.tree().len, &");
         e.structure(fs, FlexStyle{});
-        e.write(");");
-        return close;
+        e.write("); ");
+        return e.rtOpen(i, list_depth);
     }
 
     fn runtimePage(e: *Emit) void {

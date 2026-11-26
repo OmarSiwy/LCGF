@@ -14,7 +14,8 @@ pub const theme: w.Theme = .{};
 pub const State = struct { gain: f32 = 0 };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
-    s.row(.{ .gap = 4 }, .{ label.ct.label(theme, "Gain"), lcgf.widgets_progress.ct.progress(theme, .gain) }),
+    // A margin on a component: a flex rule on the root it builds.
+    s.flexed(s.row(.{ .gap = 4 }, .{ label.ct.label(theme, "Gain"), lcgf.widgets_progress.ct.progress(theme, .gain) }), .{ .margin = .{ 6, 2, 6, 2 } }),
     lcgf.widgets_slider.ct.slider(theme, .gain, .gain, .{}),
     s.col(.{ .gap = 2, .pad = @splat(4) }, .{
         label.ct.label(theme, "Tools"),

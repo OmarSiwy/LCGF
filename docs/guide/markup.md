@@ -144,8 +144,8 @@ On a runtime page (see Frontends) every component is the runtime form, as inside
 `lcgf-each`: `frame`, or `open` and `close` around content. `{f}` passes the field's value and
 `var(--t-space)` the token's value, so `level` is an `f32` there where the spec form takes
 `@EnumLiteral()`. A component used on both kinds of page declares the forms each needs under one
-name (`testdata/components/app.zig`). A margin on a component is not lowered there: wrap it in a
-`<div>` with the margin.
+name (`testdata/components/app.zig`). A margin there is a flex rule on the root the
+component builds first, as `spec.flexed` gives it on a comptime page.
 
 ## Frontends
 
@@ -158,8 +158,9 @@ By default the page is a comptime page (`ComptimeUi`).
 
 CSS on a button, toggle, checkbox, switch or range restyles it there through the widget's
 `…Face` function, as `spec.styled` restyles the comptime one. A box-shadow or an outline on one of them
-works there too: its column of floating nodes is built around the restyled widget. CSS that changes the look of
-another control, and a margin on any widget, are refused on a runtime page for now.
+works there too: its column of floating nodes is built around the restyled widget. Margins and
+the other flex item rules on a widget or a component go on the row it pushes first, its root.
+CSS that changes the look of another control is refused on a runtime page for now.
 
 A page with `lcgf-each` regions takes the items in both, as `Ui.build(ui, frame, data)` and
 `Page(H).frame(p, ctx, h, input, data)`.

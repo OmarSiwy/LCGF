@@ -1780,7 +1780,7 @@ pub const Lowerer = struct {
     }
 
     /// What the runtime frontend cannot say yet: CSS that restyles a widget without a runtime
-    /// function that takes its style (`<widget>Face`; engine spec R1), and margins on widgets.
+    /// function that takes its style (`<widget>Face`; engine spec R1).
     pub fn checkRuntime(l: *Lowerer) void {
         const nodes = l.page.nodes.slice();
         for (0..nodes.len) |i| {
@@ -1788,22 +1788,17 @@ pub const Lowerer = struct {
             switch (kind) {
                 .container, .landmark, .label, .text, .heading => continue,
                 .when, .list, .choice, .each => continue,
-                .component => {
-                    // A flex rule names the node a statement makes; a component makes its own.
-                    if (nodes.items(.margin)[i] != null)
-                        l.ds.err(nodes.items(.loc)[i], "runtime frontend: a margin on an app component needs the node it builds; wrap it in a <div> with the margin", .{});
-                    continue;
-                },
+                .component => continue,
                 else => {},
             }
-            // These restyle their root through `<widget>Face`, as `spec.styled` does; a margin
-            // is a flex rule on the node a statement makes, which a click handler's `if` is not.
+            // These restyle their root through `<widget>Face`, as `spec.styled` does. Flex
+            // rules (margins) go on the row a widget pushes first, its root.
             const faced = switch (kind) {
                 .button, .toggle, .checkbox, .@"switch", .slider => true,
                 else => false,
             };
             const restyled = !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0;
-            if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.flex)[i], lcgf.flex.Flex.Style{}) or (restyled and !faced))
+            if (restyled and !faced)
                 l.ds.err(nodes.items(.loc)[i], "{s}", .{manifest.refusal("feature", "runtime-widget-style", "").?});
         }
     }

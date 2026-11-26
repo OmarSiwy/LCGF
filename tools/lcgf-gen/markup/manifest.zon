@@ -115,7 +115,7 @@
         // ---- frontends (§1.4)
         .{ .kind = "attribute", .name = "lcgf-frontend", .applies_to = "html", .status = .mapped, .target = "spec (ComptimeUi) or runtime (Ui.build over Frame and the widgets' runtime functions); --frontend overrides", .fixture = "runtime" },
         .{ .kind = "feature", .name = "runtime-widget-face", .status = .mapped, .target = "runtime: CSS on a button, toggle, checkbox, switch or slider is <widget>Face(…, style), its root laid out by the style as spec.styled lays out the comptime widget's (engine spec R1)", .fixture = "faces" },
-        .{ .kind = "feature", .name = "runtime-widget-style", .status = .planned, .diagnostic = "runtime frontend: CSS on this widget needs a runtime widget function that takes a style (engine spec R1 covers button, toggle, checkbox, switch and slider so far), and a margin on a widget is not lowered there; wrap it in a <div>", .spec = "R1" },
+        .{ .kind = "feature", .name = "runtime-widget-style", .status = .planned, .diagnostic = "runtime frontend: CSS on this widget needs a runtime widget function that takes a style (engine spec R1 covers button, toggle, checkbox, switch and slider so far)", .spec = "R1" },
 
         // ---- regions (§3.5)
         .{ .kind = "attribute", .name = "lcgf-if", .applies_to = "template", .status = .mapped, .target = "spec.when spec.zig:273, bool", .fixture = "todo" },
