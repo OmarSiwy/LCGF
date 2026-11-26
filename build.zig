@@ -777,6 +777,9 @@ pub fn build(b: *std.Build) void {
     }) });
     const vk_step = b.step("vk", "Test the Vulkan back end on a real implementation (ci/run.sh vk)");
     const vk_play_step = b.step("vk-play", "Build zig-out/bin/vk-play (draws the render conformance scenes with Vulkan) and vk-probe");
+    // Declared outside the lazy block below: on the run that fetches vulkan_headers the block
+    // is skipped, and an option given but not declared stops the configure.
+    const directx_headers = b.option([]const u8, "directx-headers", "A DirectX-Headers v1.620.2 checkout, for the bindings gate's D3D12 recorder");
     if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
         const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = target, .optimize = optimize });
         vk_h.addIncludePath(vulkan_headers.path("include"));
@@ -852,7 +855,7 @@ pub fn build(b: *std.Build) void {
             // A directory path rather than a build.zig.zon dependency: the pinned Zig fetches every
             // lazy dependency on every build, whatever its step, and only the bindings gate needs
             // these headers (ci/jobs/bindings.sh downloads them).
-            if (b.option([]const u8, "directx-headers", "A DirectX-Headers v1.620.2 checkout, for the bindings gate's D3D12 recorder")) |dx_dir| {
+            if (directx_headers) |dx_dir| {
                 const dx: std.Build.LazyPath = .{ .cwd_relative = dx_dir };
                 const dx_include = [_]std.Build.LazyPath{ dx.path(b, "include"), dx.path(b, "include/wsl/stubs"), dx.path(b, "include/directx") };
                 const d3d12_record = b.addLibrary(.{ .name = "lcgf_d3d12_record", .linkage = .static, .root_module = b.createModule(.{ .target = target, .optimize = optimize, .pic = true, .link_libc = true }) });
