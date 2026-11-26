@@ -9,4 +9,5 @@
 # must make the same Vulkan calls, and check.zig's GPU checks must pass in C++ and Rust on
 # Vulkan (lavapipe), GL ES (llvmpipe) and wgpu-native.
 zig build abi -Doptimize=ReleaseFast -Dwgpu-native=v29
-sh bindings/check/run.sh "$PWD/zig-out"
+# The Zig side is built for this CPU; so is Rust, or the gate would time a narrower build.
+RUSTFLAGS="${RUSTFLAGS:--C target-cpu=native}" sh bindings/check/run.sh "$PWD/zig-out"

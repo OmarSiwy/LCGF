@@ -9,3 +9,10 @@ members = ["lcgf", "lcgf-macros", "lcgf-check"]
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
+
+# The gate times these binaries against Zig's ReleaseFast ones: build them alike (as
+# bench/vs/lcgf-rust does), with one codegen unit, LTO and no unwinding.
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
