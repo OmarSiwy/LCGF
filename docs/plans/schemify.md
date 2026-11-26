@@ -158,7 +158,8 @@ Today a comptime page folds the theme: `var()` is substituted by the compiler (`
 | Markup: `sfy-*` components (page theme and tokens passed in; one name for page and region forms), `lcgf-else`, page-level text on:change, accessible names, `aria-labelledby` | 33ba5e41, 55665436, bd55d7d3, b3aafd3a, 691a139c, 885ca6b2, 3e857e94, 84583f36 |
 | Text fields inside regions: `value="{row.f}"`, on:change(index, text), on:submit(index) | c4168b13 |
 | M8.2 `<each of>`; E2 several regions; per-row view state; E1 fit-sized regions; one-way per-item on:change over `[]const T` | 1d39f356, fa569c09, 71f60ea2, 357f6c33, 83987184, d72829fc |
+| Markup CSS and elements: `align-self`, `align-items: baseline`, `flex-wrap`, `align-content`, `aspect-ratio`; `<select>`/`<option>`/`<optgroup>` and modal `<dialog>` (F10 overlays in comptime pages); `@font-face` with `font-family`/`font-weight`/`font-style`; `<input type=password>`; `line-height`, `letter-spacing`, `word-spacing`, `text-overflow` | c26d10f2..4492ddc1, 177ecbf8..c775f84f, 9f95686c..f52afb9f |
 
-**Next:** C++ and Rust static UIs through a per-UI Zig object (Zig speed, hand ports deleted); census baselines; Windows CI. Deferred, runtime-front-end only: components and regions on runtime pages. E1 one-frame lag stays (a clean fix needs a second layout).
+**Next:** Windows CI is green (D3D12 WARP compute fixed). In progress: C++ static UIs through a per-UI Zig object; HTML pages in C++ and Rust (M6), then the full markup set there (M7); images, `<a href>`, lists, `<details>`, `justify-content` space-*, `box-shadow`, `outline`; state CSS (`:hover`, `:focus`, `:checked`), `@media`, transitions; grid and `<table>`, `z-index`; inline runs and `text-decoration`; components and regions on runtime pages; census baselines. E1 one-frame lag stays (a clean fix needs a second layout).
 
 LCGF fixes bugs Schemify finds at the root, on `main`: send them to the LCGF session with the commit and a repro.
