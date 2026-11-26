@@ -179,22 +179,32 @@ pub const Styled = struct {
     spans: []const []const Span = &.{},
 };
 
-/// Puts the ops of quads `first..d.quad_len` (just written after `paint.emit`) right after
-/// op `j`, the text op of their run, and the later ops after them, so they paint over the
-/// run's text and under what follows. Quads past the op rows are dropped. Returns how many
-/// were put in; call `paint.encode` once after the last.
+/// Puts quads `first..d.quad_len` (just appended after `paint.emit`) right after op `j`, the
+/// text op of their run: their ops after it, and the quads themselves moved to where the next
+/// quad op's quads begin, so every run of consecutive quad ops still names consecutive quads
+/// (`paint.encode` merges them). Later ops' quads move up. Quads past the op rows are
+/// dropped. Returns how many were put in; call `paint.encode` once after the last.
 pub fn insertAfter(d: *DrawList, j: u32, first: u32) u32 {
     const added = @min(d.quad_len - first, @as(u32, @intCast(d.op.kind.len)) - d.op_len);
     d.quad_len = first + added;
+    const quads_kind = @backingInt(DrawList.Kind.quads);
+    // Where the quads after op j begin: the first later quad op's, or the end.
+    var at: u32 = first;
+    for (j + 1..d.op_len) |o| if (d.op.kind[o] == quads_kind) {
+        at = d.op.ref[o];
+        break;
+    };
+    std.mem.rotate(Quad, d.quads[at..d.quad_len], first - at);
+    for (j + 1..d.op_len) |o| d.op.ref[o] += simd.selU(d.op.kind[o] == quads_kind, added, 0);
     const tail = d.op_len - (j + 1);
     inline for (.{ "kind", "key", "ref" }) |col| {
         const c = @field(d.op, col);
         std.mem.copyBackwards(@TypeOf(c[0]), c[j + 1 + added ..][0..tail], c[j + 1 ..][0..tail]);
     }
     for (0..added) |m| {
-        d.op.kind[j + 1 + m] = @backingInt(DrawList.Kind.quads);
+        d.op.kind[j + 1 + m] = quads_kind;
         d.op.key[j + 1 + m] = 0; // white texture, solid material
-        d.op.ref[j + 1 + m] = first + @as(u32, @intCast(m));
+        d.op.ref[j + 1 + m] = at + @as(u32, @intCast(m));
     }
     d.op_len += added;
     return added;
@@ -1127,4 +1137,37 @@ test "MonoParagraphs: spans size and colour their bytes in one paragraph" {
     try testing.expectEqual([4]f32{ 0, 6, 5, 18 }, out[0].rect);
     try testing.expectEqual(0xffffffff, out[0].fill);
     try testing.expectEqual([4]f32{ 0, 24, 10, 48 }, out[3].rect);
+}
+
+test "insertAfter: quads after a run's text keep the later quads' commands whole" {
+    var buf: [8 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var d = DrawList.init(&carver, 4, 1, 1);
+    const box = struct {
+        fn q(x: f32) Quad {
+            return .{ .rect = .{ x, 0, x + 1, 1 }, .clip = @splat(0), .params = @splat(0), .uv = @splat(0), .fill = 1, .border_color = 0, .radii = @splat(0), .border = 0, .opacity = 1 };
+        }
+    };
+    // Paint gave: a box, the text of run 0, another box.
+    d.quads[0] = box.q(0);
+    d.quads[1] = box.q(1);
+    d.quad_len = 2;
+    const kinds = [_]DrawList.Kind{ .quads, .text, .quads };
+    for (kinds, 0..) |k, o| {
+        d.op.kind[o] = @backingInt(k);
+        d.op.key[o] = 0;
+    }
+    d.op.ref[0] = 0;
+    d.op.ref[1] = 0;
+    d.op.ref[2] = 1;
+    d.op_len = 3;
+    // One underline appended after the run.
+    d.quads[2] = box.q(9);
+    d.quad_len = 3;
+    try testing.expectEqual(1, insertAfter(&d, 1, 2));
+    paint.encode(&d);
+    try testing.expectEqual(3, d.cmd_len);
+    try testing.expectEqual(draw_list.Cmd{ .quads = .{ .first = 1, .count = 2, .texture = .white, .material = .solid } }, d.command(2));
+    try testing.expectEqual([4]f32{ 9, 0, 10, 1 }, d.quads[1].rect);
+    try testing.expectEqual([4]f32{ 1, 0, 2, 1 }, d.quads[2].rect);
 }
