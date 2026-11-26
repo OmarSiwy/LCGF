@@ -835,6 +835,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                     if (n.id != null) s.fill = buttonFill(&th, ui.response(next.* - 1, in));
                     const i = tb.t.push(parent, if (n.id) |name| .hash(name) else .none, &s);
                     if (comptime n.grid) |decl| {
+                        comptime checkSubgrid(n);
                         const gs = &tb.gs;
                         const k = gs.declare(i, decl, comptime grid.implicitTracks(decl, spec_zig.gridItems(n)));
                         inline for (n.children) |c| {
@@ -1050,6 +1051,18 @@ fn gridCapacity(comptime n: Spec) grid.Grids.Capacity {
         }
         return cap;
     }
+}
+
+/// A `Decl.subgrid` axis needs the node placed at an explicit cell spanning as many tracks as
+/// it has (`grid.Grids.shareAxis`).
+fn checkSubgrid(comptime n: Spec) void {
+    const d = n.grid.?;
+    inline for (0..2) |a| if (d.subgrid[a]) {
+        const it = n.cell orelse @compileError("a subgrid needs spec.cell with an explicit cell");
+        if (it.cell == null) @compileError("a subgrid needs spec.cell with an explicit cell");
+        const count = if (a == 0) d.columns.len else d.rows.len;
+        if (it.span[a] != count) @compileError("a subgrid needs as many tracks as the cells it spans");
+    };
 }
 
 fn anyFlex(comptime n: Spec) bool {

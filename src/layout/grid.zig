@@ -267,7 +267,8 @@ pub const Grids = struct {
     }
     /// Makes `node` the grid `decl` describes, with `implicit` more tracks of `decl.auto` on
     /// the axis auto-placement grows (`implicitTracks` gives a bound). An axis with no tracks
-    /// gets one `auto` track, as CSS's implicit grid. Push grids in row order. Returns the
+    /// gets one `auto` track, as CSS's implicit grid. A `decl.subgrid` axis shares the tracks
+    /// of the item placed last, which must be `node`. Push grids in row order. Returns the
     /// grid's row.
     pub fn declare(gs: *Grids, node: u32, decl: Decl, implicit: u32) u32 {
         const g = decl.growAxis();
@@ -278,6 +279,8 @@ pub const Grids = struct {
         gs.autoFlow(k, decl.flow);
         gs.distribute(k, decl.distribution);
         inline for (0..2) |a| gs.g.justify[a][k] = @backingInt(decl.justify[a]);
+        // The item placed last is this node, placed before it was pushed (`place`).
+        inline for (0..2) |a| if (decl.subgrid[a]) gs.shareAxis(k, gs.items_len -% 1, @fromBackingInt(@intCast(a))) catch unreachable;
         return k;
     }
 
@@ -359,6 +362,10 @@ pub const Decl = struct {
     flow: AutoFlow = .row,
     distribution: [2]Distribution = .{ .start, .start },
     justify: [2]Justify = .{ .stretch, .stretch },
+    /// Axes on which the grid takes the tracks of the cells it covers in its parent grid
+    /// (CSS `subgrid`, `shareAxis`): it must be an item placed at an explicit cell, with as
+    /// many tracks on that axis as its span, and no padding on it.
+    subgrid: [2]bool = .{ false, false },
 
     /// The axis auto-placement adds tracks on: rows for row flow, columns for column flow.
     pub fn growAxis(d: Decl) u1 {
@@ -1207,4 +1214,33 @@ test "declare: no tracks on an axis is one auto track; items take the grid's jus
     try testing.expectEqualSlices(f32, &.{ 0, 0, 0.5, 1 }, &.{ s.gs.it.stretch[0][r], s.gs.it.stretch[1][r], s.gs.it.factor[0][r], s.gs.it.factor[1][r] });
     const r2 = s.gs.place(k, 2, .{ .cell = .{ 0, 0 }, .justify = .{ .stretch, .start } });
     try testing.expectEqual(1, s.gs.it.stretch[0][r2]);
+}
+
+test "declare: subgrid rows of a table share the table's columns" {
+    var s: Scene = .{};
+    s.init();
+    const cols = [_]Track{ .fit, .fit };
+    const table = s.t.push(0, .none, &.{});
+    const k = s.gs.declare(table, .{ .columns = &cols, .rows = &.{ .fit, .fit }, .gap = .{ 3, 1 } }, 0);
+    var cells: [4]u32 = undefined;
+    for (0..2) |r| {
+        _ = s.gs.place(k, s.t.len, .{ .cell = .{ 0, @intCast(r) }, .span = .{ 2, 1 } });
+        const row = s.t.push(table, .none, &.{ .float = true });
+        const rk = s.gs.declare(row, .{ .columns = &cols, .rows = &.{.fit}, .subgrid = .{ true, false } }, 0);
+        for (0..2) |c| {
+            _ = s.gs.place(rk, s.t.len, .{});
+            // Row 0 is wide in column 0, row 1 in column 1.
+            const w: f32 = if (r == c) 50 else 10;
+            const n = s.t.push(row, .none, &.{ .float = true, .size = .{ .px(w), .px(8) } });
+            s.t.seal(n);
+            cells[r * 2 + c] = n;
+        }
+        s.t.seal(row);
+    }
+    s.t.seal(table);
+    run(&s.t, &s.tx, &s.gs, .{ 200, 100 });
+    // Both rows' columns are 50 wide, 3 apart.
+    try testing.expectEqual(@as(f32, 53), s.t.rect(cells[1]).x0);
+    try testing.expectEqual(@as(f32, 53), s.t.rect(cells[3]).x0);
+    try testing.expectEqual(@as(f32, 9), s.t.rect(cells[2]).y0);
 }
