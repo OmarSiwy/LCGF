@@ -83,6 +83,18 @@ compiles in every language.
 Field types are inferred from where a field is bound, and two bindings must agree. Defaults come
 from the HTML: `checked`, `value`, the checked radio. Anything else starts at zero.
 
+## Frontends
+
+By default the page is a comptime page (`ComptimeUi`).
+
+`<html lcgf-frontend="runtime">`, or `--frontend runtime` (`.frontend = "runtime"` in
+`addMarkup`), emits it instead as a runtime page:
+- `Ui.build(ui, frame)`, made of `Frame` and widget calls, and `Ui.dispatch(ui, h)`;
+- `Page(H).frame(p, ctx, h, input)`, in your `Context`, sized by the generated `limits`.
+
+Both keep the same `State`, `spec` and handlers, because `ui.signals` is the same store in both.
+Every fixture draws identical frames in the two frontends.
+
 ## Handlers
 
 Your handler type needs one `pub fn` per name the page uses. `Page(H).frame(h, input)` builds,

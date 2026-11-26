@@ -32,6 +32,9 @@ pub const Fixture = struct {
     name: []const u8,
     /// Spec entries it waits for; empty when it runs in the normal suite.
     waits_for: []const []const u8 = &.{},
+    /// The runtime frontend cannot build it yet (engine spec R1); its runtime parity test is
+    /// in `markup-pending`.
+    spec_only: bool = false,
 };
 
 pub const Manifest = struct { rows: []const Row, fixtures: []const Fixture };

@@ -32,6 +32,17 @@ Every entry is tier 1 (src/comptime/spec.zig, src/runtime/frame.zig) or tier 2 (
 | F17 | specified | `pub fn anchored(comptime s: Spec, comptime a: lcgf.overlay.Anchor) Spec`, `sticky(s, top: f32)` and `layer(s, order: i16)`, for right/bottom/inset/fixed, `position: sticky` and z-index on floats. | 1, spec.zig, frame.zig | positioned |
 | F18 | specified | No framework change. The generated `Page.frame` filters the focused widget's `Input.events` for `on:keydown:enter`/`:escape`/`:space` and arrows. | generated code | keys |
 
+| R1 | specified | The runtime widget functions take an optional style, as `s.styled` restyles a comptime widget: `button.buttonStyled(f, th, id, text, style) Response`, and the same for every control. The runtime frontend emits it for a widget whose CSS changes its look; today that page fails with the planned diagnostic `runtime-widget-style`. | 2, every widget's runtime function | runtime |
+| R2 | specified | An accessible name on a built node: `Frame.name(f: *Frame, node: Node, name: []const u8) void`, and `ComptimeUi` writing `Spec.name` into the same column. Today neither frontend carries `aria-label` into the tree, so the runtime emitter omits it. | 1, frame.zig; 2, base.zig | landmarks |
+
+### What the runtime frontend emits
+
+There is no engine change for these:
+- `pub const Ui = struct { signals: lcgf.signals.Signals(State, spec).Runtime, … }`. It is the comptime page's own state store, so handlers (`ui.signals.set(.f, v)`) are the same code in both frontends.
+- `Ui.build(ui, f: *Frame)`, made of `Frame.open`/`close`/`textStyled`/`textfStyled` and the widgets' runtime functions.
+- `Ui.dispatch(ui, h)`.
+- `Page(H).frame(p, ctx, h, in)`.
+
 ## What the compiler needs from main, and when
 
 - **F2 first.** It is emitted already, and `flexitems` waits on it.

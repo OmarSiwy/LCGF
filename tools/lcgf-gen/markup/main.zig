@@ -29,6 +29,7 @@ pub const Options = struct {
     mappings: bool = false,
     explain: bool = false,
     warnings: bool = true,
+    frontend: Frontend = .auto,
 };
 
 /// Whether `args` asks for this front end: an `.html` input or `--mappings`.
@@ -60,10 +61,10 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8) !u8 
             o.check = value(args, &i) orelse return usage();
         } else if (std.mem.eql(u8, a, "--frontend")) {
             const f = value(args, &i) orelse return usage();
-            if (!std.mem.eql(u8, f, "auto") and !std.mem.eql(u8, f, "spec")) {
-                std.log.err("--frontend {s}: only the spec frontend is built so far", .{f});
+            o.frontend = std.meta.stringToEnum(Frontend, f) orelse {
+                std.log.err("--frontend {s}: the Zig emitter has the spec and runtime frontends (tables and static are C++/Rust, M6)", .{f});
                 return 2;
-            }
+            };
         } else if (std.mem.eql(u8, a, "--mappings")) {
             o.mappings = true;
         } else if (std.mem.eql(u8, a, "--explain")) {
@@ -88,7 +89,7 @@ pub fn main(io: std.Io, arena: std.mem.Allocator, args: []const []const u8) !u8 
     const path = o.html orelse return usage();
     var ds: diag.Diags = .{ .arena = arena, .warnings = o.warnings };
     var deps: std.ArrayList([]const u8) = .empty;
-    const result = compile(io, arena, &ds, &deps, path, o.css.items, o.explain);
+    const result = compile(io, arena, &ds, &deps, path, o.css.items, o.explain, o.frontend);
     var stderr_buf: [4096]u8 = undefined;
     var stderr = std.Io.File.stderr().writer(io, &stderr_buf);
     try ds.render(&stderr.interface);
@@ -177,7 +178,7 @@ const Loader = struct {
 };
 
 /// The generated module's source, or null after reporting errors.
-pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std.ArrayList([]const u8), path: []const u8, extra_css: []const []const u8, explain: bool) ?[]const u8 {
+pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std.ArrayList([]const u8), path: []const u8, extra_css: []const []const u8, explain: bool, frontend: Frontend) ?[]const u8 {
     const src = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(16 << 20)) catch |e| {
         std.log.err("cannot read {s}: {s}", .{ path, @errorName(e) });
         return null;
@@ -255,11 +256,24 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
     var l = lower.init(arena, ds, &doc, &c, &k, std.fs.path.stem(path), path);
     l.checkDeclarations();
     l.run();
-    if (explain) ds.note(.{ .file = file, .off = 0 }, "spec frontend: every construct on this page lowers to a comptime Spec", .{});
+    const runtime = switch (frontend) {
+        .runtime => true,
+        .spec => false,
+        .auto => l.page.runtime,
+    };
+    if (runtime) l.checkRuntime();
+    if (explain) ds.note(.{ .file = file, .off = 0 }, "{s}", .{if (runtime) "runtime frontend: the page is a build(ui, frame) of Frame and widget calls" else "spec frontend: every construct on this page lowers to a comptime Spec"});
     if (ds.errors > 0) return null;
-    var e: emit_zig.Emit = .{ .arena = arena, .ds = ds, .page = &l.page };
-    return e.file(path);
+    var e: emit_zig.Emit = .{ .arena = arena, .ds = ds, .page = &l.page, .runtime = runtime };
+    // The output is formatted as `zig fmt` would, so it reads like code written by hand.
+    const raw = arena.dupeSentinel(u8, e.file(path), 0) catch @panic("out of memory");
+    var tree = std.zig.Ast.parse(arena, raw, .{}) catch @panic("out of memory");
+    if (tree.errors.len > 0) return raw; // a bug in the emitter: let the Zig compiler point at it
+    return tree.renderAlloc(arena) catch @panic("out of memory");
 }
+
+/// Which lowering `--frontend` asks for; `auto` takes the page's `lcgf-frontend`, else spec.
+pub const Frontend = enum { auto, spec, runtime };
 
 fn dash(comptime f: []const u8) []const u8 {
     comptime {

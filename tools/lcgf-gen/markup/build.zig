@@ -71,7 +71,9 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
     var pages: std.ArrayList(Build.Module.Import) = .empty;
     pages.append(b.allocator, .{ .name = "lcgf", .module = lcgf }) catch @panic("out of memory");
     for (manifest.manifest.fixtures) |f| {
-        const page = addPage(b, gen, lcgf, .{ .html = b.path(b.fmt("{s}/{s}/page.html", .{ dir, f.name })) });
+        const html = b.path(b.fmt("{s}/{s}/page.html", .{ dir, f.name }));
+        const page = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec" });
+        const page_rt = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime" });
         if (f.waits_for.len == 0) pages.append(b.allocator, .{ .name = f.name, .module = page }) catch @panic("out of memory");
         const twin = b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/twin.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
         const t = b.addTest(.{ .name = b.fmt("markup-{s}", .{f.name}), .root_module = b.createModule(.{
@@ -81,6 +83,14 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
             .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page", .module = page }, .{ .name = "twin", .module = twin } },
         }) });
         (if (f.waits_for.len == 0) step else pending).dependOn(&b.addRunArtifact(t).step);
+        // The same page through the runtime frontend: identical frames (base.Harness).
+        const parity = b.addTest(.{ .name = b.fmt("markup-{s}-runtime", .{f.name}), .root_module = b.createModule(.{
+            .root_source_file = b.path(dir ++ "/parity.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page", .module = page }, .{ .name = "page_rt", .module = page_rt }, .{ .name = "twin", .module = twin } },
+        }) });
+        (if (f.waits_for.len == 0 and !f.spec_only) step else pending).dependOn(&b.addRunArtifact(parity).step);
         // The zero-cost probe over both sides, ReleaseFast and stripped (ci/jobs/markup-zero-cost.sh).
         if (f.waits_for.len == 0) {
             const twin_ui = b.createModule(.{ .root_source_file = b.path(dir ++ "/cost_twin.zig"), .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "twin", .module = twin } } });
@@ -159,6 +169,8 @@ pub const Options = struct {
     emit: ?[]const u8 = null,
     /// Use this checked-in generated file instead; the build fails when it is stale.
     vendored: ?Build.LazyPath = null,
+    /// `spec` or `runtime`; null takes the page's own `lcgf-frontend` (spec when it has none).
+    frontend: ?[]const u8 = null,
 };
 
 /// The Zig module generated from `o.html`, importing `lcgf` (the `framework` dependency's) and
@@ -194,6 +206,7 @@ pub fn addPage(b: *Build, gen: *Build.Step.Compile, lcgf: *Build.Module, o: Opti
         run.addFileArg(c);
     }
     run.addArgs(&.{ "--lang", "zig" });
+    if (o.frontend) |fe| run.addArgs(&.{ "--frontend", fe });
     if (o.vendored) |v| {
         // The tool regenerates, fails when the vendored file differs, and otherwise writes it
         // out unchanged; the module compiles that output, so nothing builds against a stale file.

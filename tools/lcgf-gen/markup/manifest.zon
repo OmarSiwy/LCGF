@@ -99,6 +99,10 @@
         .{ .kind = "event", .name = "wheel", .status = .rejected, .diagnostic = "use an app component for pointer-level input" },
         .{ .kind = "event", .name = "pointermove", .status = .rejected, .diagnostic = "use an app component for pointer-level input" },
 
+        // ---- frontends (§1.4)
+        .{ .kind = "attribute", .name = "lcgf-frontend", .applies_to = "html", .status = .mapped, .target = "spec (ComptimeUi) or runtime (Ui.build over Frame and the widgets' runtime functions); --frontend overrides", .fixture = "runtime" },
+        .{ .kind = "feature", .name = "runtime-widget-style", .status = .planned, .diagnostic = "runtime frontend: CSS on this widget needs runtime widget functions that take a style (engine spec R1)", .spec = "R1" },
+
         // ---- regions (§3.5)
         .{ .kind = "attribute", .name = "lcgf-if", .applies_to = "template", .status = .mapped, .target = "spec.when spec.zig:273, bool", .fixture = "todo" },
         .{ .kind = "attribute", .name = "lcgf-each", .applies_to = "template", .status = .mapped, .target = "spec.list(.n, lcgf-max, style, template) spec.zig:245, u32", .fixture = "todo" },
@@ -220,6 +224,7 @@
         .{ .name = "settings" },
         .{ .name = "todo" },
         .{ .name = "controls" },
+        .{ .name = "runtime" },
         .{ .name = "form", .waits_for = .{"T1"} },
         .{ .name = "flexitems", .waits_for = .{"F2"} },
     },

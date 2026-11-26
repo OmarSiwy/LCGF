@@ -135,4 +135,6 @@ pub const Page = struct {
     fields: std.ArrayList(Field) = .empty,
     handlers: std.ArrayList(Handler) = .empty,
     theme: Theme = .{},
+    /// `<html lcgf-frontend="runtime">`: the page asks for the runtime frontend.
+    runtime: bool = false,
 };

@@ -351,6 +351,9 @@ pub const Lowerer = struct {
             const t = l.tag(i);
             if (std.mem.eql(u8, t, "html")) {
                 if (l.attr(i, "lcgf-page")) |name| l.page.name = name;
+                if (l.attr(i, "lcgf-frontend")) |fe| {
+                    if (std.mem.eql(u8, fe, "runtime")) l.page.runtime = true else if (!std.mem.eql(u8, fe, "spec") and !std.mem.eql(u8, fe, "auto")) l.ds.err(l.valueLoc(i, "lcgf-frontend"), "lcgf-frontend takes spec, runtime or auto", .{});
+                }
                 continue;
             }
             if (std.mem.eql(u8, t, "head")) {
@@ -964,6 +967,21 @@ pub const Lowerer = struct {
             return;
         }
         l.ir_of[n] = l.addNode(node);
+    }
+
+    /// What the runtime frontend cannot say yet: CSS that restyles a widget (the runtime
+    /// widget functions take no style; engine spec R1).
+    pub fn checkRuntime(l: *Lowerer) void {
+        const nodes = l.page.nodes.slice();
+        for (0..nodes.len) |i| {
+            const kind = nodes.items(.kind)[i];
+            switch (kind) {
+                .container, .landmark, .label, .text, .heading, .when, .list, .choice => continue,
+                else => {},
+            }
+            if (!std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
+                l.ds.err(nodes.items(.loc)[i], "{s}", .{manifest.refusal("feature", "runtime-widget-style", "").?});
+        }
     }
 
     /// Regions whose content is not exactly one element; checked after the walk.
