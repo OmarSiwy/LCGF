@@ -114,6 +114,20 @@ const Kit = struct {
         const bar = f.tween(.from("slide"), @as(f32, if ((k / 45) % 2 == 0) 20 else 120), 0.5, .out_cubic);
         _ = f.leaf(.from("swatch"), .{ .size = .{ .px(box[0]), .px(box[1]) }, .fill = ink });
         _ = f.leaf(.from("bar"), .{ .size = .{ .px(bar), .px(6) }, .fill = .rgb(90, 90, 90) });
+        // The styling rows through the bindings' inline push: a parent that cycles through all,
+        // hidden (layout only) and collapsed participation, under it a child with extras, a
+        // floating ring painted from it, a transformed child and a plain one that inherits.
+        const part: lcgf.types.Participation = switch ((k / 20) % 3) {
+            0 => .all,
+            1 => .hidden,
+            else => .collapsed,
+        };
+        _ = f.open(.from("styled"), .{ .dir = .x, .gap = 4, .participation = part, .cursor = .pointer });
+        const card = f.leaf(.from("card"), .{ .size = .{ .px(40), .px(20) }, .fill = .rgb(60, 120, 60), .radii = .{ 2, 6, 2, 6 } });
+        _ = f.leaf(.from("ring"), .{ .float = true, .paint_reference = card.ix(), .paint_outset = @splat(2), .border = 1, .border_color = .rgb(240, 240, 240) });
+        _ = f.leaf(.from("tilt"), .{ .size = .{ .px(20), .px(20) }, .fill = .rgb(120, 60, 60), .transform = .{ 1, 0.25, 0, 1, 0, 0 }, .transform_origin = .{ 0, 0 } });
+        _ = f.leaf(.from("plain"), .{ .size = .{ .px(10), .px(10) }, .fill = .rgb(60, 60, 120) });
+        f.close();
         f.close();
     }
 };

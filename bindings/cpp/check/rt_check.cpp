@@ -82,6 +82,14 @@ struct Kit {
         const float bar = f.Tween(Id::From("slide"), (k / 45) % 2 == 0 ? 20.0f : 120.0f, 0.5f, Ease::out_cubic);
         f.Leaf(Id::From("swatch"), Style{.size = {Size::Px(box[0]), Size::Px(box[1])}, .fill = ink.rgba()});
         f.Leaf(Id::From("bar"), Style{.size = {Size::Px(bar), Size::Px(6)}, .fill = Rgb(90, 90, 90)});
+        // rt_dump.zig's styled subtree: participation all, hidden (1) and collapsed (0) in turn.
+        const std::uint32_t part[3] = {15, 1, 0};
+        f.Open(Id::From("styled"), {.participation = part[(k / 20) % 3], .cursor = 1, .dir = Dir::x, .gap = 4});
+        const Node card = f.Leaf(Id::From("card"), Style{.size = {Size::Px(40), Size::Px(20)}, .fill = Rgb(60, 120, 60), .radii = {2, 6, 2, 6}});
+        f.Leaf(Id::From("ring"), Style{.floating = 1, .border_color = Rgb(240, 240, 240), .border = 1, .paint_reference = card.row, .paint_outset = {2, 2, 2, 2}});
+        f.Leaf(Id::From("tilt"), Style{.size = {Size::Px(20), Size::Px(20)}, .fill = Rgb(120, 60, 60), .transform = {1, 0.25f, 0, 1, 0, 0}, .transform_origin = {0, 0}});
+        f.Leaf(Id::From("plain"), Style{.size = {Size::Px(10), Size::Px(10)}, .fill = Rgb(60, 60, 120)});
+        f.Close();
         f.Close();
     }
 };

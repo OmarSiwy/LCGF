@@ -92,6 +92,57 @@ impl Kit {
                 ..Style::DEFAULT
             },
         );
+        // rt_dump.zig's styled subtree: participation all, hidden (1) and collapsed (0) in turn.
+        let part = [15u32, 1, 0][((k / 20) % 3) as usize];
+        f.open(
+            Id::from("styled"),
+            &Style {
+                participation: part,
+                cursor: 1,
+                dir: lcgf::runtime::Dir::X,
+                gap: 4.0,
+                ..Style::DEFAULT
+            },
+        );
+        let card = f.leaf(
+            Id::from("card"),
+            &Style {
+                size: [Size::px(40.0), Size::px(20.0)],
+                fill: rgb(60, 120, 60),
+                radii: [2.0, 6.0, 2.0, 6.0],
+                ..Style::DEFAULT
+            },
+        );
+        f.leaf(
+            Id::from("ring"),
+            &Style {
+                floating: 1,
+                border: 1.0,
+                border_color: rgb(240, 240, 240),
+                paint_reference: card,
+                paint_outset: [2.0; 4],
+                ..Style::DEFAULT
+            },
+        );
+        f.leaf(
+            Id::from("tilt"),
+            &Style {
+                size: [Size::px(20.0), Size::px(20.0)],
+                fill: rgb(120, 60, 60),
+                transform: [1.0, 0.25, 0.0, 1.0, 0.0, 0.0],
+                transform_origin: [0.0, 0.0],
+                ..Style::DEFAULT
+            },
+        );
+        f.leaf(
+            Id::from("plain"),
+            &Style {
+                size: [Size::px(10.0), Size::px(10.0)],
+                fill: rgb(60, 60, 120),
+                ..Style::DEFAULT
+            },
+        );
+        f.close();
         f.close();
     }
 }
