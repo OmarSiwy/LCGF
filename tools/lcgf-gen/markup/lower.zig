@@ -53,6 +53,9 @@ pub const Lowerer = struct {
     overlays: std.ArrayList(u32) = .empty,
     /// Per document node: its computed font-family list, weight and style (inherited).
     font: []FontState = &.{},
+    /// Per document node: its paragraph style (line-height, letter- and word-spacing inherit;
+    /// text-overflow is the node's own).
+    para: []Paragraph = &.{},
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -431,6 +434,8 @@ pub const Lowerer = struct {
             l.text[i] = if (p == none) root_text else l.text[p];
             l.text_tokens[i] = if (p == none) .{} else l.text_tokens[p];
             l.font[i] = if (p == none) .{} else l.font[p];
+            l.para[i] = if (p == none) .{} else l.para[p];
+            l.para[i].ellipsis = false;
             l.current = i;
             if (kinds[i] == .text) {
                 l.textNode(i);
@@ -770,10 +775,45 @@ pub const Lowerer = struct {
             l.text_tokens[n].color = if (l.last_token != none) l.tokenOf(l.last_token, .color) else none;
         }
         l.computeFont(n, &ts);
+        l.computeParagraph(n, ts.px);
         if (l.keyword(n, .@"white-space")) |ws| {
             if (css.eq(ws, "normal") or css.eq(ws, "pre-wrap") or css.eq(ws, "pre-line")) ts.wrap = true else if (css.eq(ws, "nowrap") or css.eq(ws, "pre")) ts.wrap = false else l.badValue(l.declared(n, .@"white-space").?.first, .@"white-space", l.declared(n, .@"white-space").?.end);
         }
         l.text[n] = ts;
+    }
+
+    /// line-height, letter-spacing, word-spacing and text-overflow of `n` to `para[n]`
+    /// (`MonoParagraphs` honours them; engine spec F12b).
+    fn computeParagraph(l: *Lowerer, n: u32, font_px: f32) void {
+        const pa = &l.para[n];
+        if (l.declared(n, .@"line-height")) |v| if (l.component(v)) |r| {
+            const t = r[0];
+            const len = values.len(l.c, t);
+            if (r[1] - r[0] == 1 and values.isIdent(l.c, t, "normal")) pa.line_height = .font else if (len) |x| switch (x.unit) {
+                // A number inherits as a number: a multiple of each descendant's own size.
+                .number => pa.line_height = .{ .multiple = x.v },
+                .pct => pa.line_height = .{ .px = x.v / 100 * font_px },
+                else => if (values.px(x, font_px, l.root_px)) |p| {
+                    pa.line_height = .{ .px = p };
+                } else l.badValue(t, .@"line-height", r[1]),
+            } else l.badValue(t, .@"line-height", r[1]);
+        };
+        inline for (.{ .{ Prop.@"letter-spacing", "letter_spacing" }, .{ Prop.@"word-spacing", "word_spacing" } }) |sp| {
+            if (l.declared(n, sp[0])) |v| if (l.component(v)) |r| {
+                if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "normal")) @field(pa, sp[1]) = 0 else if (l.lengthAt(n, r[0], r[1], sp[0])) |x| switch (x) {
+                    .px => |p| @field(pa, sp[1]) = p,
+                    else => l.badValue(r[0], sp[0], r[1]),
+                };
+            };
+        }
+        if (l.keyword(n, .@"text-overflow")) |kw| {
+            if (css.eq(kw, "ellipsis")) pa.ellipsis = true else if (!css.eq(kw, "clip")) l.badValue(l.declared(n, .@"text-overflow").?.first, .@"text-overflow", l.declared(n, .@"text-overflow").?.end);
+        }
+    }
+
+    /// The paragraph style a label of `n` carries, or null for the default.
+    fn paragraphOf(l: *const Lowerer, n: u32) ?Paragraph {
+        return if (std.meta.eql(l.para[n], Paragraph{})) null else l.para[n];
     }
 
     /// `@font-face` rules to the page's font table: family, weight, style and a local file.
@@ -1385,7 +1425,7 @@ pub const Lowerer = struct {
         const kind = l.page.nodes.items(.kind)[parent];
         if (kind != .container and kind != .landmark and kind != .component and kind != .dialog) return;
         const style = lcgf.widgets_label.labelStyle(&l.page.theme);
-        var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme) };
+        var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme), .paragraph = l.paragraphOf(p) };
         l.caption(&node, collapse(l.arena, bytes), node.loc);
         _ = l.addNode(node);
     }
@@ -1413,6 +1453,7 @@ pub const Lowerer = struct {
             .params_expr = params,
             .text_style = l.text[n],
             .base_text = lcgf.widgets_label.labelText(th),
+            .paragraph = l.paragraphOf(n),
             .level = heading,
             .name = l.accessibleName(n),
             .margin = margin,
@@ -1627,6 +1668,14 @@ pub const Lowerer = struct {
     fn checkRegions(l: *Lowerer) void {
         const kinds = l.page.nodes.items(.kind);
         const parents = l.page.nodes.items(.parent);
+        // A run-time region builds in a Context of its own, without the page's paragraph rows.
+        for (l.page.nodes.items(.paragraph), parents, 0..) |pa, _, i| if (pa != null) {
+            var p = parents[i];
+            while (p != none) : (p = parents[p]) if (kinds[p] == .each) {
+                l.ds.err(l.page.nodes.items(.loc)[i], "paragraph styles (line-height, letter-spacing, word-spacing, text-overflow) inside lcgf-each are not supported yet", .{});
+                break;
+            };
+        };
         for (kinds, 0..) |k, i| {
             if (k != .when and k != .list) continue;
             var children: u32 = 0;
@@ -2258,11 +2307,14 @@ pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: 
         .text = Lowerer.ok(arena.alloc(TextStyle, n)),
         .text_tokens = Lowerer.ok(arena.alloc(ir.TextTokens, n)),
         .font = Lowerer.ok(arena.alloc(FontState, n)),
+        .para = Lowerer.ok(arena.alloc(Paragraph, n)),
     };
     @memset(l.ir_of, none);
     @memset(l.skip, false);
     return l;
 }
+
+const Paragraph = lcgf.text_stack.Paragraph;
 
 /// The inherited font properties of an element.
 const FontState = struct {

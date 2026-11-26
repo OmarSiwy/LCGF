@@ -21,6 +21,8 @@ const none = types.none;
 const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
+const MonoParagraphs = @import("../text/protocol.zig").MonoParagraphs;
+const Paragraph = @import("../text/layout/stack.zig").Paragraph;
 const TextStack = @import("../text/layout/stack.zig").Stack;
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
@@ -429,6 +431,31 @@ pub const Frame = struct {
     /// `reuse` copied are laid out again, and their flex rows are the defaults unless the
     /// caller writes them.
     pub fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void {
+        f.layoutFlexWith(font, fx);
+    }
+
+    /// `end` with paragraph styles (line height, spacing, line clamp, ellipsis) on some runs:
+    /// texts row `rows[i]` takes `table[styles[i]]`, measured and wrapped by `protocol.MonoParagraphs`
+    /// over this frame's strings. The host draws its glyphs with the same `MonoParagraphs`.
+    pub fn endParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) Output {
+        f.arrange(f.paragraphs(font, rows, styles, table));
+        f.finalizeLayout(.{}) catch unreachable;
+        return f.finish();
+    }
+
+    /// `endFlex` with paragraph styles, as `endParagraphs`.
+    pub fn endFlexParagraphs(f: *Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph, fx: *Flex) Output {
+        f.layoutFlexWith(f.paragraphs(font, rows, styles, table), fx);
+        return f.finish();
+    }
+
+    /// The font `endParagraphs` measures with.
+    pub fn paragraphs(f: *const Frame, font: Mono, rows: []const u32, styles: []const u16, table: []const Paragraph) MonoParagraphs {
+        const s = &f.ctx.strings[f.ctx.cur];
+        return .{ .mono = font, .rows = rows, .styles = styles, .table = table, .strings = s.buf[0..s.len] };
+    }
+
+    fn layoutFlexWith(f: *Frame, font: anytype, fx: *Flex) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
@@ -468,6 +495,11 @@ pub const Frame = struct {
     /// Measure and place, leaving original fractional positions available for explicit RTL,
     /// grid, sticky or custom placement passes. Call finalizeLayout before finish.
     pub fn arrangeWith(f: *Frame, font: Mono) void {
+        f.arrange(font);
+    }
+
+    /// `arrangeWith` for any font of the text protocol (`Mono`, `MonoParagraphs`).
+    fn arrange(f: *Frame, font: anytype) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);

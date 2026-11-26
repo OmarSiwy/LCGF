@@ -29,6 +29,7 @@ const Strings = @import("../core/strings.zig").Strings;
 const draw_list = @import("../draw/draw_list.zig");
 const DrawList = draw_list.DrawList;
 const Quad = draw_list.Quad;
+const Paragraph = @import("layout/stack.zig").Paragraph;
 
 const W = simd.lanes;
 
@@ -156,6 +157,177 @@ pub const Mono = struct {
         }
         glyphs.count[k] = n - start;
         return n;
+    }
+};
+
+/// `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes
+/// `table[styles[i]]` (`rows` ascending; draw list run k is texts row k). Of `stack.Paragraph`, Mono honours
+/// `line_height` (and `leading`), `letter_spacing`, `word_spacing` (after every space byte),
+/// `max_lines` and `ellipsis` ("..." at the cut); the rest is for a real shaper's `Stack`.
+/// Measure and wrap run Mono's passes over every run, then rewrite only the listed runs by
+/// walking their bytes, so a frame without styled runs costs what Mono costs. `quads` places
+/// glyphs by the same walk. Mono's own rules hold: every byte is one cell and lines break
+/// between any two bytes.
+pub const MonoParagraphs = struct {
+    mono: Mono = .{},
+    rows: []const u32,
+    styles: []const u16,
+    table: []const Paragraph,
+    /// The bytes the runs' `start` and `bytes` index: the frame's strings.
+    strings: []const u8,
+
+    /// Mono's measure, then the single-line extent of every styled run.
+    pub fn measure(p: MonoParagraphs, tx: *Texts) void {
+        p.mono.measure(tx);
+        const c = &tx.c;
+        for (p.rows, p.styles) |k, i| {
+            const st = p.table[i];
+            const f = fit(p.mono, st, p.strings[c.start[k]..][0..c.bytes[k]], c.px[k], std.math.inf(f32), false);
+            c.w[k] = f.w;
+            c.h[k] = lineOf(p.mono, st, c.px[k]);
+        }
+    }
+
+    /// Mono's wrap, then every styled run in its `avail`: re-flowed when it wraps, cut to it
+    /// when it shows an ellipsis.
+    pub fn wrap(p: MonoParagraphs, tx: *Texts) void {
+        p.mono.wrap(tx);
+        const c = &tx.c;
+        for (p.rows, p.styles) |k, i| {
+            const st = p.table[i];
+            const wraps = c.wrap[k] > 0;
+            const avail = c.avail[k];
+            const f = fit(p.mono, st, p.strings[c.start[k]..][0..c.bytes[k]], c.px[k], avail, wraps);
+            c.w[k] = if (wraps or st.ellipsis) @min(f.w, avail) else f.w;
+            c.h[k] = @as(f32, @floatFromInt(f.lines)) * lineOf(p.mono, st, c.px[k]);
+        }
+    }
+
+    /// `Mono.quads` with the styled runs laid out as `wrap` measured them.
+    pub fn quads(p: MonoParagraphs, d: *const DrawList, out: []Quad, glyphs: Mono.Glyphs) u32 {
+        std.debug.assert(out.len >= 1);
+        var n: u32 = 0;
+        var next: usize = 0;
+        for (0..d.run_len) |k_| {
+            const k: u32 = @intCast(k_);
+            const styled = next < p.rows.len and p.rows[next] == k;
+            n = if (styled) p.appendStyled(d, k, p.table[p.styles[next]], out, glyphs, n) else p.mono.appendRun(FullGrid, d, k, out, glyphs, n) catch unreachable;
+            next += @intFromBool(styled);
+        }
+        return n;
+    }
+
+    fn appendStyled(p: MonoParagraphs, d: *const DrawList, k: u32, st: Paragraph, out: []Quad, glyphs: Mono.Glyphs, start: u32) u32 {
+        const r = d.runs[k];
+        const bytes = d.strings[r.start..][0..r.bytes];
+        const avail = r.rect[2] - r.rect[0];
+        // A run laid out on one line keeps to it; one taller than a line wrapped.
+        const line = lineOf(p.mono, st, r.px);
+        const wraps = r.rect[3] - r.rect[1] > line * 1.5;
+        const f = fit(p.mono, st, bytes, r.px, avail, wraps);
+        const adv = r.px * p.mono.advance;
+        const cell = r.px * p.mono.line;
+        const top = (line - cell) * std.math.clamp(st.leading, 0, 1);
+        const last: u32 = @intCast(out.len - 1);
+        var n = start;
+        glyphs.first[k] = n;
+        var at: Pen = .{};
+        for (bytes[0..f.cut]) |b| {
+            at.advance(adv, st, b, avail, wraps);
+            n = glyph(out, n, last, r, at.x - advanceOf(adv, st, b), r.rect[1] + top + @as(f32, @floatFromInt(at.line)) * line, adv, cell, b);
+        }
+        if (f.cut < bytes.len and st.ellipsis) for (0..3) |_| {
+            at.x += advanceOf(adv, st, '.');
+            n = glyph(out, n, last, r, at.x - advanceOf(adv, st, '.'), r.rect[1] + top + @as(f32, @floatFromInt(at.line)) * line, adv, cell, '.');
+        };
+        glyphs.count[k] = n - start;
+        return n;
+    }
+
+    fn glyph(out: []Quad, n: u32, last: u32, r: draw_list.TextRun, x_: f32, y: f32, adv: f32, cell: f32, b: u8) u32 {
+        const x = r.rect[0] + x_;
+        out[n] = .{
+            .rect = .{ x, y, x + adv, y + cell },
+            .clip = r.clip,
+            .params = .{ 0, 0, 0, 0 },
+            .uv = FullGrid.uv(b) catch unreachable,
+            .fill = r.color,
+            .border_color = 0,
+            .radii = @splat(0),
+            .border = 0,
+            .opacity = 1,
+            .xform = r.xform,
+            .clip_radii = r.clip_radii,
+        };
+        return @min(n + 1, last);
+    }
+
+    /// Where the walk is: x after the last byte placed, on line `line`.
+    const Pen = struct {
+        x: f32 = 0,
+        line: u32 = 0,
+
+        /// Places a byte: on this line if it fits within `avail` (half a cell of slack, as
+        /// Mono rounds), else first on the next one. The first byte of a line always fits.
+        fn advance(pen: *Pen, adv: f32, st: Paragraph, b: u8, avail: f32, wraps: bool) void {
+            const w = advanceOf(adv, st, b);
+            const next = wraps and pen.x > 0 and pen.x + w > avail + @max(adv, 1e-6) * 0.5;
+            pen.line += @intFromBool(next);
+            pen.x = if (next) w else pen.x + w;
+        }
+    };
+
+    /// The walk's result: single-line width, lines shown (clamped to `max_lines`) and the
+    /// bytes drawn before the ellipsis (all of them when nothing is cut).
+    const Fit = struct { w: f32, lines: u32, cut: u32 };
+
+    fn fit(mono: Mono, st: Paragraph, bytes: []const u8, px: f32, avail: f32, wraps: bool) Fit {
+        const adv = px * mono.advance;
+        var w: f32 = 0;
+        for (bytes) |b| w += advanceOf(adv, st, b);
+        var pen: Pen = .{};
+        var cut: u32 = @intCast(bytes.len);
+        for (bytes, 0..) |b, j| {
+            const before = pen;
+            pen.advance(adv, st, b, avail, wraps);
+            if (pen.line >= st.max_lines) {
+                pen = before;
+                cut = @intCast(j);
+                break;
+            }
+        }
+        const lines = pen.line + 1;
+        const overflow = cut < bytes.len or (!wraps and w > avail);
+        if (st.ellipsis and overflow) {
+            // Back off until "..." fits after the last byte kept on the last line.
+            const dots = 3 * advanceOf(adv, st, '.');
+            var x = pen.x;
+            var j = if (cut < bytes.len) cut else visible: {
+                var x_end: f32 = 0;
+                var m: u32 = 0;
+                while (m < bytes.len and x_end + advanceOf(adv, st, bytes[m]) <= avail) : (m += 1) x_end += advanceOf(adv, st, bytes[m]);
+                x = x_end;
+                break :visible m;
+            };
+            while (j > 0 and x + dots > avail) {
+                j -= 1;
+                x -= advanceOf(adv, st, bytes[j]);
+            }
+            cut = j;
+        }
+        return .{ .w = w, .lines = lines, .cut = cut };
+    }
+
+    fn advanceOf(adv: f32, st: Paragraph, b: u8) f32 {
+        return adv + st.letter_spacing + simd.b2f(b == ' ') * st.word_spacing;
+    }
+
+    fn lineOf(mono: Mono, st: Paragraph, px: f32) f32 {
+        return switch (st.line_height) {
+            .font => px * mono.line,
+            .px => |v| v,
+            .multiple => |v| v * px,
+        };
     }
 };
 
@@ -692,4 +864,64 @@ test "Mono command expansion skips unsubmitted runs and shares repeated text com
     d.cmd_len = 0;
     try testing.expectEqual(0, try mono.quadsForCommands(Subset, &d, &visible, .{ .first = &first, .count = &count }));
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0 }, &count);
+}
+
+test "MonoParagraphs: letter and word spacing, line height, a clamp and an ellipsis, only on styled runs" {
+    var fx: Fixture(8) = .{};
+    var tx = fx.texts();
+    const text = "ab cd" ++ "abcdefgh" ++ "abcdefgh" ++ "ab cd";
+    // Advance 5 px at 10 px; Mono lines are 12 px.
+    _ = tx.push(0, .{ .start = 0, .bytes = 5 }, &.{ .px = 10 }); // spaced
+    _ = tx.push(0, .{ .start = 5, .bytes = 8 }, &.{ .px = 10, .wrap = true }); // 1.5 lines, clamped to 2
+    _ = tx.push(0, .{ .start = 13, .bytes = 8 }, &.{ .px = 10 }); // ellipsis in 25 px
+    _ = tx.push(0, .{ .start = 21, .bytes = 5 }, &.{ .px = 10 }); // unstyled
+    const font: MonoParagraphs = .{
+        .mono = .{ .advance = 0.5, .line = 1.2 },
+        .rows = &.{ 0, 1, 2 },
+        .styles = &.{ 0, 1, 2 },
+        .table = &.{
+            .{ .letter_spacing = 1, .word_spacing = 4 },
+            .{ .line_height = .{ .multiple = 2 }, .max_lines = 2 },
+            .{ .ellipsis = true, .line_height = .{ .px = 16 } },
+        },
+        .strings = text,
+    };
+    font.measure(&tx);
+    // 5 bytes of 6 px and one space of 4 more.
+    try testing.expectEqual(34, tx.c.w[0]);
+    try testing.expectEqual(12, tx.c.h[0]);
+    try testing.expectEqual(40, tx.c.w[1]);
+    try testing.expectEqual(20, tx.c.h[1]);
+    try testing.expectEqual(16, tx.c.h[2]);
+    try testing.expectEqual(25, tx.c.w[3]);
+    @memset(tx.c.avail[0..4], 15);
+    tx.c.avail[2] = 25;
+    font.wrap(&tx);
+    // Three bytes per 15 px line: three lines of "abcdefgh", clamped to two of 20 px.
+    try testing.expectEqual(15, tx.c.w[1]);
+    try testing.expectEqual(40, tx.c.h[1]);
+    // Cut to its width; the unwrapped, unstyled runs keep their extents.
+    try testing.expectEqual(25, tx.c.w[2]);
+    try testing.expectEqual(34, tx.c.w[0]);
+    try testing.expectEqual(25, tx.c.w[3]);
+
+    // Drawn as measured: "ab" then "..." in 25 px; the spaced run's "c" after 6 + 6 + 10 px.
+    var runs = [_]draw_list.TextRun{
+        .{ .rect = .{ 0, 0, 34, 12 }, .clip = .{ 0, 0, 100, 100 }, .start = 0, .bytes = 5, .px = 10, .color = 1, .font = 0 },
+        .{ .rect = .{ 0, 20, 15, 60 }, .clip = .{ 0, 0, 100, 100 }, .start = 5, .bytes = 8, .px = 10, .color = 1, .font = 0 },
+        .{ .rect = .{ 0, 60, 25, 76 }, .clip = .{ 0, 0, 100, 100 }, .start = 13, .bytes = 8, .px = 10, .color = 1, .font = 0 },
+    };
+    var d = testList(&runs, text);
+    var out: [32]Quad = undefined;
+    var first: [3]u32 = undefined;
+    var count: [3]u32 = undefined;
+    _ = font.quads(&d, &out, .{ .first = &first, .count = &count });
+    try testing.expectEqualSlices(u32, &.{ 5, 6, 5 }, &count);
+    try testing.expectEqual([4]f32{ 22, 0, 27, 12 }, out[3].rect);
+    // Line two of the clamped run starts at "d", 20 px lower, the 12 px cell centred in it.
+    try testing.expectEqual([4]f32{ 0, 44, 5, 56 }, out[first[1] + 3].rect);
+    try testing.expectEqual(FullGrid.uv('d') catch unreachable, out[first[1] + 3].uv);
+    // "ab..." with the cell 2 px into the 16 px line.
+    try testing.expectEqual([4]f32{ 10, 62, 15, 74 }, out[first[2] + 2].rect);
+    try testing.expectEqual(FullGrid.uv('.') catch unreachable, out[first[2] + 4].uv);
 }

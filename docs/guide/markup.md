@@ -215,6 +215,15 @@ list where neither is found is an error. The UA sheet makes `<b>` and `<strong>`
 The host loads `fonts[k].path` as the shaper or atlas of font `fonts[k].entry.font`
 (`testdata/fonts`).
 
+### Paragraph styles
+
+`line-height` (`normal`, a number, a length or a percentage), `letter-spacing`,
+`word-spacing` and `text-overflow: ellipsis` become the label's `spec.paragraph`
+(`text_stack.Paragraph`). Both frontends measure those labels with
+`protocol.MonoParagraphs`, and the host draws them with its `quads`; a page without them
+measures with plain `Mono` and carries no paragraph rows (`testdata/paragraphs`). Not yet inside
+`lcgf-each`.
+
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20

@@ -99,6 +99,11 @@ f.close();
 The test checks the result: the title is 80 x 20, and the body's 24 bytes of 5 px wrap into
 100 px as two lines of 12 px.
 
+`protocol.MonoParagraphs` is `Mono` with paragraph styles on some runs: line height,
+letter and word spacing, a line clamp and an ellipsis from `text_stack.Paragraph`, for the texts
+rows it lists. `Frame.endParagraphs` and `spec.paragraph` use it; it rewrites only the listed
+rows after Mono's passes, and its `quads` places their glyphs by the same walk.
+
 ## Drawing text
 
 The draw list's `text` commands carry run indices; the glyphs themselves are yours. A back end

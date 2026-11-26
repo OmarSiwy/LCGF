@@ -29,6 +29,9 @@ pub const Spec = struct {
     text: ?[]const u8 = null,
     /// Fully resolved text style for this label; null inherits the page theme.
     text_style: ?types.TextStyle = null,
+    /// Paragraph style of this label (line height, spacing, line clamp, ellipsis; set with
+    /// `paragraph`); null for none. A page with none measures with plain `Mono`.
+    paragraph: ?@import("../text/layout/stack.zig").Paragraph = null,
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
     /// Flex item and container rules beyond `style` (margins, wrap, align-self, aspect,
@@ -291,6 +294,16 @@ pub fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec {
     if (s.kind != .label) @compileError("textStyled: only a label has a text style");
     var out = s;
     out.text_style = text_style;
+    return out;
+}
+
+/// Label `s` with paragraph style `p`: `paragraph(label(.a), .{ .line_height = .{ .px = 20 } })`.
+/// Measured and wrapped by `protocol.MonoParagraphs`, which honours its line height,
+/// letter and word spacing, line clamp and ellipsis.
+pub fn paragraph(comptime s: Spec, comptime p: @import("../text/layout/stack.zig").Paragraph) Spec {
+    if (s.kind != .label) @compileError("paragraph: only a label has a paragraph style");
+    var out = s;
+    out.paragraph = p;
     return out;
 }
 

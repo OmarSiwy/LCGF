@@ -255,6 +255,7 @@ pub const Emit = struct {
             .label, .text, .heading => !std.meta.eql(n.text_style, n.base_text),
             else => false,
         };
+        if (n.paragraph != null) e.write("s.paragraph(");
         if (text_styled) e.write("s.textStyled(");
         if (restyle and !has_children) e.write("s.styled(");
         switch (n.kind) {
@@ -380,6 +381,11 @@ pub const Emit = struct {
         if (text_styled) {
             e.write(", ");
             e.structure(n.text_style, types.TextStyle{});
+            e.write(")");
+        }
+        if (n.paragraph) |pa| {
+            e.write(", ");
+            e.paragraph(pa);
             e.write(")");
         }
         var all: std.ArrayList(u8) = .empty;
@@ -649,7 +655,7 @@ pub const Emit = struct {
                 return "f.close();";
             },
             .label, .heading, .text => {
-                const plain = n.kind == .label and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
+                const plain = n.kind == .label and n.paragraph == null and std.meta.eql(n.style, n.base_style) and std.meta.eql(n.text_style, n.base_text) and n.params_expr.len == 0 and n.uses.len == 0 and n.text_uses.color == none and n.text_uses.px == none;
                 if (plain) {
                     e.print("_ = {s}.label(f, &theme, ", .{e.use("label")});
                     e.rtCaption(n.text_kind, n.text);
@@ -671,6 +677,7 @@ pub const Emit = struct {
                 e.write(", ");
                 e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                 e.write(");");
+                if (n.paragraph) |pa| e.print(" ui.paragraphs.rows[ui.paragraphs.len] = f.texts().len - 1; ui.paragraphs.styles[ui.paragraphs.len] = {d}; ui.paragraphs.len += 1;", .{e.paragraphIndex(pa)});
                 return "";
             },
             .button => {
@@ -982,6 +989,15 @@ pub const Emit = struct {
     /// `build(ui, f)`, which builds the page into a runtime `Frame` and records its events.
     fn runtimeUi(e: *Emit) void {
         const tokens = e.page.tokens.items;
+        if (e.paragraphTable().len > 0) {
+            e.write("\n/// The page's paragraph styles, indexed by `Ui.paragraphs.styles`.\nconst paragraph_table = [_]lcgf.text_stack.Paragraph{");
+            for (e.paragraphTable()) |pa| {
+                e.write(" ");
+                e.paragraph(pa);
+                e.write(",");
+            }
+            e.write(" };\n");
+        }
         e.write(
             \\
             \\/// The page in the runtime front end: the same state store as the comptime page's
@@ -1025,19 +1041,33 @@ pub const Emit = struct {
             \\
         , .{ named, e.namedList() });
         const flex = e.hasFlex();
+        const paragraphs = e.paragraphTable().len > 0;
         if (flex) e.write(
             \\    /// Flex rules (layout/flex.zig) of the nodes with margins, written while the page
             \\    /// builds and used by `end`. They point into `flex_buf`: a Ui does not move once built.
             \\    flex_buf: [flex_bytes]u8 align(lcgf.mem.column_align) = undefined,
             \\    flex: ?lcgf.flex.Flex = null,
             \\
-            \\    /// Ends the frame with this page's flex rules (`Frame.endFlex`).
-            \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {
-            \\        return f.endFlex(font, &ui.flex.?);
-            \\    }
-            \\
+        );
+        if (paragraphs) e.write(
+            \\    /// This frame's labels with a paragraph style: texts row and `paragraph_table` index.
+            \\    paragraphs: struct { rows: [limits.texts]u32 = undefined, styles: [limits.texts]u16 = undefined, len: u32 = 0 } = .{},
             \\
         );
+        if (flex or paragraphs) e.print(
+            \\    /// Ends the frame with this page's {s} (`Frame.{s}`).
+            \\    pub fn end(ui: *Ui, f: *lcgf.frame.Frame, font: lcgf.protocol.Mono) lcgf.context.Output {{
+            \\        return f.{s}(font{s}{s});
+            \\    }}
+            \\
+            \\
+        , .{
+            if (flex and paragraphs) "flex rules and paragraph styles" else if (flex) "flex rules" else "paragraph styles",
+            if (flex and paragraphs) "endFlexParagraphs" else if (flex) "endFlex" else "endParagraphs",
+            if (flex and paragraphs) "endFlexParagraphs" else if (flex) "endFlex" else "endParagraphs",
+            if (paragraphs) ", ui.paragraphs.rows[0..ui.paragraphs.len], ui.paragraphs.styles[0..ui.paragraphs.len], &paragraph_table" else "",
+            if (flex) ", &ui.flex.?" else "",
+        });
         if (tokens.len > 0) e.write(
             \\    /// The caller's theme tokens; point it at your table.
             \\    tokens: *const ThemeTable = &default_tokens,
@@ -1057,6 +1087,7 @@ pub const Emit = struct {
             \\        ui.before = ui.signals.state;
             \\
         );
+        if (paragraphs) e.write("        ui.paragraphs.len = 0;\n");
         if (tokens.len > 0) e.write("        ui.seen = ui.tokens.generation;\n");
         if (named > 0) e.write("        ui.named = @splat(lcgf.types.none);\n");
         if (flex) e.write(
@@ -1166,6 +1197,48 @@ pub const Emit = struct {
             out.print(e.arena, " \"{f}\",", .{std.zig.fmtString(name)}) catch unreachable;
         if (out.items.len > 0) out.items.len -= 1;
         return out.items;
+    }
+
+    /// The distinct paragraph styles of the page's labels, in first-use order.
+    fn paragraphTable(e: *Emit) []const lcgf.text_stack.Paragraph {
+        var out: std.ArrayList(lcgf.text_stack.Paragraph) = .empty;
+        for (e.page.nodes.items(.paragraph)) |p_| if (p_) |p| {
+            for (out.items) |q| {
+                if (std.meta.eql(p, q)) break;
+            } else out.append(e.arena, p) catch unreachable;
+        };
+        return out.items;
+    }
+
+    fn paragraphIndex(e: *Emit, p: lcgf.text_stack.Paragraph) usize {
+        for (e.paragraphTable(), 0..) |q, i| if (std.meta.eql(p, q)) return i;
+        unreachable;
+    }
+
+    /// A paragraph style literal: the fields the lowering sets.
+    fn paragraph(e: *Emit, p: lcgf.text_stack.Paragraph) void {
+        e.write(".{");
+        var any = false;
+        switch (p.line_height) {
+            .font => {},
+            .px => |v| {
+                e.print(" .line_height = .{{ .px = {d} }}", .{v});
+                any = true;
+            },
+            .multiple => |v| {
+                e.print(" .line_height = .{{ .multiple = {d} }}", .{v});
+                any = true;
+            },
+        }
+        inline for (.{ "letter_spacing", "word_spacing" }) |f| if (@field(p, f) != 0) {
+            e.print("{s} .{s} = {d}", .{ if (any) "," else "", f, @field(p, f) });
+            any = true;
+        };
+        if (p.ellipsis) {
+            e.print("{s} .ellipsis = true", .{if (any) "," else ""});
+            any = true;
+        }
+        e.write(if (any) " }" else "}");
     }
 
     /// Whether a node has flex rules (CSS margins, align-self, wrap, …; engine spec F2).

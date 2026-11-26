@@ -68,6 +68,7 @@ const paint = @import("../draw/paint.zig");
 const layout = @import("../layout/layout.zig");
 const Flex = @import("../layout/flex.zig").Flex;
 const Mono = @import("../text/protocol.zig").Mono;
+const Paragraph = @import("../text/layout/stack.zig").Paragraph;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
 const spec_zig = @import("../comptime/spec.zig");
@@ -370,6 +371,9 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
     const dynamic = Regions.count != 0;
     // Flex columns and passes only for a page with a `spec.flexed` node.
     const has_flex = comptime anyFlex(spec);
+    // Paragraph styles (`spec.paragraph`): their distinct values, and one slot per label that has one.
+    const paragraph_table = comptime paragraphTable(spec);
+    const paragraph_slots = comptime paragraphCount(spec);
     return struct {
         const Self = @This();
         pub const Events = E;
@@ -440,6 +444,9 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         tree_rows: [if (dynamic) rows - 1 else 0]u32 = @splat(types.none),
         window_selection: [if (Regions.has_windows) Regions.count else 0]@import("../comptime/dynamic.zig").Select = undefined,
         font: Mono = .{},
+        /// This frame's styled labels: texts row and `paragraph_table` index, for
+        /// `MonoParagraphs`. Absent on a page without `spec.paragraph`.
+        paragraphs: if (paragraph_slots > 0) struct { rows: [paragraph_slots]u32 = undefined, styles: [paragraph_slots]u16 = undefined, len: u32 = 0 } else void = if (paragraph_slots > 0) .{} else {},
 
         const Tables = struct {
             t: Tree,
@@ -616,6 +623,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 }
             }
             var next: u32 = 0;
+            if (comptime paragraph_slots > 0) ui.paragraphs.len = 0;
             if (comptime Tokens != void) ui.seen = ui.tokens.generation;
             ui.push(spec, 0, &next, in);
             tb.t.seal(0);
@@ -627,7 +635,14 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 @import("../layout/rtl.zig").direction(t, directions);
                 @import("../layout/rtl.zig").startEnd(t, directions);
             }
-            ui.font.measure(tx);
+            const font = if (comptime paragraph_slots > 0) @import("../text/protocol.zig").MonoParagraphs{
+                .mono = ui.font,
+                .rows = ui.paragraphs.rows[0..ui.paragraphs.len],
+                .styles = ui.paragraphs.styles[0..ui.paragraphs.len],
+                .table = &paragraph_table,
+                .strings = tb.strings.buf[0..tb.strings.len],
+            } else ui.font;
+            font.measure(tx);
             layout.prepare(t);
             layout.applyText(t, tx, .x);
             if (has_flex) {
@@ -637,7 +652,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 layout.resolveFlex(t, fx, .x, in.viewport[0]);
                 @import("../layout/wrap.zig").wrap(t, fx);
                 layout.textAvail(t, tx);
-                ui.font.wrap(tx);
+                font.wrap(tx);
                 layout.applyText(t, tx, .y);
                 layout.fitFlex(t, fx, .y);
                 layout.resolveFlex(t, fx, .y, in.viewport[1]);
@@ -646,7 +661,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 layout.fit(t, .x);
                 layout.resolve(t, .x, in.viewport[0]);
                 layout.textAvail(t, tx);
-                ui.font.wrap(tx);
+                font.wrap(tx);
                 layout.applyText(t, tx, .y);
                 layout.fit(t, .y);
                 layout.resolve(t, .y, in.viewport[1]);
@@ -728,6 +743,12 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                         break :blk sp;
                     } else tb.strings.add(spec_zig.labelBytes(n, state));
                     tb.t.c.text[i] = tb.tx.push(i, span, if (comptime tokened) &tok.text else &(n.text_style orelse labelText(&th)));
+                    if (comptime n.paragraph) |p| {
+                        const slot = &ui.paragraphs;
+                        slot.rows[slot.len] = tb.t.c.text[i];
+                        slot.styles[slot.len] = comptime paragraphIndex(&paragraph_table, p);
+                        slot.len += 1;
+                    }
                 },
                 .checkbox => {
                     const value: bool = @field(state, n.bind.?);
@@ -867,6 +888,42 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             return comptime std.meta.stringToEnum(S.Field, name).?;
         }
     };
+}
+
+/// Labels in `n` with a paragraph style.
+fn paragraphCount(comptime n: Spec) u32 {
+    var k: u32 = @intFromBool(n.kind == .label and n.paragraph != null);
+    for (n.children) |c| k += paragraphCount(c);
+    return k;
+}
+
+/// The distinct paragraph styles in `n`, in first-use order.
+fn paragraphTable(comptime n: Spec) [paragraphDistinct(n).len]Paragraph {
+    return paragraphDistinct(n)[0..paragraphDistinct(n).len].*;
+}
+
+fn paragraphDistinct(comptime n: Spec) []const Paragraph {
+    comptime {
+        var out: []const Paragraph = &.{};
+        paragraphWalk(n, &out);
+        return out;
+    }
+}
+
+fn paragraphWalk(comptime n: Spec, comptime out: *[]const Paragraph) void {
+    if (n.kind == .label) if (n.paragraph) |p| {
+        if (paragraphIndexIn(out.*, p) == null) out.* = out.* ++ .{p};
+    };
+    for (n.children) |c| paragraphWalk(c, out);
+}
+
+fn paragraphIndex(comptime table: []const Paragraph, comptime p: Paragraph) u16 {
+    return paragraphIndexIn(table, p).?;
+}
+
+fn paragraphIndexIn(comptime table: []const Paragraph, comptime p: Paragraph) ?u16 {
+    for (table, 0..) |q, i| if (std.meta.eql(q, p)) return i;
+    return null;
 }
 
 fn anyFlex(comptime n: Spec) bool {
@@ -1724,4 +1781,47 @@ test "a widget page virtual list keeps the clipped fractional row" {
     try std.testing.expectEqual(3, out.draw.run_len);
     try std.testing.expectEqual(@as(f32, -5), out.draw.runs[0].rect[1]);
     try std.testing.expectEqual(@as(f32, 40), out.draw.runs[0].clip[3]);
+}
+
+test "paragraph: line height, spacing and an ellipsis lay out the same in both front ends" {
+    const th: Theme = .default;
+    const tall: Paragraph = .{ .line_height = .{ .px = 30 }, .letter_spacing = 2 };
+    const cut: Paragraph = .{ .ellipsis = true };
+    const spec = comptime spec_zig.col(.{ .size = .{ .px(60), .fit } }, .{
+        spec_zig.paragraph(spec_zig.label("Tall"), tall),
+        spec_zig.label("Plain"),
+        spec_zig.paragraph(spec_zig.styled(spec_zig.label("a long line cut short"), .{ .size = .{ .fill, .fit }, .clip = true, .role = .label }), cut),
+        spec_zig.paragraph(spec_zig.label("Tall"), tall),
+    });
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        rows: [3]u32 = undefined,
+        const table = [_]Paragraph{ tall, cut };
+        pub fn build(app: *@This(), f: *Frame) void {
+            _ = f.open(.none, .{ .size = .{ .px(60), .fit } });
+            _ = f.textStyled("Tall", labelText(&th), .{});
+            app.rows[0] = f.texts().len - 1;
+            _ = f.textStyled("Plain", labelText(&th), .{});
+            _ = f.textStyled("a long line cut short", labelText(&th), .{ .size = .{ .fill, .fit }, .clip = true, .role = .label });
+            app.rows[1] = f.texts().len - 1;
+            _ = f.textStyled("Tall", labelText(&th), .{});
+            app.rows[2] = f.texts().len - 1;
+            f.close();
+        }
+        pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
+            return f.endParagraphs(font, &app.rows, &.{ 0, 1, 0 }, &table);
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 16, .texts = 8, .strings = 128, .depth = 8 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    const out = (try h.frame(&in)).comptime_.tree;
+    // 4 bytes of 8.4 + 2 px (snapped to whole pixels), one 30 px line; the plain label keeps
+    // Mono's line.
+    const adv = th.text_px * (Mono{}).advance;
+    try std.testing.expectApproxEqAbs(4 * (adv + 2), out.rect(2).w(), 1);
+    try std.testing.expectEqual(@as(f32, 30), out.rect(2).h());
+    try std.testing.expectApproxEqAbs(th.text_px * (Mono{}).line, out.rect(3).h(), 1);
+    // The ellipsis run is cut to the column's 60 px.
+    try std.testing.expectEqual(@as(f32, 60), out.rect(4).w());
 }
