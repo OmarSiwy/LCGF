@@ -151,8 +151,11 @@ Today a comptime page folds the theme: `var()` is substituted by the compiler (`
 | T-RT, T-CT: run-time theme tokens on runtime and comptime pages | ac391ab0, dba544f2, aad15faf, de869134 |
 | Engine for the markup gaps: flex, placeholders, roles, link, choice, heading, button text style | 472f74c9..c49d9be2 |
 | N-FE runtime front end; N-SUBMIT on:submit | e863cf0e, 999c2329 |
+| C4/C5 GPU: canvas golden in draw-golden on the GPU, vk benchmark (RTX 5060: 0.55 ms/frame for 100k at 1080p; pan uploads 160 B), batch placement fix | 1e06d82c..00b85934 |
+| sw canvas: transform and rounded-clip parents, `Frame.reuse` (`enableCanvas` now takes 2 × customs rows), cheaper shading (71M instr/frame for 100k, 1 thread), golden through the bin, dashes on arcs | ea5ff09e, 58e13807, d42136f3, fdcd4a68, 2ae59430, b64b2381 |
+| Text fields inside regions: `value="{row.f}"`, on:change(index, text), on:submit(index) | c4168b13 |
 | M8.2 `<each of>`; E2 several regions; per-row view state; E1 fit-sized regions; one-way per-item on:change over `[]const T` | 1d39f356, fa569c09, 71f60ea2, 357f6c33, 83987184, d72829fc |
 
-**Next:** text fields inside regions (one region-owned editor for the focused row); the GPU benchmark and GPU golden wiring; canvas under `Frame.reuse` and transformed or rounded-clip parents; C6 (C, C++ and Rust canvas exposure).
+**Next:** GPU transform and rounded clip plus GPU arc dashes; caller-set canvas limits (batches, draws, overrides); a compile-time canvas switch so apps without one pay no bytes; C6 (C, C++ and Rust canvas exposure); markup components (M8.3), `lcgf-else`, accessible names.
 
 LCGF fixes bugs Schemify finds at the root, on `main`: send them to the LCGF session with the commit and a repro.
