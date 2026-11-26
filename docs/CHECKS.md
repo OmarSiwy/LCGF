@@ -90,6 +90,27 @@ compare it is a cmov. Those branches span 0x36 bytes, past the census's 32-byte 
 so they show only in the `jcc` column. The production gate checks the per-pass counts in `bench/census/baseline-src.json`. Prefer whole-vector selects (`@select` over `F`/`U`) in
 batch loops.
 
+Counts raised after the styling, perf, gpu-projection and software-renderer merges (every other
+jump those merges added was removed). Each remaining jump was read in the disassembly:
+
+- `p_finalize` jcc 3 -> 5, `p_damage_cull` 4 -> 5, `p_a11y_flatten` 7 -> 8,
+  `p_merge_across_text` 12 -> 14: `geometry.transformRect`'s one test for the identity, per call
+  site. The branch-free form computes the inverse and corners for every row: on the rows bench
+  finalize took 7.4G instead of 3.2G instructions:u and `nodeBounds` 1.9G instead of 0.8G.
+- `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
+  SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
+  rows (bound and unroll remainder only). A select would run the exact walk on every query.
+- `p_touch_step` jcc 4 -> 5, back 2 -> 3: the capture check's loop over the contact slots. A free
+  slot searches 0 rows.
+- `p_reuse` jcc 49 -> 51, back 19 -> 23: the paint-reference check before a copy and the rebase
+  after it, two loops over the subtree's extras rows, each with a search over 0 rows unless the
+  row references a node outside the subtree.
+- `p_grid_resolve` jcc 11 -> 16, back 4 -> 5: a subgrid copies its parent's tracks instead of
+  sizing its own, once per grid, and the copy loop's bound and alias checks. Running
+  `sizeTracks` for every grid to drop the test still leaves the copy loop.
+- `p_flip` short_fwd 4 -> 5 and `p_damage_frame` back 7 -> 8: trip-count dispatch of an
+  auto-vectorized loop and a loop-entry test placed before its loop; the sources are unchanged.
+
 ## 3. Benchmark
 
 ```sh
