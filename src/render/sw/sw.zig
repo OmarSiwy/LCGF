@@ -473,32 +473,41 @@ fn plain(q: *const Quad) bool {
 fn plainBox(q: *const Quad, scale: f32, scissor: [4]u32) [4]u32 {
     const r = q.rect;
     const c = q.clip;
-    const inv = 1 / scale;
-    const x = axisPixels(@max(r[0], c[0]), r[2], c[2], scale, inv);
-    const y = axisPixels(@max(r[1], c[1]), r[3], c[3], scale, inv);
-    return clampBox(.{ x[0], y[0], x[1], y[1] }, scissor);
+    // Both axes at once.
+    const p = axisPixelsN(2, .{ @max(r[0], c[0]), @max(r[1], c[1]) }, .{ r[2], r[3] }, .{ c[2], c[3] }, scale, 1 / scale);
+    return clampBox(.{ p[0][0], p[0][1], p[1][0], p[1][1] }, scissor);
 }
 
 /// First and end pixel whose centre (p + 0.5) / scale is >= lo, < hi_open and <= hi_closed: an
 /// estimate, settled by the loop's own test on the pixels next to it.
 fn axisPixels(lo: f32, hi_open: f32, hi_closed: f32, scale: f32, inv: f32) [2]u32 {
-    const limit: f32 = 1 << 24;
-    var first: u32 = @intFromFloat(std.math.clamp(@ceil(lo * scale - 0.5), 0, limit));
-    if (first > 0 and pixelCentre(first - 1, inv) >= lo) first -= 1;
-    if (first < 1 << 24 and !(pixelCentre(first, inv) >= lo)) first += 1;
-    const est = @min(@ceil(hi_open * scale - 0.5), @floor(hi_closed * scale - 0.5) + 1);
-    var end: u32 = @intFromFloat(std.math.clamp(est, 0, limit));
-    if (end > 0 and !below(pixelCentre(end - 1, inv), hi_open, hi_closed)) end -= 1;
-    if (end < 1 << 24 and below(pixelCentre(end, inv), hi_open, hi_closed)) end += 1;
-    return .{ first, @max(end, first) };
+    const p = axisPixelsN(1, .{lo}, .{hi_open}, .{hi_closed}, scale, inv);
+    return .{ p[0][0], p[1][0] };
+}
+
+/// `axisPixels` on `n` axes with selects, the pixel numbers kept as floats (exact to 2^24): the
+/// same tests on the same values, so the same pixels, without a branch per test.
+fn axisPixelsN(comptime n: comptime_int, lo: @Vector(n, f32), hi_open: @Vector(n, f32), hi_closed: @Vector(n, f32), scale: f32, inv: f32) [2]@Vector(n, u32) {
+    const V = @Vector(n, f32);
+    const zero: V = @splat(0);
+    const one: V = @splat(1);
+    const half: V = @splat(0.5);
+    const limit: V = @splat(1 << 24);
+    const s: V = @splat(scale);
+    const k: V = @splat(inv);
+    var first = std.math.clamp(@ceil(lo * s - half), zero, limit);
+    first = @select(f32, (first > zero) & ((first - one + half) * k >= lo), first - one, first);
+    first = @select(f32, (first < limit) & !((first + half) * k >= lo), first + one, first);
+    var end = std.math.clamp(@min(@ceil(hi_open * s - half), @floor(hi_closed * s - half) + one), zero, limit);
+    const before = (end - one + half) * k;
+    end = @select(f32, (end > zero) & !((before < hi_open) & (before <= hi_closed)), end - one, end);
+    const at = (end + half) * k;
+    end = @select(f32, (end < limit) & (at < hi_open) & (at <= hi_closed), end + one, end);
+    return .{ @intFromFloat(first), @intFromFloat(@max(end, first)) };
 }
 
 inline fn pixelCentre(p: u32, inv: f32) f32 {
     return (@as(f32, @floatFromInt(p)) + 0.5) * inv;
-}
-
-inline fn below(c: f32, hi_open: f32, hi_closed: f32) bool {
-    return c < hi_open and c <= hi_closed;
 }
 
 /// An untransformed, untextured quad of the solid kind with a square clip. Pixels whose centres
@@ -519,6 +528,8 @@ fn rectQuad(comptime use: features.Usage, t: Target, q: *const Quad, scale: f32)
     if (inner[0] < inner[2] and inner[1] < inner[3]) {
         const color = interiorColor(q);
         if (color.a > 0) t.fb.solid(inner, color);
+        // A rect on whole pixels has no frame.
+        if (std.meta.eql(inner, box)) return;
     }
     const bordered = use.border and q.border >= 0.001;
     if (bordered) rectFrame(use, true, t, q, scale, &parts) else rectFrame(use, false, t, q, scale, &parts);
@@ -1959,6 +1970,25 @@ test "redraw: only the damage rects change, cleared to the background first" {
     try testing.expectEqual(Color.rgb(1, 2, 3), fb.at(30, 15));
     try testing.expectEqual(Color.rgb(30, 31, 36), fb.at(10, 10)); // the panel, outside the card
     try testing.expectEqual(Color.rgb(90, 140, 255), fb.at(29, 29)); // the card, inside its border
+}
+
+test "axisPixels: the first and end pixel whose centres pass the shader loop's tests" {
+    var rng = std.Random.DefaultPrng.init(7);
+    const r = rng.random();
+    for (0..20_000) |i| {
+        const scale = ([_]f32{ 0.75, 1, 1.25, 1.3333334, 2, 2.5 })[i % 6];
+        const inv = 1 / scale;
+        var v: [3]f32 = undefined;
+        for (&v) |*x| x.* = @as(f32, @floatFromInt(r.intRangeAtMost(i32, -40, 400))) / ([_]f32{ 1, 2, 3, 4, 10 })[r.uintLessThan(u32, 5)];
+        const got = axisPixels(v[0], v[1], v[2], scale, inv);
+        // By definition: the run of pixels from 0 whose centres are >= lo, < hi_open, <= hi_closed.
+        var first: u32 = 0;
+        while (first < 2000 and !(pixelCentre(first, inv) >= v[0])) first += 1;
+        var end = first;
+        while (end < 2000 and pixelCentre(end, inv) < v[1] and pixelCentre(end, inv) <= v[2]) end += 1;
+        // An empty run may sit anywhere.
+        if (got[0] < got[1]) try testing.expectEqual([2]u32{ first, end }, got) else try testing.expectEqual(first, end);
+    }
 }
 
 test "frame: starting at the opaque cover gives the cleared, fully drawn frame" {
