@@ -4,6 +4,8 @@
 //! the min, median and p90 frame time and the user-space instructions per frame, summed over the
 //! drawing threads (a counter per thread around each band; the pool's spinning is not counted).
 //! `empty` looks beside the batch, so it measures what every band pays to cull all of it.
+//! Each frame bins the rows into the bands first (`sw.canvas.Bin`, counted and timed with the
+//! frame); `--walk` draws without the bin, every band walking the whole batch.
 //! Timings compare on one machine only (docs/CHECKS.md); pin it, e.g.
 //!
 //!     zig build canvasbench-build && taskset -c 2-5 zig-out/bin/canvasbench [--size 1920x1080] [--frames 60]
@@ -22,6 +24,7 @@ const cols = 320;
 const cell = 6_000;
 var shape_buf: [canvas.Instances.requiredBytes(count, count / 10 * 3, 4)]u8 align(lcgf.mem.column_align) = undefined;
 var list_buf: [list_bytes]u8 align(lcgf.mem.column_align) = undefined;
+var bin_buf: [sw.canvas.Bin.requiredBytes(count, 2 * count)]u8 align(lcgf.mem.column_align) = undefined;
 const list_bytes = blk: {
     var counter: lcgf.mem.Carver = .{ .buf = null };
     _ = DrawList.init(&counter, 1, 1, 1);
@@ -59,9 +62,11 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.arena.allocator();
     var size = [2]u32{ 1920, 1080 };
     var frames: u32 = 60;
+    var walk = false;
     var args = try init.minimal.args.iterateAllocator(gpa);
     _ = args.next();
     while (args.next()) |a| {
+        if (std.mem.eql(u8, a, "--walk")) walk = true;
         if (std.mem.eql(u8, a, "--frames")) frames = try std.fmt.parseInt(u32, args.next().?, 10);
         if (std.mem.eql(u8, a, "--size")) {
             var it = std.mem.splitScalar(u8, args.next().?, 'x');
@@ -72,6 +77,8 @@ pub fn main(init: std.process.Init) !void {
     var carver: lcgf.mem.Carver = .{ .buf = &shape_buf };
     var shapes = canvas.Instances.init(&carver, count, count / 10 * 3, 4);
     build(&shapes);
+    var bc: lcgf.mem.Carver = .{ .buf = &bin_buf };
+    var bin = sw.canvas.Bin.init(&bc, count, 2 * count);
     var lc: lcgf.mem.Carver = .{ .buf = &list_buf };
     var list = DrawList.init(&lc, 1, 1, 1);
     var rows: [1]lcgf.draw_list.CanvasDraw = undefined;
@@ -115,9 +122,17 @@ pub fn main(init: std.process.Init) !void {
                 // From all of it to 8x, geometrically, about the centre.
                 zoomed(fit * std.math.pow(f32, 8, t / @as(f32, @floatFromInt(frames))), wf, hf, world_w);
             rows[0] = .{ .instances = &shapes, .camera = cam, .ranges = &all, .palette = &palette };
-            const job: Job = .{ .fb = &fb, .list = &list, .atlas = atlas };
+            const job: Job = .{ .fb = &fb, .list = &list, .atlas = atlas, .bin = if (walk) null else &bin };
             counted.store(0, .monotonic);
             const t0 = now();
+            // The bin is built on the caller's thread before the bands, as `sw.Setup.draw`
+            // builds it, and counted with them.
+            if (!walk) {
+                const fd = instructionCounter();
+                const before = readCounter(fd);
+                bin.build(&list, 0, 1, fb.all(), threads);
+                _ = counted.fetchAdd(readCounter(fd) - before, .monotonic);
+            }
             pool.run(threads, &job, Job.band);
             samples[f] = now() - t0;
             insns[f] = counted.load(.monotonic);
@@ -162,6 +177,7 @@ const Job = struct {
     fb: *sw.Framebuffer,
     list: *const DrawList,
     atlas: sw.Image,
+    bin: ?*const sw.canvas.Bin,
 
     /// Band `k` of `n`: cleared, then the canvas, as `sw.Setup.draw` draws a frame.
     fn band(j: *const Job, k: u32, n: u32) void {
@@ -169,7 +185,7 @@ const Job = struct {
         const before = readCounter(fd);
         const t: sw.Target = .{ .fb = j.fb, .scissor = sw.tile(j.fb, k, n) };
         j.fb.fill(t.scissor, .rgb(13, 13, 15));
-        sw.canvas.draw(t, j.list, 0, 1, j.atlas);
+        sw.canvas.drawBinned(t, j.list, 0, 1, j.atlas, j.bin);
         _ = counted.fetchAdd(readCounter(fd) - before, .monotonic);
     }
 };
