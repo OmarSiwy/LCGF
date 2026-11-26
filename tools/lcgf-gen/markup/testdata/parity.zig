@@ -70,6 +70,18 @@ test "the runtime and the spec frontend draw the same frames" {
     }
 }
 
+test "a page with styled runs lists them for a real shaper" {
+    if (!@hasDecl(rt.Ui, "styled")) return;
+    const h = &harness;
+    h.init();
+    var in: lcgf.input.Input = .{ .viewport = .{ 800, 600 } };
+    _ = try h.frame(&in);
+    const s = h.app.styled();
+    try std.testing.expect(s.rows.len > 0);
+    try std.testing.expectEqual(s.rows.len, s.styles.len);
+    for (s.styles) |i| try std.testing.expect(i < s.table.len);
+}
+
 var semantic: lcgf.widgets_base.Semantic(rt.limits.nodes) = .{};
 
 test "both front ends give assistive technology the same tree and names" {

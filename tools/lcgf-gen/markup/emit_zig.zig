@@ -1345,6 +1345,15 @@ pub const Emit = struct {
             \\    paragraphs: struct { rows: [limits.texts]u32 = undefined, styles: [limits.texts]u16 = undefined, len: u32 = 0 } = .{},
             \\
         );
+        if (paragraphs) e.print(
+            \\    /// This frame's styled runs, for a host with a real shaper: `f.endTextStyled(stack,
+            \\    /// ascent, ui.styled(), rows, rects)` in place of `end`.
+            \\    pub fn styled(ui: *const Ui) lcgf.protocol.Styled {{
+            \\        return {s};
+            \\    }}
+            \\
+            \\
+        , .{e.styledExpr()});
         const regions = e.hasRegions();
         if (regions) e.print(
             \\    /// Tree rows of the page's regions as this frame built them (none for one it did not
@@ -1705,6 +1714,14 @@ pub const Emit = struct {
             e.write(" }");
         }
         e.write(if (spans.len > 0) " }" else "}");
+    }
+
+    /// The page's `protocol.Styled` over `ui.paragraphs`.
+    fn styledExpr(e: *Emit) []const u8 {
+        return std.fmt.allocPrint(e.arena, ".{{ .rows = ui.paragraphs.rows[0..ui.paragraphs.len], .styles = ui.paragraphs.styles[0..ui.paragraphs.len], .table = &paragraph_table{s}{s} }}", .{
+            if (e.anyDecoration()) ", .decorations = &decoration_table" else "",
+            if (e.anySpans()) ", .spans = &span_table" else "",
+        }) catch unreachable;
     }
 
     /// The font `Ui.end` measures with: `font`, or the page's `MonoParagraphs` over it.

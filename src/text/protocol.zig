@@ -167,6 +167,39 @@ pub const Mono = struct {
 /// start), `style`'s size, colour and font instead of the run's. Spans are sorted by `start`.
 pub const Span = struct { start: u32, style: types.TextStyle };
 
+/// Styled runs of a frame, for any font: run `rows[i]` of `Texts` takes `table[styles[i]]`,
+/// and `decorations` and `spans`, when not empty, have one row per `table` row.
+/// `MonoParagraphs` measures them with `Mono`; `text_stack.Stack.style` points a real shaper
+/// at them.
+pub const Styled = struct {
+    rows: []const u32,
+    styles: []const u16,
+    table: []const Paragraph,
+    decorations: []const Decoration = &.{},
+    spans: []const []const Span = &.{},
+};
+
+/// Puts the ops of quads `first..d.quad_len` (just written after `paint.emit`) right after
+/// op `j`, the text op of their run, and the later ops after them, so they paint over the
+/// run's text and under what follows. Quads past the op rows are dropped. Returns how many
+/// were put in; call `paint.encode` once after the last.
+pub fn insertAfter(d: *DrawList, j: u32, first: u32) u32 {
+    const added = @min(d.quad_len - first, @as(u32, @intCast(d.op.kind.len)) - d.op_len);
+    d.quad_len = first + added;
+    const tail = d.op_len - (j + 1);
+    inline for (.{ "kind", "key", "ref" }) |col| {
+        const c = @field(d.op, col);
+        std.mem.copyBackwards(@TypeOf(c[0]), c[j + 1 + added ..][0..tail], c[j + 1 ..][0..tail]);
+    }
+    for (0..added) |m| {
+        d.op.kind[j + 1 + m] = @backingInt(DrawList.Kind.quads);
+        d.op.key[j + 1 + m] = 0; // white texture, solid material
+        d.op.ref[j + 1 + m] = first + @as(u32, @intCast(m));
+    }
+    d.op_len += added;
+    return added;
+}
+
 /// `Mono` with paragraph styles on some runs: run `rows[i]` of `Texts` takes
 /// `table[styles[i]]` (`rows` ascending; draw list run k is texts row k). Of `stack.Paragraph`,
 /// Mono honours `line_height` (and `leading`), `letter_spacing`, `word_spacing` (after every
@@ -226,9 +259,9 @@ pub const MonoParagraphs = struct {
         var next: usize = 0;
         for (0..d.run_len) |k_| {
             const k: u32 = @intCast(k_);
-            const styled = next < p.rows.len and p.rows[next] == k;
-            n = if (styled) p.appendStyled(d, k, p.styles[next], out, glyphs, n) else p.mono.appendRun(FullGrid, d, k, out, glyphs, n) catch unreachable;
-            next += @intFromBool(styled);
+            const listed = next < p.rows.len and p.rows[next] == k;
+            n = if (listed) p.appendStyled(d, k, p.styles[next], out, glyphs, n) else p.mono.appendRun(FullGrid, d, k, out, glyphs, n) catch unreachable;
+            next += @intFromBool(listed);
         }
         return n;
     }
@@ -288,23 +321,14 @@ pub const MonoParagraphs = struct {
             const at = std.mem.indexOfScalar(u32, p.rows, k) orelse continue;
             const first = d.quad_len;
             p.decorationQuads(d, k, p.styles[at]);
-            // The new quads' ops go right after the text op, the later ops after them.
-            const added = @min(d.quad_len - first, @as(u32, @intCast(d.op.kind.len)) - d.op_len);
-            d.quad_len = first + added;
-            const tail = d.op_len - (j + 1);
-            inline for (.{ "kind", "key", "ref" }) |col| {
-                const c = @field(d.op, col);
-                std.mem.copyBackwards(@TypeOf(c[0]), c[j + 1 + added ..][0..tail], c[j + 1 ..][0..tail]);
-            }
-            for (0..added) |m| {
-                d.op.kind[j + 1 + m] = @backingInt(DrawList.Kind.quads);
-                d.op.key[j + 1 + m] = 0; // white texture, solid material
-                d.op.ref[j + 1 + m] = first + @as(u32, @intCast(m));
-            }
-            d.op_len += added;
-            j += added;
+            j += insertAfter(d, j, first);
         }
         paint.encode(d);
+    }
+
+    /// The styled runs this font measures, for a real shaper (`text_stack.Stack.style`).
+    pub fn styled(p: MonoParagraphs) Styled {
+        return .{ .rows = p.rows, .styles = p.styles, .table = p.table, .decorations = p.decorations, .spans = p.spans };
     }
 
     fn decorationQuads(p: MonoParagraphs, d: *DrawList, k: u32, style: u16) void {

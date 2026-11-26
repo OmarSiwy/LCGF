@@ -32,6 +32,10 @@ const spans_ = @import("spans.zig");
 const Direction = @import("../unicode/bidi.zig").Direction;
 const metrics_ = @import("metrics.zig");
 pub const emit = @import("emit.zig");
+const protocol = @import("../protocol.zig");
+const decorations_ = @import("decorations.zig");
+const DrawList = @import("../../draw/draw_list.zig").DrawList;
+const Rect = @import("../../core/types.zig").Rect;
 
 /// Paragraph inputs, passed directly or in caller-owned rows. This is a capability input,
 /// not a retained style object: changing one row affects the next measure/layout call.
@@ -107,6 +111,20 @@ pub const Rich = struct {
     normalized_spans: ?*spans_.Spans = null,
 };
 
+/// Caller-owned rows for `Stack.style`: a paragraph and a rich row per text, spans for the
+/// styled runs that have them (their span columns: every span plus one per run), and
+/// metrics scratch for the longest span list (plus one).
+pub const StyledRows = struct {
+    paragraphs: []Paragraph,
+    rich: []?Rich,
+    spans: []spans_.Spans,
+    start: []u32,
+    font: []u16,
+    px: []f32,
+    color: []u32,
+    metrics: []lines.Metrics,
+};
+
 /// Shapers by font index, and scratch for one paragraph. The caller owns all of it.
 pub const Stack = struct {
     shapers: []const shape.Shaper,
@@ -143,6 +161,71 @@ pub const Stack = struct {
     ellipsis_px: f32 = 0,
     /// A run did not fit the scratch: it was measured as empty. Reset by the caller.
     overflow: bool = false,
+
+    /// Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as
+    /// `spec.paragraph`, `spec.spans` and the markup lower to): each listed row's paragraph,
+    /// and for a run with spans a rich row whose first span is the run's own style. Rows not
+    /// listed take `default_paragraph`. Call after the tree is built and before `measure`;
+    /// `rows` must outlive the frame's measure, wrap and drawing. NoSpace leaves the stack
+    /// as it was.
+    pub fn style(st: *Stack, tx: *const Texts, s: protocol.Styled, rows: StyledRows) error{NoSpace}!void {
+        const n = tx.len;
+        if (rows.paragraphs.len < n or rows.rich.len < n) return error.NoSpace;
+        var need: usize = 0;
+        var runs: usize = 0;
+        var longest: usize = 0;
+        for (s.styles) |i| if (s.spans.len > 0 and s.spans[i].len > 0) {
+            need += s.spans[i].len + 1;
+            runs += 1;
+            longest = @max(longest, s.spans[i].len + 1);
+        };
+        if (runs > rows.spans.len or need > @min(rows.start.len, rows.font.len, rows.px.len, rows.color.len) or longest > rows.metrics.len) return error.NoSpace;
+        @memset(rows.paragraphs[0..n], st.default_paragraph);
+        @memset(rows.rich[0..n], null);
+        var used: usize = 0;
+        var r: usize = 0;
+        for (s.rows, s.styles) |k, i| {
+            rows.paragraphs[k] = s.table[i];
+            const list = if (s.spans.len > 0) s.spans[i] else &.{};
+            if (list.len == 0) continue;
+            const lead: usize = @intFromBool(list[0].start != 0);
+            const m = lead + list.len;
+            var sp: spans_.Spans = .{ .start = rows.start[used..][0..m], .font = rows.font[used..][0..m], .px = rows.px[used..][0..m], .color = rows.color[used..][0..m] };
+            if (lead == 1) _ = sp.push(0, tx.c.font[k], tx.c.px[k], tx.c.color[k]) catch unreachable;
+            for (list) |x| _ = sp.push(x.start, @backingInt(x.style.font), x.style.px, x.style.color.bitsOf()) catch unreachable;
+            rows.spans[r] = sp;
+            rows.rich[k] = .{ .spans = &rows.spans[r], .metrics = rows.metrics };
+            used += m;
+            r += 1;
+        }
+        st.paragraphs = rows.paragraphs[0..n];
+        st.rich = rows.rich[0..n];
+    }
+
+    /// After `paint.emit`: the decorations of `s`'s decorated runs as solid quads right after
+    /// each run's text (`protocol.insertAfter`), each run laid out again as drawn
+    /// (`paragraph`) and decorated by `text_decorations.quads` with its face's metrics.
+    /// `rects` is scratch of at least the glyph rows. A run that does not fit is left bare.
+    pub fn decorate(st: *Stack, tx: *const Texts, strings: *const Strings, s: protocol.Styled, d: *DrawList, rects: []Rect) void {
+        if (s.decorations.len == 0) return;
+        var j: u32 = 0;
+        while (j < d.op_len) : (j += 1) {
+            if (d.op.kind[j] != @backingInt(DrawList.Kind.text)) continue;
+            const k = d.op.ref[j];
+            const at = std.mem.indexOfScalar(u32, s.rows, k) orelse continue;
+            const deco = s.decorations[s.styles[at]];
+            if (!(deco.underline or deco.overline or deco.strike) or !st.serves(tx, k)) continue;
+            st.paragraph(tx, strings, k) catch continue;
+            const face = &st.shapers[tx.c.font[k]].face;
+            const first = d.quad_len;
+            const room = d.quads[first .. d.quads.len - 1];
+            const run = d.runs[k];
+            const n = decorations_.quads(run, &st.l, &st.g, st.text, .{ 0, @intCast(st.text.len) }, deco, .of(face, run.px), &.{}, rects, room) catch 0;
+            d.quad_len += n;
+            j += protocol.insertAfter(d, j, first);
+        }
+        @import("../../draw/paint.zig").encode(d);
+    }
 
     /// Whether this stack measures row `k`.
     pub fn serves(st: *const Stack, tx: *const Texts, k: usize) bool {

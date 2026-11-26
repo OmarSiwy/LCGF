@@ -107,6 +107,12 @@ puts their underlines, overlines and line-throughs (`spec.decorated`) into the d
 `paint.emit`, as solid quads right after each run's text. Its `spans` give a run several styles
 (`protocol.Span`: from a byte on, another size, colour and font), as one paragraph.
 
+The same styled runs reach a real shaper. `protocol.Styled` is the description without the
+font (`MonoParagraphs.styled()`), `Stack.style(tx, styled, rows)` writes it into the stack's
+paragraph and rich rows (caller-owned `StyledRows`), and `Stack.decorate` paints the decorations
+from each run's laid-out lines with the face's metrics. `Frame.endTextStyled(stack, ascent,
+styled, rows, rects)` does all three around `endText`.
+
 ## Drawing text
 
 The draw list's `text` commands carry run indices; the glyphs themselves are yours. A back end

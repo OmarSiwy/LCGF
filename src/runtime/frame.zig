@@ -22,7 +22,9 @@ const Output = @import("context.zig").Output;
 const Cursor = @import("context.zig").Cursor;
 const Mono = @import("../text/protocol.zig").Mono;
 const MonoParagraphs = @import("../text/protocol.zig").MonoParagraphs;
-const TextStack = @import("../text/layout/stack.zig").Stack;
+const text_stack = @import("../text/layout/stack.zig");
+const TextStack = text_stack.Stack;
+const protocol = @import("../text/protocol.zig");
 const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
 const values = @import("../anim/values.zig");
@@ -587,6 +589,23 @@ pub const Frame = struct {
     }
 
     /// Font-backed measurement and arrangement only, the public half of endText.
+    /// `endText` over styled runs (`protocol.Styled`: the paragraph styles, decorations and
+    /// spans `endParagraphs` gives `Mono`), for a real shaper: `stack.style` points the stack
+    /// at them through the caller's `rows`, and `stack.decorate` paints the decorations after
+    /// the runs, laid out again in `rects` scratch (at least the glyph rows). Styles that do
+    /// not fit the rows are dropped (`stack.overflow`) and the runs drawn plain.
+    pub fn endTextStyled(f: *Frame, stack: *TextStack, ascent: []f32, s: protocol.Styled, rows: text_stack.StyledRows, rects: []types.Rect) Output {
+        stack.style(f.texts(), s, rows) catch {
+            stack.overflow = true;
+            stack.paragraphs = &.{};
+            stack.rich = &.{};
+        };
+        f.layoutText(stack, ascent);
+        const out = f.finish();
+        stack.decorate(f.texts(), &f.ctx.strings[f.ctx.cur], s, &f.ctx.draw, rects);
+        return out;
+    }
+
     pub fn layoutText(f: *Frame, stack: *TextStack, ascent: []f32) void {
         f.arrangeText(stack, ascent);
         f.finalizeLayout(.{}) catch unreachable;
@@ -694,6 +713,74 @@ fn Fixture(comptime limits: @import("context.zig").Limits) type {
             return Context.init(&buffer, limits);
         }
     };
+}
+
+test "endTextStyled: paragraph styles, spans and decorations reach a real shaper" {
+    const golden = @import("../text/layout/golden.zig");
+    const shape = @import("../text/shape/shape.zig");
+    const lines = @import("../text/layout/lines.zig");
+    const spans = @import("../text/layout/spans.zig");
+    const face = try @import("../text/font/opentype.zig").Face.parse(golden.font, 0);
+    const shapers = [_]shape.Shaper{.init(face)};
+    var para: golden.Para = .{};
+    para.bind();
+    var cols: golden.RunCols = .{};
+    var stack: TextStack = .{ .shapers = &shapers, .run = cols.run(), .g = para.g, .l = para.l };
+    var ascent: [4]f32 = undefined;
+    var p_rows: [4]text_stack.Paragraph = undefined;
+    var rich: [4]?text_stack.Rich = undefined;
+    var sp: [2]spans.Spans = undefined;
+    var start: [8]u32 = undefined;
+    var font: [8]u16 = undefined;
+    var px: [8]f32 = undefined;
+    var color: [8]u32 = undefined;
+    var metrics: [8]lines.Metrics = undefined;
+    var rects: [64]types.Rect = undefined;
+    const rows: text_stack.StyledRows = .{ .paragraphs = &p_rows, .rich = &rich, .spans = &sp, .start = &start, .font = &font, .px = &px, .color = &color, .metrics = &metrics };
+    const big = [_]protocol.Span{.{ .start = 2, .style = .{ .px = 40, .color = .rgb(255, 0, 0) } }};
+    const styled: protocol.Styled = .{
+        .rows = &.{ 0, 1 },
+        .styles = &.{ 0, 1 },
+        .table = &.{ .{ .line_height = .{ .px = 30 } }, .{} },
+        .decorations = &.{ .{}, .{ .underline = true } },
+        .spans = &.{ &.{}, &big },
+    };
+    const Fx = Fixture(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 128, .depth = 4 });
+    var ctx = try Fx.context();
+    const input: Input = .{ .viewport = .{ 300, 200 } };
+    // Unstyled first, for the widths the styles change.
+    var frame = ctx.begin(&input);
+    _ = frame.open(.none, .{});
+    _ = frame.text("AVTa", .{ .px = 20 });
+    _ = frame.text("AVTa", .{ .px = 20 });
+    frame.close();
+    const plain = frame.endText(&stack, &ascent).tree;
+    const plain_w = plain.rect(3).w();
+    const plain_h = plain.rect(2).h();
+    frame = ctx.begin(&input);
+    _ = frame.open(.none, .{});
+    const tall = frame.text("AVTa", .{ .px = 20 });
+    const mixed = frame.text("AVTa", .{ .px = 20 });
+    frame.close();
+    const out = frame.endTextStyled(&stack, &ascent, styled, rows, &rects);
+    try testing.expect(!stack.overflow);
+    try testing.expectEqual(@as(f32, 30), out.tree.rect(tall.ix()).h());
+    try testing.expect(plain_h != 30);
+    // "Ta" at 40 px instead of 20: wider and taller than plain.
+    try testing.expect(out.tree.rect(mixed.ix()).w() > plain_w);
+    try testing.expect(out.tree.rect(mixed.ix()).h() > plain_h);
+    // The underline is in the draw list, right after its run's text.
+    var after_text = false;
+    var underlined = false;
+    for (0..out.draw.cmd_len) |i| switch (out.draw.command(@intCast(i))) {
+        .text => |k| after_text = k == 1,
+        .quads => {
+            underlined = underlined or after_text;
+            after_text = false;
+        },
+        else => after_text = false,
+    };
+    try testing.expect(underlined);
 }
 
 test "endText consumes real paragraph metrics in an ordinary frame" {
