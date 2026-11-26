@@ -122,11 +122,13 @@ pub fn landmark(comptime role: Landmark, comptime style: Style, comptime childre
     return if (s.dir == .x) row(s, children) else col(s, children);
 }
 
-/// A document heading whose accessibility name is its displayed literal or bound text.
-/// The level is exported on the same row as the text, independent of its visual size.
+/// A document heading whose accessibility name is its displayed literal, bound or formatted
+/// text: `heading(1, "Mixer")`, `heading(2, .title)` or `heading(1, text("Gain {.1} dB",
+/// .{.g}))`. The level is exported on the same row as the text, independent of its visual size.
 pub fn heading(comptime level: u8, comptime caption: anytype) Spec {
     if (level < 1 or level > 6) @compileError("a heading level must be between 1 and 6");
-    var s = label(caption);
+    var s = if (@TypeOf(caption) == Spec) caption else label(caption);
+    if (s.kind != .label) @compileError("heading: the caption is a literal, a field or a `text` label");
     s.style.role = .heading;
     s.style.value = @floatFromInt(level);
     return s;
@@ -589,4 +591,9 @@ test "document semantics: landmark roles share existing row kinds and headings a
     try std.testing.expectEqual(6, h6.style.value);
     try std.testing.expectEqualStrings("Start", h1.text.?);
     try std.testing.expectEqualStrings("title", h6.bind.?);
+    const g = comptime heading(2, text("Gain {.1} dB", .{.g}));
+    try std.testing.expectEqual(types.Role.heading, g.style.role);
+    try std.testing.expectEqual(2, g.style.value);
+    try std.testing.expectEqualStrings("Gain {.1} dB", g.format.?.text);
+    try std.testing.expectEqualStrings("g", g.format.?.args[0]);
 }

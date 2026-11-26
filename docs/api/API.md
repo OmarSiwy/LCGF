@@ -1019,7 +1019,7 @@ Spec: a UI declared as a compile-time value.
 - `fn row(comptime style: Style, comptime children: anytype) Spec`: A horizontal container; as `col`, with `dir` always `.x`.
 - `fn label(comptime caption: anytype) Spec`: A literal caption (`label("Save")`) or a bound string field (`label(.title)`).
 - `fn landmark(comptime role: Landmark, comptime style: Style, comptime children: anytype) Spec`: Preserve the layout and children while exposing this row's document role.
-- `fn heading(comptime level: u8, comptime caption: anytype) Spec`: A document heading whose accessibility name is its displayed literal or bound text.
+- `fn heading(comptime level: u8, comptime caption: anytype) Spec`: A document heading whose accessibility name is its displayed literal, bound or formatted text: `heading(1, "Mixer")`, `heading(2, .title)` or `heading(1, text("Gain {.1} dB", .{.g}))`.
 - `fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32`: Frame string bytes for all declared literals, plus the caller's budget when a bound label or a widget hook can append runtime text.
 - `fn labelError(comptime s: Spec) ?[]const u8`: Check the two sources before emitting a label.
 - `fn labelBytes(comptime s: Spec, state: anytype) []const u8`: Resolve a label's source at compile time.
@@ -1033,7 +1033,7 @@ Spec: a UI declared as a compile-time value.
 - `fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec`: A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which the first `count` are live, `count` being the run-time value of the integer state field bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`.
 - `fn virtualList(comptime count: @EnumLiteral(), comptime scroll: @EnumLiteral(), comptime visible: u32, comptime height: f32, comptime template: Spec) Spec`: A clipped vertical list of `visible` fixed-height items.
 - `fn when(comptime condition: @EnumLiteral(), comptime subtree: Spec) Spec`: `subtree`, live only while the bool state field `condition` is true: `when(.advanced, col(...))`.
-- `fn choice(comptime selector: @EnumLiteral(), comptime style: Style, comptime alternatives: anytype) Spec`: A container (laid out by `style`) of `alternatives`, of which only the one at the index of the state field `selector` (an enum, by its value, or an integer) is live: `choice(.mode, .{}, .{ compact, detailed })`.
+- `fn choice(comptime selector: @EnumLiteral(), comptime style: Style, comptime alternatives: anytype) Spec`: A container (laid out by `style`) of `alternatives`, of which only the one at the index of the state field `selector` (an enum, by its value, an integer, or a bool, false selecting the first) is live: `choice(.mode, .{}, .{ compact, detailed })`, or an if/else as `choice(.on, .{}, .{ otherwise, then })`.
 
 ### `Spec` (struct)
 One node of the declaration.
