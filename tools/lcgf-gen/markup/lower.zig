@@ -514,8 +514,7 @@ pub const Lowerer = struct {
         };
         // Every query is checked here, whether or not it matches anything (stateRules).
         for (l.c.conds.items) |cnd| if (cnd.kind == .media) {
-            var out: Conditions = .{};
-            _ = l.mediaQuery(cnd, &out);
+            _ = l.mediaList(cnd);
         };
         for (l.c.keyframes.items) |kf| _ = l.refused("property", "animation", "", kf.loc);
     }
@@ -599,53 +598,93 @@ pub const Lowerer = struct {
         }
     }
 
-    /// The environment conditions of `@media` `cond` and those around it; null after an error.
-    fn mediaConditions(l: *Lowerer, cond: u32) ?Conditions {
-        var out: Conditions = .{};
+    /// The alternatives of `@media` `cond` and the queries around it: the rule holds while
+    /// one of them does (none: it never does); null after an error.
+    fn mediaConditions(l: *Lowerer, cond: u32) ?[]const Conditions {
+        var alts: []const Conditions = ok(l.arena.dupe(Conditions, &.{.{}}));
         var x = cond;
         while (x != none) : (x = l.c.conds.items[x].parent) {
-            if (l.c.conds.items[x].kind == .media and !l.mediaQuery(l.c.conds.items[x], &out)) return null;
+            const cnd = l.c.conds.items[x];
+            if (cnd.kind != .media) continue;
+            const list = l.mediaList(cnd) orelse return null;
+            var out: std.ArrayList(Conditions) = .empty;
+            for (alts) |a| for (list) |q| if (both(a, q)) |m| ok(out.append(l.arena, m));
+            alts = out.items;
         }
-        return out;
+        return alts;
     }
 
-    /// One media query into `out`: `[only] screen|all and (feature)…`. Viewport ranges in px,
-    /// `orientation`, `prefers-color-scheme`, `prefers-reduced-motion`, `prefers-contrast`;
-    /// false after an error.
-    fn mediaQuery(l: *Lowerer, cnd: css.Cond, out: *Conditions) bool {
+    /// A media query list: its queries, each as the alternatives it holds under.
+    fn mediaList(l: *Lowerer, cnd: css.Cond) ?[]const Conditions {
+        const ty = l.c.toks.items(.type);
+        var out: std.ArrayList(Conditions) = .empty;
+        var t = cnd.first;
+        while (t < cnd.end) {
+            var e = t;
+            while (e < cnd.end and ty[e] != .comma) e = if (ty[e] == .l_parenthesis or ty[e] == .function) values.closeOf(l.c, e, cnd.end) else e + 1;
+            ok(out.appendSlice(l.arena, l.mediaQuery(t, e) orelse return null));
+            t = e + 1;
+        }
+        return out.items;
+    }
+
+    /// One query, `[not|only] [all|screen|print] [and] (feature) and …`, as alternatives:
+    /// one Conditions, none for a query that never holds (`print`), or under `not` one per
+    /// feature, each negated (De Morgan). Viewport ranges in px, orientation, hover, pointer,
+    /// prefers-color-scheme, prefers-reduced-motion, prefers-contrast.
+    fn mediaQuery(l: *Lowerer, a: u32, b: u32) ?[]const Conditions {
         const ty = l.c.toks.items(.type);
         const str = l.c.toks.items(.str);
-        var t = cnd.first;
+        var negated = false;
+        var screen = true;
+        var features: std.ArrayList(Conditions) = .empty;
+        var t = a;
         var after_feature = false;
-        while (t < cnd.end) {
+        var first_word = true;
+        while (t < b) {
             if (ty[t] == .whitespace) {
                 t += 1;
                 continue;
             }
-            if (ty[t] == .comma) {
-                l.ds.err(l.c.tokLoc(t), "a media query list is not lowered; write one @media per query", .{});
-                return false;
-            }
             if (ty[t] == .ident) {
                 const w = str[t];
-                if (css.eq(w, "and") or css.eq(w, "only") or css.eq(w, "screen") or css.eq(w, "all")) {
-                    t += 1;
+                if (first_word and css.eq(w, "not")) {
+                    negated = true;
+                } else if (css.eq(w, "and") or (first_word and css.eq(w, "only"))) {
                     after_feature = false;
-                    continue;
+                } else if (css.eq(w, "screen") or css.eq(w, "all")) {} else if (css.eq(w, "print")) {
+                    screen = false;
+                } else {
+                    l.ds.err(l.c.tokLoc(t), "@media {s} is not lowered; a query is [not|only] all, screen or print, then (feature) joined by and", .{w});
+                    return null;
                 }
-                l.ds.err(l.c.tokLoc(t), "@media {s} is not lowered; a query is [only] screen or all, then (feature) joined by and", .{w});
-                return false;
+                first_word = false;
+                t += 1;
+                continue;
             }
+            first_word = false;
             if (ty[t] != .l_parenthesis or after_feature) {
                 l.ds.err(l.c.tokLoc(t), "expected 'and' and a media feature in parentheses", .{});
-                return false;
+                return null;
             }
-            const close = values.closeOf(l.c, t, cnd.end);
-            if (!l.mediaFeature(t + 1, close - 1, out)) return false;
+            const close = values.closeOf(l.c, t, b);
+            var f: Conditions = .{};
+            if (!l.mediaFeature(t + 1, close - 1, &f)) return null;
+            ok(features.append(l.arena, f));
             t = close;
             after_feature = true;
         }
-        return true;
+        if (!negated) {
+            if (!screen) return &.{};
+            var all: Conditions = .{};
+            for (features.items) |f| all = both(all, f) orelse return &.{};
+            return ok(l.arena.dupe(Conditions, &.{all}));
+        }
+        // not (T and f1 and …) holds where T fails (never on a screen) or any feature fails.
+        if (!screen) return ok(l.arena.dupe(Conditions, &.{.{}}));
+        const out = ok(l.arena.alloc(Conditions, features.items.len));
+        for (features.items, out) |f, *o| o.* = negate(f);
+        return out;
     }
 
     fn mediaFeature(l: *Lowerer, a: u32, b: u32, out: *Conditions) bool {
@@ -669,7 +708,7 @@ pub const Lowerer = struct {
             return true;
         };
         const kw = if (value_t) |vt| values.ident(l.c, vt) orelse "" else "";
-        inline for (.{ .{ "orientation", "portrait", "portrait", "landscape" }, .{ "prefers-color-scheme", "dark", "dark", "light" }, .{ "prefers-reduced-motion", "reduced_motion", "reduce", "no-preference" }, .{ "prefers-contrast", "high_contrast", "more", "no-preference" } }) |f| if (css.eq(name, f[0])) {
+        inline for (.{ .{ "hover", "hover", "hover", "none" }, .{ "pointer", "coarse_pointer", "coarse", "fine" }, .{ "orientation", "portrait", "portrait", "landscape" }, .{ "prefers-color-scheme", "dark", "dark", "light" }, .{ "prefers-reduced-motion", "reduced_motion", "reduce", "no-preference" }, .{ "prefers-contrast", "high_contrast", "more", "no-preference" } }) |f| if (css.eq(name, f[0])) {
             if (css.eq(kw, f[2]) or css.eq(kw, f[3])) {
                 @field(out, f[1]) = css.eq(kw, f[2]);
                 return true;
@@ -677,7 +716,7 @@ pub const Lowerer = struct {
             l.ds.err(at, "{s} takes {s} or {s}", .{ name, f[2], f[3] });
             return false;
         };
-        l.ds.err(at, "media feature '{s}' is not lowered; use min-/max-width, min-/max-height, orientation, prefers-color-scheme, prefers-reduced-motion or prefers-contrast", .{name});
+        l.ds.err(at, "media feature '{s}' is not lowered; use min-/max-width, min-/max-height, orientation, hover, pointer, prefers-color-scheme, prefers-reduced-motion or prefers-contrast", .{name});
         return false;
     }
 
@@ -747,14 +786,21 @@ pub const Lowerer = struct {
         const saved = ok(l.arena.dupe(cascade.Entry, row_));
         defer @memcpy(row_, saved);
         var last_sel: u32 = none;
+        // The rules of the CSS rule being read: one per alternative of its queries.
+        var group: usize = rules.items.len;
         for (entries.items) |d| {
             const st = l.subjectStates(d.sel, d.cond != none) orelse continue;
-            const when = if (d.cond == none) Conditions{} else l.mediaConditions(d.cond) orelse continue;
+            const alts = if (d.cond == none) ok(l.arena.dupe(Conditions, &.{.{}})) else l.mediaConditions(d.cond) orelse continue;
+            if (d.sel != last_sel) {
+                group = rules.items.len;
+                for (alts) |when| ok(rules.append(l.arena, .{ .require = st.require, .forbid = st.forbid, .when = when }));
+            }
+            last_sel = d.sel;
+            if (group == rules.items.len) continue; // a query that never holds
             // The declaration alone in the row, so the value readers see only it.
             @memset(row_, .{});
             cascade.apply(l.k, l.k.table, l.c, n, d.decl, d.key);
-            var r: ir.RecipeRule = if (d.sel == last_sel) rules.pop().? else .{ .require = st.require, .forbid = st.forbid, .when = when };
-            last_sel = d.sel;
+            var r = rules.items[group];
             var params: []const u8 = "";
             var margin: ?[4]f32 = null;
             const box = l.boxStyle(n, .{}, l.parentDir(nodes.items(.parent)[x]), &params, &margin);
@@ -792,13 +838,14 @@ pub const Lowerer = struct {
                     .color => if (is_box)
                         l.ds.err(at, "color under a state pseudo-class or @media on a box would restyle the text inside it; set it on the text's own element", .{})
                     else if (l.colorOf(n, p)) |c| put(&set, l.arena, .text_color, .{ .color = c }),
+                    .@"margin-left", .@"margin-top", .@"margin-right", .@"margin-bottom" => {}, // reported below
                     .@"box-shadow" => l.ds.err(at, "box-shadow is drawn by a node of its own; it is not lowered under a state pseudo-class or @media yet", .{}),
                     else => l.ds.err(at, "{s} under a state pseudo-class or @media is not lowered; such a rule sets colours, border, radius, opacity, padding, gap, size and transform", .{@tagName(p)}),
                 }
             }
             if (margin != null) l.ds.err(at, "a margin under a state pseudo-class or @media is not lowered", .{});
             r.set = set.items;
-            ok(rules.append(l.arena, r));
+            for (rules.items[group..]) |*g| g.set = r.set;
         }
         nodes.items(.recipe)[x] = rules.items;
     }
@@ -4775,6 +4822,37 @@ const counter_styles = blk: {
         .{ "lower-greek", .{ .system = .{ .alphabetic = &greek } }, "lcgf.text_counters.Style{ .system = .{ .alphabetic = &.{ \"\\u{3B1}\", \"\\u{3B2}\", \"\\u{3B3}\", \"\\u{3B4}\", \"\\u{3B5}\", \"\\u{3B6}\", \"\\u{3B7}\", \"\\u{3B8}\", \"\\u{3B9}\", \"\\u{3BA}\", \"\\u{3BB}\", \"\\u{3BC}\", \"\\u{3BD}\", \"\\u{3BE}\", \"\\u{3BF}\", \"\\u{3C0}\", \"\\u{3C1}\", \"\\u{3C3}\", \"\\u{3C4}\", \"\\u{3C5}\", \"\\u{3C6}\", \"\\u{3C7}\", \"\\u{3C8}\", \"\\u{3C9}\" } } }" },
     };
 };
+
+/// Conditions holding where both `a` and `b` do, or null where none could.
+fn both(a: Conditions, b: Conditions) ?Conditions {
+    var out = a;
+    inline for (.{ "width", "height", "scale" }) |f| {
+        @field(out, f).min = @max(@field(a, f).min, @field(b, f).min);
+        @field(out, f).max = @min(@field(a, f).max, @field(b, f).max);
+        if (@field(out, f).min > @field(out, f).max) return null;
+    }
+    inline for (.{ "dark", "high_contrast", "reduced_motion", "coarse_pointer", "hover", "portrait" }) |f| if (@field(b, f)) |v| {
+        if (@field(a, f)) |w| if (w != v) return null;
+        @field(out, f) = v;
+    };
+    return out;
+}
+
+/// The negation of a one-feature Conditions (`mediaFeature`'s): the complementary range or
+/// the other value.
+fn negate(f: Conditions) Conditions {
+    var out: Conditions = .{};
+    inline for (.{ "width", "height" }) |name| {
+        const r = @field(f, name);
+        if (r.min > 0) @field(out, name).max = std.math.nextAfter(f32, r.min, -std.math.inf(f32));
+        if (r.max < std.math.inf(f32)) @field(out, name).min = std.math.nextAfter(f32, r.max, std.math.inf(f32));
+    }
+    inline for (.{ "dark", "high_contrast", "reduced_motion", "coarse_pointer", "hover", "portrait" }) |name| if (@field(f, name)) |v| {
+        @field(out, name) = !v;
+    };
+    return out;
+}
+
 /// `set` with `property` taking `value`, kept in `style.Property` order: a later declaration
 /// of the same rule replaces an earlier one.
 fn put(set: *std.ArrayList(ir.Set), arena: std.mem.Allocator, property: lcgf.style.Property, value: lcgf.style.Value) void {

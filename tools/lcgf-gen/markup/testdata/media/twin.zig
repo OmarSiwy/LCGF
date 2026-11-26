@@ -1,7 +1,9 @@
 //! media, written by hand: `@media` around a rule that styles a recipe widget is the rule's
 //! environment conditions (`Rule.when`), matched against the viewport each frame. Nested
 //! queries combine; `screen` and `and` add nothing; `orientation: portrait` holds on a
-//! viewport at least as tall as it is wide.
+//! viewport at least as tall as it is wide. A query list is one rule per query; `not` is
+//! one rule per negated feature; `print` never holds and `not print` always does; hover and
+//! pointer read the input's primary pointer.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -17,6 +19,7 @@ pub const theme: w.Theme = .{};
 const wide: Color = .rgb(58, 60, 70);
 const narrow: Color = .rgb(192, 80, 48);
 const gold: Color = .rgb(255, 208, 64);
+const green: Color = .rgb(0, 255, 0);
 
 const recipe_tokens: style.tokens.Table = .{ .scopes = &.{.{ .entries = &recipes.model.tokenRows(.{
     .palette = .{ theme.text, theme.panel, theme.control, theme.control_hot, theme.control_held, theme.accent },
@@ -29,7 +32,12 @@ const recipe_go: recipes.Recipe = .{ .parts = recipes.model.button.parts, .rules
     .{ .part = style.Parts.root, .declarations = &.{style.set(.fill, wide)} },
     .{ .part = style.Parts.root, .when = .{ .width = .{ .max = 500 } }, .declarations = &.{style.set(.fill, narrow)} },
     .{ .part = style.Parts.root, .when = .{ .portrait = true }, .declarations = &.{ style.set(.border_color, .rgb(255, 255, 255)), style.set(.border_width, 1) } },
+    .{ .part = style.Parts.root, .when = .{ .width = .{ .min = 2000 } }, .declarations = &.{style.set(.opacity, 0.5)} },
+    .{ .part = style.Parts.root, .when = .{ .height = .{ .max = 400 } }, .declarations = &.{style.set(.opacity, 0.5)} },
+    .{ .part = style.Parts.root, .when = .{ .width = .{ .max = 599.99994 } }, .declarations = &.{style.set(.border_color, green)} },
+    .{ .part = style.Parts.root, .declarations = &.{ style.set(.padding_left, 6), style.set(.padding_top, 6), style.set(.padding_right, 6), style.set(.padding_bottom, 6) } },
     .{ .part = style.Parts.root, .require = .{ .hovered = true }, .when = .{ .width = .{ .min = 501 }, .height = .{ .min = 300 } }, .declarations = &.{style.set(.text_color, gold)} },
+    .{ .part = style.Parts.root, .require = .{ .held = true }, .when = .{ .coarse_pointer = false, .hover = true }, .declarations = &.{style.set(.opacity, 0.9)} },
 }) };
 
 const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
@@ -61,6 +69,8 @@ pub const replay =
     \\frame
     \\pointer 400 300
     \\frame
+    \\viewport 800 300
+    \\frame
 ;
 
 pub fn Handlers(comptime Ui: type) type {
@@ -89,5 +99,7 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     out = p.frame(h, &in);
     try std.testing.expectEqual(narrow.bitsOf(), out.tree.c.look[go].fill);
     try std.testing.expect(textColor(out.draw) != gold.bitsOf());
-    try std.testing.expectEqual(@as(u32, 0xffffffff), out.tree.c.look[go].border_color);
+    // `not all and (min-width: 600px)` comes after the portrait rule and wins below 600.
+    try std.testing.expectEqual(green.bitsOf(), out.tree.c.look[go].border_color);
+    try std.testing.expect(out.tree.c.look[go].fill == narrow.bitsOf());
 }

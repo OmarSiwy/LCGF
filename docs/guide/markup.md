@@ -416,9 +416,12 @@ is over a widget inside the box, the widget has it, not the box.
 
 `@media` around a rule that styles such a widget makes it one too: the rule's recipe rule
 gets environment conditions (`Rule.when`) that the recipe matches every frame, so resizing
-the window restyles it. A query is `[only] screen` or `all` and features joined by `and`:
-`min-`/`max-width`, `min-`/`max-height` (px or em), `orientation`, `prefers-color-scheme`,
-`prefers-reduced-motion` and `prefers-contrast`; nested queries combine. `@media` on other
+the window restyles it. A query is `[not|only] all`, `screen` or `print` and features joined
+by `and`: `min-`/`max-width`, `min-`/`max-height` (px or em), `orientation`, `hover`,
+`pointer` (`fine` or `coarse`, from `Input.primary_pointer`; neither matches while the shell
+leaves it null), `prefers-color-scheme`, `prefers-reduced-motion` and `prefers-contrast`.
+A list is one recipe rule per query, `not` one per negated feature, `print` never holds, and
+nested queries combine. `@media` on other
 boxes waits for style variants (engine spec F3) and is an error.
 
 `transition` is honoured where nothing restyles the box at run time: a container or text
