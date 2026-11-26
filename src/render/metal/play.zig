@@ -1,7 +1,7 @@
 //! Draws every render conformance scene (src/render/conformance.zig) with the Metal back end
 //! and writes each as a PNG, for comparison with the golden images (ci/jobs/metal.sh, macOS):
 //!
-//!     metal-play OUT      ->  OUT/<scene>.png
+//!     metal-play OUT      ->  OUT/<scene>.png, OUT/canvas.png
 //!
 //! The host side mirrors src/render/conformance/render.py, which drew the goldens: an RGBA8
 //! target cleared to black, nearest sampling, scale 1, the same stand-in glyph atlas. Custom
@@ -23,6 +23,7 @@ const gpu = metal.gpu;
 const Gradient = lcgf.gpu_gradient.Gradient(gpu, @import("gpu_shaders").gradient);
 
 var st: conformance.Storage = .{};
+var canvas: conformance.CanvasStorage = undefined;
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
@@ -94,6 +95,33 @@ pub fn main(init: std.process.Init) !void {
         var name: [64]u8 = undefined;
         try out.writeFile(io, .{ .sub_path = try std.fmt.bufPrint(&name, "{s}.png", .{s.name}), .data = try png(gpa, w, h, px) });
     }
+
+    // The canvas scene (golden tools/golden/ref/draw/canvas.png), by a renderer with the canvas
+    // pipeline.
+    const sc = conformance.canvas_scene;
+    canvas.load();
+    var cgfx = try metal.Renderer.init(dev.device, .{ .format = .rgba8_unorm, .frames_in_flight = 1, .canvas_rows = sc.rows, .canvas_verts = sc.verts });
+    defer cgfx.deinit();
+    const catlas = cgfx.addTexture(atlas, null);
+    const w: u32 = @intFromFloat(sc.viewport[0]);
+    const h: u32 = @intFromFloat(sc.viewport[1]);
+    const target = try renderTarget(dev.device, w, h);
+    defer objc.release(target);
+    cgfx.prepare({}, &canvas.draw, .{ .texture = catlas }, sc.viewport, 1);
+    const cmd = objc.msg(Id, dev.queue, "commandBuffer", .{});
+    const pass = present.beginPass(cmd, target, .{ 13.0 / 255.0, 13.0 / 255.0, 15.0 / 255.0, 1 });
+    iface.render(&cgfx, pass, &canvas.draw);
+    present.endPass(pass);
+    const blit = objc.msg(Id, cmd, "blitCommandEncoder", .{});
+    objc.msg(void, blit, "synchronizeResource:", .{target});
+    objc.msg(void, blit, "endEncoding", .{});
+    objc.msg(void, cmd, "commit", .{});
+    objc.msg(void, cmd, "waitUntilCompleted", .{});
+    if (objc.msg(U, cmd, "status", .{}) != command_buffer_completed) return error.GpuError;
+    const px = try gpa.alloc(u8, @as(usize, w) * h * 4);
+    const region: mtl.Region = .{ .size = .{ .width = w, .height = h } };
+    objc.msg(void, target, "getBytes:bytesPerRow:fromRegion:mipmapLevel:", .{ px.ptr, @as(U, w * 4), region, @as(U, 0) });
+    try out.writeFile(io, .{ .sub_path = "canvas.png", .data = try png(gpa, w, h, px) });
 }
 
 /// MTLCommandBufferStatusCompleted.

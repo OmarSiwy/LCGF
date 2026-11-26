@@ -16,6 +16,7 @@ if [ "$(uname)" = Darwin ]; then
     for ref in src/render/conformance/*.png; do
         python3 tools/golden/golden.py "$out/$(basename "$ref")" "$ref"
     done
+    python3 tools/golden/golden.py "$out/canvas.png" tools/golden/ref/draw/canvas.png
 else
     echo "metal: not macOS, conformance pixels not drawn"
 fi

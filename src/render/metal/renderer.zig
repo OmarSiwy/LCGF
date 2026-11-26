@@ -31,6 +31,7 @@ const draw_list = lcgf.draw_list;
 const quad_shader = lcgf.quad_shader;
 const iface = lcgf.render_iface;
 const DrawList = draw_list.DrawList;
+const gpu = @import("gpu.zig");
 const Id = objc.Id;
 const U = objc.NSUInteger;
 
@@ -46,9 +47,20 @@ pub const Desc = struct {
     max_glyphs: u32 = 32 * 1024,
     /// Frames the GPU may still be reading while the CPU prepares the next (GPUI uses 3).
     frames_in_flight: u32 = 3,
+    /// Canvas instance rows and polygon vertices kept on the GPU (`frames_in_flight` copies of
+    /// 32 and 8 bytes each, shared memory); 0 rows: no canvas pipeline, and canvases draw
+    /// nothing.
+    canvas_rows: u32 = 0,
+    canvas_verts: u32 = 0,
 };
 
-pub const Error = pipeline.Error || texture.Error || error{BufferFailed};
+/// canvas.wgsl as MSL, for the canvas pipeline (src/render/gpu/canvas.zig).
+pub const Canvas = lcgf.gpu_canvas.Canvas(gpu, struct {
+    pub const wgsl = lcgf.canvas_shader.wgsl;
+    pub const msl = @embedFile("canvas_metal");
+});
+
+pub const Error = pipeline.Error || texture.Error || gpu.Error || error{BufferFailed};
 
 /// The renderer over Metal's encoder.
 pub const Renderer = RendererOver(mtl.RenderEncoder);
@@ -58,6 +70,8 @@ pub const Renderer = RendererOver(mtl.RenderEncoder);
 pub fn RendererOver(comptime Encoder: type) type {
     return struct {
         const Self = @This();
+        /// The canvas pipeline draws through Metal's own encoder only, not a test's recorder.
+        const canvases = Encoder == mtl.RenderEncoder;
 
         device: Id,
         desc: Desc,
@@ -80,6 +94,8 @@ pub fn RendererOver(comptime Encoder: type) type {
         scale: f32 = 1,
         globals: Globals = .{ .viewport = .{ 0, 0 }, .scale = 1 },
         glyphs: Glyphs = .{},
+        canvas: if (canvases) ?Canvas else void = if (canvases) null else {},
+        list: ?*const DrawList = null,
 
         pub const max_textures = 64;
         /// Metal uploads by writing shared memory: nothing to pass.
@@ -100,10 +116,17 @@ pub fn RendererOver(comptime Encoder: type) type {
             r.white = try texture.rgba8(device, 1, 1, &.{ 255, 255, 255, 255 });
             r.sampler = try texture.sampler(device, .nearest);
             _ = r.addTexture(r.white.?, null); // Texture.white
+            if (canvases and desc.canvas_rows > 0) {
+                r.canvas = @as(Canvas, undefined);
+                const format: gpu.TextureFormat = if (desc.format == .rgba8_unorm) .rgba8_unorm else .bgra8_unorm;
+                try r.canvas.?.init(.wrap(device), .{ .format = format, .samples = @intCast(desc.sample_count) }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .frames = desc.frames_in_flight });
+            }
             return r;
         }
 
         pub fn deinit(r: *Self) void {
+            if (canvases) if (r.canvas) |*cv| cv.deinit(.wrap(r.device));
+            if (canvases) r.canvas = null;
             for (r.pipelines[0..r.material_count]) |p| objc.release(p);
             r.material_count = 0;
             r.texture_count = 0;
@@ -149,6 +172,7 @@ pub fn RendererOver(comptime Encoder: type) type {
         /// draws will pass. Quads past `max_quads` (glyphs past `max_glyphs`) are dropped, as
         /// the other back ends do.
         pub fn prepare(r: *Self, _: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
+            const slot = r.next;
             r.base = r.next * r.frameBytes();
             r.next = (r.next + 1) % r.desc.frames_in_flight;
             const quad_bytes = draw.quadBytes();
@@ -163,6 +187,21 @@ pub fn RendererOver(comptime Encoder: type) type {
             // The layer's own rounding (device.zig `Layer.resize`), so viewport and scissor match
             // the drawable after a resize or a scale change.
             r.extent = dev_mod.drawableSize(viewport, scale);
+            r.list = draw;
+            if (canvases) if (r.canvas) |*cv| {
+                const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+                cv.prepare(.wrap(r.device), null, draw, slot, scale, r.extent, .{ .texture = r.textures[atlas], .width = 0, .height = 0 }, atlas);
+            };
+        }
+
+        /// Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the
+        /// canvas pipeline, scissored to the node. Needs `Desc.canvas_rows`; the host calls
+        /// `Instances.clearDirty` after `prepare` (src/render/gpu/canvas.zig).
+        pub fn drawCanvas(r: *const Self, pass: Pass, k: u32) void {
+            if (!canvases) return;
+            const cv = if (r.canvas) |*cv| cv else return;
+            var p = gpu.RenderPass.wrap(.wrap(r.device), pass.id, r.extent[0], r.extent[1]);
+            cv.draw(&p, r.list.?, k);
         }
 
         fn frameBytes(r: *const Self) usize {
