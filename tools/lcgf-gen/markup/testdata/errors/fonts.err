@@ -1,0 +1,15 @@
+fonts.html:3:37: error: remote stylesheets and images are not fetched; vendor the file
+  @font-face { font-family: Remote; src: url("https://example.com/a.ttf"); }
+                                    ^
+fonts.html:4:34: error: src: local() names a system font; vendor the file and write url("file.ttf")
+  @font-face { font-family: Sys; src: local("Arial"); }
+                                 ^
+fonts.html:6:58: error: font-weight: '1200' is not a supported value
+  p { font-family: Missing, "Also Missing"; font-weight: 1200; }
+                                                         ^
+fonts.html:6:7: error: no @font-face for Missing, "Also Missing" (400 normal); add one or end the list with a generic family
+  p { font-family: Missing, "Also Missing"; font-weight: 1200; }
+      ^
+fonts.html:5:3: error: cannot read the font file ./gone.ttf: FileNotFound
+  @font-face { font-family: Gone; src: url("gone.ttf"); }
+  ^

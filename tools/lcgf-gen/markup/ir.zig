@@ -216,6 +216,11 @@ pub const Page = struct {
     tokens: std.ArrayList(Token) = .empty,
     item_fields: std.ArrayList(ItemField) = .empty,
     theme: Theme = .{},
+    /// The font table from `@font-face`: row k is `Font` k + 1 (0 is the theme's font). Paths
+    /// are relative to the page's directory.
+    fonts: std.ArrayList(lcgf.font_match.Face) = .empty,
+    /// `@font-face` rules' locations, one per row of `fonts`.
+    font_locs: std.ArrayList(diag.Loc) = .empty,
     /// `<html lcgf-frontend="runtime">`: the page asks for the runtime frontend.
     runtime: bool = false,
 };

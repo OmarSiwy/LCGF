@@ -57,6 +57,7 @@ pub const Emit = struct {
     fn value(e: *Emit, v: anytype) void {
         const T = @TypeOf(v);
         if (T == types.Color) return e.color(v);
+        if (T == types.Font) return if (v == .default) e.write(".default") else e.print("@fromBackingInt({d})", .{@backingInt(v)});
         if (T == types.Size) return switch (v.kind) {
             .fit => e.write(".fit"),
             .px => e.print(".px({d})", .{v.v}),
@@ -540,6 +541,18 @@ pub const Emit = struct {
         e.write("pub const theme: w.Theme = ");
         e.structure(page.theme, ir.Theme{});
         e.write(";\n\n");
+        if (page.fonts.items.len > 0) {
+            e.write("/// The font table from @font-face: the host loads row k's file as font `entry.font`.\n");
+            e.write("pub const fonts = [_]lcgf.font_match.Face{\n");
+            for (page.fonts.items) |f| {
+                e.write("    .{ .entry = .{ .family = ");
+                e.string(f.entry.family);
+                e.print(", .font = {d}, .weight = {d}, .style = .{s} }}, .path = ", .{ f.entry.font, f.entry.weight, @tagName(f.entry.style) });
+                e.string(f.path);
+                e.write(" },\n");
+            }
+            e.write("};\n\n");
+        }
         e.tokensDecl();
         e.write(body.items);
         if (e.runtime) {

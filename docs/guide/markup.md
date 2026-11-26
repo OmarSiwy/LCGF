@@ -200,6 +200,21 @@ Layout is flexbox on LCGF's passes. Block flow is a column, and these deviations
 Lengths are folded to px: `em` and `rem` from the resolved font size, `in`, `cm`, `mm`, `pt` and
 `pc` at 96 px per inch.
 
+### Fonts
+
+Each `@font-face` is one row of the page's font table, `pub const fonts` (`lcgf.font_match.Face`):
+family, weight, style and a vendored file, `src: url("inter-bold.ttf")`, relative to the sheet
+and written relative to the page. Remote and `local()` sources are errors, and the file is a
+depfile entry. Row k is font k + 1; font 0 is the theme's.
+
+`font-family`, `font-weight` and `font-style` are resolved at build time with
+`font_match.find`, the CSS Fonts 4 order, into `TextStyle.font`. The first family in the list
+that has a face wins; a generic family (`sans-serif`, `monospace`, …) is the theme's font, and a
+list where neither is found is an error. The UA sheet makes `<b>` and `<strong>` bold, `<i>` and
+`<em>` italic and `<code>` and `<pre>` monospace, so a page without `@font-face` is unchanged.
+The host loads `fonts[k].path` as the shaper or atlas of font `fonts[k].entry.font`
+(`testdata/fonts`).
+
 ## What is not lowered
 
 Anything the compiler does not lower is an error at its source line, in GNU format, at most 20

@@ -51,6 +51,8 @@ pub const Lowerer = struct {
     /// IR nodes drawn above the page (a select's list, a dialog), moved last into a root of
     /// their own by `hoistOverlays`, so they float from the viewport's origin.
     overlays: std.ArrayList(u32) = .empty,
+    /// Per document node: its computed font-family list, weight and style (inherited).
+    font: []FontState = &.{},
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -376,6 +378,11 @@ pub const Lowerer = struct {
         for (0..d.len) |i| {
             const name = d.items(.name)[i];
             if (std.mem.startsWith(u8, name, "--")) continue;
+            // `@font-face` descriptors are read by fontFaces.
+            const descriptor = for (l.c.fonts.items) |f| {
+                if (i >= f.decl_first and i < f.decl_first + f.decl_count) break true;
+            } else false;
+            if (descriptor) continue;
             if (l.refused("property", name, "", d.items(.loc)[i])) continue;
             const known = std.meta.stringToEnum(Prop, name) != null or values.shorthand(name) != null;
             if (!known) l.ds.err(d.items(.loc)[i], "unknown CSS property '{s}'", .{name});
@@ -409,6 +416,7 @@ pub const Lowerer = struct {
         const parents = doc.nodes.items(.parent);
         if (!doc.doctype or doc.quirks) l.ds.err(.{ .file = doc.file, .off = 0 }, "{s}", .{manifest.refusal("element", "!doctype", "").?});
         l.theme();
+        l.fontFaces();
         const root_text = lcgf.widgets_label.labelText(&l.page.theme);
         l.root_px = root_text.px;
         var body: u32 = none;
@@ -422,6 +430,7 @@ pub const Lowerer = struct {
             }
             l.text[i] = if (p == none) root_text else l.text[p];
             l.text_tokens[i] = if (p == none) .{} else l.text_tokens[p];
+            l.font[i] = if (p == none) .{} else l.font[p];
             l.current = i;
             if (kinds[i] == .text) {
                 l.textNode(i);
@@ -760,10 +769,140 @@ pub const Lowerer = struct {
             ts.color = col;
             l.text_tokens[n].color = if (l.last_token != none) l.tokenOf(l.last_token, .color) else none;
         }
+        l.computeFont(n, &ts);
         if (l.keyword(n, .@"white-space")) |ws| {
             if (css.eq(ws, "normal") or css.eq(ws, "pre-wrap") or css.eq(ws, "pre-line")) ts.wrap = true else if (css.eq(ws, "nowrap") or css.eq(ws, "pre")) ts.wrap = false else l.badValue(l.declared(n, .@"white-space").?.first, .@"white-space", l.declared(n, .@"white-space").?.end);
         }
         l.text[n] = ts;
+    }
+
+    /// `@font-face` rules to the page's font table: family, weight, style and a local file.
+    fn fontFaces(l: *Lowerer) void {
+        const c = l.c;
+        const d = c.decls.slice();
+        for (c.fonts.items) |face| {
+            var family: []const u8 = "";
+            var path: []const u8 = "";
+            var weight: f32 = 400;
+            var style: lcgf.font_match.Style = .normal;
+            var src_seen = false;
+            for (face.decl_first..face.decl_first + face.decl_count) |i| {
+                const name = d.items(.name)[i];
+                const a = d.items(.first)[i];
+                const b = d.items(.end)[i];
+                if (css.eq(name, "font-family")) {
+                    family = l.familyAt(a, b) orelse "";
+                } else if (css.eq(name, "src")) {
+                    path = l.fontSrc(a, b, d.items(.loc)[i]) orelse "";
+                    src_seen = true;
+                } else if (css.eq(name, "font-weight")) {
+                    weight = weightOf(c, a, b, 400) orelse blk: {
+                        l.ds.err(d.items(.loc)[i], "@font-face font-weight takes one weight: normal, bold or 1 to 1000", .{});
+                        break :blk 400;
+                    };
+                } else if (css.eq(name, "font-style")) {
+                    style = styleOf(c, a) orelse blk: {
+                        l.ds.err(d.items(.loc)[i], "@font-face font-style takes normal, italic or oblique", .{});
+                        break :blk .normal;
+                    };
+                } else if (!css.eq(name, "font-display") and !css.eq(name, "unicode-range")) {
+                    l.ds.err(d.items(.loc)[i], "@font-face descriptor '{s}' is not supported", .{name});
+                }
+            }
+            if (family.len == 0) l.ds.err(face.loc, "@font-face needs a font-family", .{});
+            if (!src_seen) l.ds.err(face.loc, "@font-face needs src: url(\"file.ttf\") naming a vendored file", .{});
+            if (family.len == 0 or path.len == 0) continue;
+            // Relative to the sheet's directory; written relative to the page's.
+            const sheet = std.fs.path.dirname(l.ds.files.items[face.loc.file].path) orelse "";
+            const page = std.fs.path.dirname(l.ds.files.items[l.doc.file].path) orelse "";
+            const rel = if (std.mem.startsWith(u8, sheet, page)) std.mem.trimStart(u8, sheet[page.len..], "/") else sheet;
+            const font: u16 = @intCast(l.page.fonts.items.len + 1);
+            ok(l.page.fonts.append(l.arena, .{ .entry = .{ .family = family, .font = font, .weight = weight, .style = style }, .path = if (rel.len == 0) path else ok(std.fs.path.join(l.arena, &.{ rel, path })) }));
+            ok(l.page.font_locs.append(l.arena, face.loc));
+        }
+    }
+
+    /// The one family name in tokens `[a, b)`: a string, or idents joined by single spaces.
+    fn familyAt(l: *Lowerer, a: u32, b: u32) ?[]const u8 {
+        const ty = l.c.toks.items(.type);
+        const str = l.c.toks.items(.str);
+        var out: std.ArrayList(u8) = .empty;
+        for (a..b) |t| switch (ty[t]) {
+            .string => return str[t],
+            .ident => {
+                if (out.items.len > 0) ok(out.append(l.arena, ' '));
+                ok(out.appendSlice(l.arena, str[t]));
+            },
+            .whitespace => {},
+            else => {
+                l.badValue(@intCast(t), .@"font-family", b);
+                return null;
+            },
+        };
+        return if (out.items.len > 0) out.items else null;
+    }
+
+    /// The file of an `@font-face` src: its first `url()`, which must be a local path.
+    fn fontSrc(l: *Lowerer, a: u32, b: u32, at: Loc) ?[]const u8 {
+        const ty = l.c.toks.items(.type);
+        const str = l.c.toks.items(.str);
+        for (a..b) |t| {
+            const url = switch (ty[t]) {
+                .url => str[t],
+                .function => if (css.eq(str[t], "url") and t + 1 < b and ty[t + 1] == .string) str[t + 1] else if (css.eq(str[t], "local")) {
+                    l.ds.err(at, "src: local() names a system font; vendor the file and write url(\"file.ttf\")", .{});
+                    return null;
+                } else continue,
+                else => continue,
+            };
+            if (std.mem.startsWith(u8, url, "http:") or std.mem.startsWith(u8, url, "https:") or std.mem.startsWith(u8, url, "//") or std.mem.startsWith(u8, url, "data:")) {
+                l.ds.err(at, "{s}", .{manifest.refusal("value", "remote-url", "").?});
+                return null;
+            }
+            return url;
+        }
+        return null;
+    }
+
+    /// font-family, font-weight and font-style of `n` to `ts.font`, from the font table.
+    fn computeFont(l: *Lowerer, n: u32, ts: *TextStyle) void {
+        var fs = l.font[n];
+        var changed = false;
+        if (l.declared(n, .@"font-family")) |v| {
+            fs.family = .{ v.first, v.end };
+            fs.loc = v.loc;
+            changed = true;
+        }
+        if (l.declared(n, .@"font-weight")) |v| {
+            if (weightOf(l.c, v.first, v.end, fs.weight)) |x| fs.weight = x else l.badValue(v.first, .@"font-weight", v.end);
+            changed = true;
+        }
+        if (l.declared(n, .@"font-style")) |v| {
+            if (styleOf(l.c, v.first)) |x| fs.style = x else l.badValue(v.first, .@"font-style", v.end);
+            changed = true;
+        }
+        l.font[n] = fs;
+        if (!changed) return;
+        ts.font = .default;
+        if (fs.family[0] == none) return;
+        var catalog: std.ArrayList(lcgf.font_match.Entry) = .empty;
+        for (l.page.fonts.items) |f| ok(catalog.append(l.arena, f.entry));
+        // One family per comma-separated item; the first with a face wins, a generic one
+        // (or none at all) is the theme's font.
+        const ty = l.c.toks.items(.type);
+        var start = fs.family[0];
+        while (start < fs.family[1]) {
+            var end = start;
+            while (end < fs.family[1] and ty[end] != .comma) end += 1;
+            const family = l.familyAt(start, end) orelse return;
+            if (isGeneric(family)) return;
+            if (lcgf.font_match.find(catalog.items, &.{family}, .{ .weight = fs.weight, .style = fs.style })) |k| {
+                ts.font = @fromBackingInt(catalog.items[k].font);
+                return;
+            }
+            start = end + 1;
+        }
+        l.ds.err(fs.loc, "no @font-face for {s} ({d} {s}); add one or end the list with a generic family", .{ l.c.text(fs.family[0], fs.family[1]), fs.weight, @tagName(fs.style) });
     }
 
     /// Token `t`, which must be of `kind`.
@@ -2117,10 +2256,46 @@ pub fn init(arena: std.mem.Allocator, ds: *diag.Diags, doc: *const html.Doc, c: 
         .skip = Lowerer.ok(arena.alloc(bool, n)),
         .text = Lowerer.ok(arena.alloc(TextStyle, n)),
         .text_tokens = Lowerer.ok(arena.alloc(ir.TextTokens, n)),
+        .font = Lowerer.ok(arena.alloc(FontState, n)),
     };
     @memset(l.ir_of, none);
     @memset(l.skip, false);
     return l;
+}
+
+/// The inherited font properties of an element.
+const FontState = struct {
+    /// font-family value tokens, or none when no ancestor declares one.
+    family: [2]u32 = .{ none, none },
+    loc: Loc = .{},
+    weight: f32 = 400,
+    style: lcgf.font_match.Style = .normal,
+};
+
+/// A font-weight value over the inherited weight `parent`; null when it is not one.
+fn weightOf(c: *const css.Css, a: u32, b: u32, parent: f32) ?f32 {
+    if (b - a != 1) return null;
+    const t = c.toks.get(a);
+    if (t.type == .number) return if (t.num >= 1 and t.num <= 1000) @floatCast(t.num) else null;
+    if (t.type != .ident) return null;
+    if (css.eq(t.str, "normal")) return 400;
+    if (css.eq(t.str, "bold")) return 700;
+    // CSS Fonts 4, the relative weights table.
+    if (css.eq(t.str, "bolder")) return if (parent < 350) 400 else if (parent < 550) 700 else @max(parent, 900);
+    if (css.eq(t.str, "lighter")) return if (parent < 100) parent else if (parent < 550) 100 else if (parent < 750) 400 else 700;
+    return null;
+}
+
+/// A font-style value (`oblique` may carry an angle, which selection ignores).
+fn styleOf(c: *const css.Css, a: u32) ?lcgf.font_match.Style {
+    const t = c.toks.get(a);
+    if (t.type != .ident) return null;
+    return std.meta.stringToEnum(lcgf.font_match.Style, t.str);
+}
+
+fn isGeneric(family: []const u8) bool {
+    for ([_][]const u8{ "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji", "fangsong" }) |g| if (std.ascii.eqlIgnoreCase(family, g)) return true;
+    return false;
 }
 
 /// `style` as `spec.row` stores it: along x.

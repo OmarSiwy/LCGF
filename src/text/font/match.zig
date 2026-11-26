@@ -44,6 +44,12 @@ pub const Entry = struct {
     }
 };
 
+/// One row of an application's font table, as a page's `@font-face` rules declare it: the
+/// catalog row `find` selects over, and the file the host loads into shaper `entry.font`.
+/// lcgf-gen resolves `font-family`, `font-weight` and `font-style` against these rows at
+/// build time, so a generated page's `TextStyle.font` already names a row's `entry.font`.
+pub const Face = struct { entry: Entry, path: []const u8 };
+
 fn read(bytes: []const u8, at: usize, default: u16) u16 {
     return if (at + 2 <= bytes.len) std.mem.readInt(u16, bytes[at..][0..2], .big) else default;
 }
