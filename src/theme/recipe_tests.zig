@@ -468,3 +468,46 @@ test "an animation plays its keyframes over the root, alternating, the same in b
     for (0..9) |_| output = try run.frame(&input);
     try std.testing.expect(output.comptime_.wake == 0);
 }
+
+test "a recipe box stays hovered and active while the pointer is over and holds a widget inside it" {
+    @setEvalBranchQuota(200_000);
+    const Nest = struct {
+        const hot: types.Color = .rgb(10, 20, 200);
+        const held: types.Color = .rgb(200, 20, 10);
+        const rules = [_]style.Rule{
+            .{ .part = style.Parts.root, .require = .{ .hovered = true }, .declarations = &.{style.set(.fill, hot)} },
+            .{ .part = style.Parts.root, .require = .{ .held = true }, .declarations = &.{style.set(.fill, held)} },
+        };
+        const card: model.Recipe = .{ .parts = &.{.{ .id = style.Parts.root, .base = .{ .box = .{ .pad = @splat(20) } } }}, .rules = &rules };
+        const App = struct {
+            pub fn build(_: *@This(), f: *Frame) void {
+                _ = f.open(.none, panel);
+                _ = controls.beginBox(f, .from("card"), true, .{ .recipe = card }) catch unreachable;
+                _ = controls.button(f, .from("inner"), "In", .{}) catch unreachable;
+                controls.endBox(f);
+                f.close();
+            }
+        };
+        const NUi = base.ComptimeUi(struct {}, spec.col(panel, .{ct.box(.card, .{ .recipe = card }, .{ct.button(.inner, "In", .{})})}), .default);
+        const NRun = base.Harness(App, NUi, .{ .nodes = 32, .texts = 8, .customs = 4, .strings = 64, .depth = 8 });
+        var run: NRun = .{};
+    };
+    const run = &Nest.run;
+    run.init();
+    var input: Input = .{ .viewport = .{ 320, 200 } };
+    var output = try run.frame(&input);
+    const card = output.runtime.tree.find(.from("card"));
+    const r = output.runtime.tree.rect(output.runtime.tree.find(.from("inner")));
+    input.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Nest.hot.bitsOf(), output.runtime.tree.c.look[card].fill);
+    input.buttons.left = true;
+    output = try run.frame(&input);
+    output = try run.frame(&input);
+    try std.testing.expectEqual(Nest.held.bitsOf(), output.runtime.tree.c.look[card].fill);
+    input.buttons.left = false;
+    input.pointer = .{ 319, 199 };
+    output = try run.frame(&input);
+    output = try run.frame(&input);
+    try std.testing.expect(output.runtime.tree.c.look[card].fill != Nest.hot.bitsOf());
+}

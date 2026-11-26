@@ -489,9 +489,16 @@ pub fn slider(f: *Frame, id: types.Id, value: *f32, lo: f32, hi: f32, options: O
 /// `endBox`. A box that is not interactive takes `.none` or any id.
 pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) style.Error!types.Node {
     const recipe = options.recipe orelse model.Recipe{};
-    const response = if (interactive) responseFor(f, id, options.states.disabled) else types.Response{};
+    var response = if (interactive) responseFor(f, id, options.states.disabled) else types.Response{};
+    if (interactive and !options.states.disabled) {
+        // CSS :hover and :active hold on every ancestor of what the pointer is over or holds.
+        const inter = &f.ctx.inter;
+        const held = inSubtree(f, id, inter.active);
+        response.held = held;
+        response.hovered = inSubtree(f, id, inter.hot) and (inter.active == 0 or held);
+    }
     var states = statesFor(options.states, response, false);
-    states.focus_within = focusWithin(f, id);
+    states.focus_within = inSubtree(f, id, f.ctx.inter.focus);
     var root = try recipe.resolve(Parts.root, useFor(f, options, states), null);
     if (options.fade) |fade| {
         const transition = options.transition.under(f.ctx.settings.reduced_motion);
@@ -507,14 +514,13 @@ pub fn beginBox(f: *Frame, id: types.Id, interactive: bool, options: Options) st
     return node;
 }
 
-/// Whether the focused widget is in `id`'s subtree, as the previous frame laid it out (CSS
-/// `:focus-within`); false for `.none`.
-pub fn focusWithin(f: *const Frame, id: types.Id) bool {
-    const focused = f.ctx.inter.focus;
-    if (focused == 0 or id == .none) return false;
+/// Whether interaction id `k` is `id`'s node or in its subtree, as the previous frame laid
+/// it out (CSS `:focus-within`, and :hover on an ancestor); false for 0 or `.none`.
+pub fn inSubtree(f: *const Frame, id: types.Id, k: u32) bool {
+    if (k == 0 or id == .none) return false;
     const t = f.prevTree();
     const at = t.find(id);
-    const r = t.find(@fromBackingInt(focused));
+    const r = t.find(@fromBackingInt(k));
     return at != types.none and r != types.none and r >= at and r < t.c.end[at];
 }
 

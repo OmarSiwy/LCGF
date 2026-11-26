@@ -121,12 +121,23 @@ fn Box(comptime name: ?[:0]const u8, comptime config: Config) type {
         pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
             const row = next.*;
             next.* += 1;
-            const response = if (name != null) ui.response(row, in) else types.Response{};
+            // `:focus-within`, and :hover and :active on an ancestor: the widget is one of
+            // this box's spec rows.
+            const rows = comptime @import("../comptime/flatten.zig").count(n);
+            const inside = struct {
+                fn is(w: anytype, first: u32) bool {
+                    const x = w orelse return false;
+                    return @backingInt(x) >= first and @backingInt(x) < first + rows;
+                }
+            }.is;
+            var response = if (name != null) ui.response(row, in) else types.Response{};
+            if (name != null and !config.states.disabled) {
+                response.held = inside(ui.pointer.pressed, row);
+                response.hovered = inside(ui.build_hit, row) and (ui.pointer.pressed == null or response.held);
+            }
             const environment = config.environment orelse model.Environment.fromInput(in).withSettings(&ui.frame_settings);
             var states = controls.statesFor(config.states, response, false);
-            // `:focus-within`: the focused widget is one of this box's spec rows.
-            const rows = comptime @import("../comptime/flatten.zig").count(n);
-            states.focus_within = if (ui.focus) |w| @backingInt(w) >= row and @backingInt(w) < row + rows else false;
+            states.focus_within = inside(ui.focus, row);
             const use: model.Use = .{ .tokens = config.tokens, .scope = config.scope, .states = states, .environment = environment, .variants = config.variants, .local = config.local, .color_policy = config.color_policy };
             const recipe = config.recipe orelse model.Recipe{};
             var root = recipe.resolve(Parts.root, use, null) catch |err| blk: {

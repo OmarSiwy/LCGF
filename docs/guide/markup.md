@@ -411,8 +411,8 @@ an error, since LCGF has no regular-expression engine.
 A `<div>`-like box with state CSS or `@media` is a recipe box (`recipes.ct.box`,
 `recipes.beginBox`): its static style is the recipe's base and each such rule one recipe
 rule. With a state rule it takes hover and press (no focus); with `@media` alone it is no
-widget. `:focus-within` on it holds while the focused widget is inside. `color` there is an error, since it would restyle the text inside. While the pointer
-is over a widget inside the box, the widget has it, not the box.
+widget. `:focus-within` on it holds while the focused widget is inside. `color` there is an error, since it would restyle the text inside. As in CSS, the box is
+`:hover` and `:active` while the pointer is over or holds a widget inside it.
 
 `@media` around a rule that styles such a widget makes it one too: the rule's recipe rule
 gets environment conditions (`Rule.when`) that the recipe matches every frame, so resizing
