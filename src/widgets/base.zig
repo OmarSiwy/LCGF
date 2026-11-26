@@ -156,7 +156,8 @@ pub fn fieldError(comptime State: type, comptime widget: []const u8, comptime na
 
 /// A compile error for the first node in `n`'s subtree whose binding its widget cannot take:
 /// a label needs a string; a custom widget (`Spec.widget`) says by its optional `bindError`,
-/// and its subtree is its own (it may bind its nodes differently), so it is not walked.
+/// and its subtree is its own (it may bind its nodes differently), so it is not walked, unless
+/// it declares `pub const holds_content = true` (a dialog: its children are the page's).
 fn checkBindings(comptime State: type, comptime n: Spec) void {
     comptime {
         if (n.region) |r| if (@import("../comptime/validate.zig").regionError(State, r)) |msg| @compileError(msg);
@@ -170,7 +171,7 @@ fn checkBindings(comptime State: type, comptime n: Spec) void {
                 null;
             if (err) |msg| @compileError(msg);
         }
-        if (n.widget != null) return;
+        if (n.widget) |W_| if (!@hasDecl(W_, "holds_content")) return;
         for (n.children) |c| checkBindings(State, c);
     }
 }

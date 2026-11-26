@@ -13,6 +13,11 @@
 //!
 //! Comptime: `const D = Dialog(th, .delete, .dialog, def);` gives the spec builders `D.button`
 //! and `D.layer` and the hooks `popover.ComptimePage(State, spec, th, D)` runs.
+//!
+//! A dialog of any content (HTML `<dialog>`), opened by a bool field: `ct.dialog(th, .id,
+//! .open, children)` last in the root of a `base.ComptimeUi` page, and at run time
+//! `if (begin(f, th, "id", &open)) { children; end(f); }` under the root after the page.
+//! Escape closes it; Tab stays among its widgets.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -284,6 +289,94 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     return st.result;
 }
 
+// ---- a dialog of any content, opened by a bool ------------------------------------------------
+
+/// Opens the backdrop and the panel of dialog `name` if `open.*`, and returns whether it did;
+/// the caller then adds the content and calls `end`. Call it at the root's depth, after the rest
+/// of the page, so it is drawn on top. Escape closes it first. The panel is a modal focus layer
+/// (`focus.Scopes.trap`): Tab stays inside it.
+pub fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool {
+    open.* = open.* and !popover.keyPressed(f.in, popover.keys.escape);
+    if (!open.*) return false;
+    _ = f.interact(f.open(.from(partName(name, "backdrop")), backdropStyle(th, f.in.viewport)), popover.overlay_sense);
+    const panel = f.open(.from(partName(name, "panel")), panelStyle(th));
+    _ = f.interact(panel, popover.overlay_sense);
+    f.tree().c.role[panel.ix()] = @backingInt(role);
+    f.focusScope(panel, focus.Scopes.trap);
+    return true;
+}
+
+/// Closes the panel and the backdrop `begin` opened.
+pub fn end(f: *Frame) void {
+    f.close();
+    f.close();
+}
+
+pub const ct = struct {
+    /// Dialog `id`, shown while the bool field `open` is true, holding `children` (any spec
+    /// nodes, as `spec.col` takes them). Put it last in the page's root so it is drawn above
+    /// the rest. Escape closes it (sets `open`); Tab and Shift+Tab stay among its widgets.
+    pub fn dialog(comptime th: Theme, comptime id: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec {
+        const name = @tagName(id);
+        var panel = spec_zig.col(.{}, children);
+        panel.id = partName(name, "panel");
+        const rows = 1 + @import("../comptime/flatten.zig").count(panel);
+        return spec_zig.when(open, .{ .kind = .col, .id = partName(name, "backdrop"), .bind = @tagName(open), .widget = Modal(th, name, @tagName(open), rows), .children = &.{panel} });
+    }
+};
+
+/// The custom widget (`Spec.widget`) of `ct.dialog`'s backdrop: it pushes the backdrop and the
+/// panel as `begin` does, then the content; its `step` closes on Escape and keeps focus inside
+/// (focus outside the dialog, by a Tab past an end or a dialog just opened, goes to its first
+/// widget in Tab order, or its last after Shift+Tab).
+/// `rows` is the backdrop's subtree, itself included.
+pub fn Modal(comptime th: Theme, comptime name: [:0]const u8, comptime open: []const u8, comptime rows: u32) type {
+    return struct {
+        pub const holds_content = true;
+
+        pub fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8 {
+            return base.fieldError(State, "dialog '" ++ name ++ "'", bound, bool);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            _ = event;
+            const U = @TypeOf(ui.*);
+            if (popover.keyPressed(in, popover.keys.escape)) {
+                ui.signals.set(comptime U.field(open), false);
+                return;
+            }
+            const stop = row + rows;
+            const inside = struct {
+                fn is(w: U.Events.Widget) bool {
+                    const r = @backingInt(w);
+                    return r >= row and r < stop;
+                }
+            }.is;
+            var first: ?U.Events.Widget = null;
+            var last: ?U.Events.Widget = null;
+            inline for (U.Events.focus_order) |w| if (comptime inside(w)) {
+                if (first == null) first = w;
+                last = w;
+            };
+            if (ui.focus) |w| if (inside(w)) return;
+            var back = false;
+            for (in.events) |e| back = back or (e.code == popover.keys.tab and e.mods.shift and e.kind != .release);
+            ui.focus = if (back) last else first;
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const t = &ui.tables.t;
+            const b = t.push(parent, .hash(partName(name, "backdrop")), &backdropStyle(&th, in.viewport));
+            const p = t.push(b, .hash(partName(name, "panel")), &panelStyle(&th));
+            t.c.role[p] = @backingInt(role);
+            next.* += 2;
+            inline for (n.children[0].children) |c| ui.push(c, p, next, in);
+            t.seal(p);
+            t.seal(b);
+        }
+    };
+}
+
 // ---- example page, replay and golden frames ---------------------------------------------------
 
 /// The example's dialog: Cancel and Delete.
@@ -295,8 +388,8 @@ pub const confirm_texts = [_][]const u8{ "Cancel", "Delete" };
 /// (tools/golden/) run it.
 pub fn Example(comptime th: Theme) type {
     return struct {
-        const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
-        const page_style: Style = .{ .size = .{ .fill, .fill } };
+        pub const toolbar_style: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(8), .gap = 8, .cross = .center, .fill = th.panel };
+        pub const page_style: Style = .{ .size = .{ .fill, .fill } };
 
         pub const App = struct {
             dialog: DialogState = .{},
@@ -577,6 +670,121 @@ test "trapFocus: the panel is the modal layer focus.scan finds" {
     trapFocus(t, &sc, "delete");
     focus.scan(t, &sc);
     try testing.expectEqual(t.find(.from("delete_panel")), sc.modal);
+}
+
+/// A page with a dialog of any content (`ct.dialog`, `begin`/`end`): a toolbar with the
+/// button that opens it and a checkbox, and the dialog with a label, a checkbox and a button
+/// that closes it. Clicks act after the frame in both front ends, as a page's handlers do.
+const AnyPage = struct {
+    const th: Theme = .default;
+    const E = Example(th);
+
+    pub const App = struct {
+        open: bool = false,
+        grid: bool = false,
+        snap: bool = false,
+        opened: bool = false,
+        closed: bool = false,
+
+        pub fn build(app: *App, f: *Frame) void {
+            app.open = (app.open or app.opened) and !app.closed;
+            _ = f.open(.none, E.page_style);
+            _ = f.open(.none, E.toolbar_style);
+            app.opened = base.button(f, &th, .from("settings"), "Settings").clicked;
+            _ = base.checkbox(f, &th, .from("grid"), &app.grid, "Grid");
+            f.close();
+            app.closed = false;
+            if (begin(f, &th, "prefs", &app.open)) {
+                _ = base.label(f, &th, "Preferences");
+                _ = base.checkbox(f, &th, .from("snap"), &app.snap, "Snap");
+                app.closed = base.button(f, &th, .from("done"), "Done").clicked;
+                end(f);
+            }
+            f.close();
+        }
+    };
+    pub const State = struct { open: bool = false, grid: bool = false, snap: bool = false };
+    pub const spec = spec_zig.col(E.page_style, .{
+        spec_zig.row(E.toolbar_style, .{ base.ct.button(th, .settings, "Settings"), base.ct.checkbox(th, .grid, .grid, "Grid") }),
+        ct.dialog(th, .prefs, .open, .{ base.ct.label(th, "Preferences"), base.ct.checkbox(th, .snap, .snap, "Snap"), base.ct.button(th, .done, "Done") }),
+    });
+    pub const Ui = base.ComptimeUi(State, spec, th);
+    pub const Run = base.Harness(App, Ui, E.limits);
+};
+
+var any_harness: AnyPage.Run = .{};
+
+test "ct.dialog, begin: any content, opened by a bool, closed by Escape, Tab kept inside" {
+    const h = &any_harness;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var ev: [1]Input.Event = undefined;
+    var t = (try h.frame(&in)).runtime.tree;
+    const rows_closed = t.len;
+    const S = struct {
+        /// Clicks the centre of last frame's `id`, press then release, and applies the click
+        /// events to the comptime state as a page would.
+        fn click(hh: *AnyPage.Run, last: *const Tree, inp: *Input, comptime id: []const u8) !*const Tree {
+            const r = last.rect(last.find(.from(id)));
+            inp.pointer = .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+            inp.events = &.{};
+            inp.buttons.left = true;
+            _ = try hh.frame(inp);
+            inp.buttons.left = false;
+            const out = try hh.frame(inp);
+            if (out.comptime_.event) |e| switch (e) {
+                .settings => hh.ui.signals.set(.open, true),
+                .done => hh.ui.signals.set(.open, false),
+                else => {},
+            };
+            return (try hh.frame(inp)).runtime.tree;
+        }
+        fn key(hh: *AnyPage.Run, inp: *Input, e: *[1]Input.Event, code: u8, shift: bool) !*const Tree {
+            e[0] = .{ .kind = .press, .code = code, .mods = .{ .shift = shift } };
+            inp.events = e;
+            const t_ = (try hh.frame(inp)).runtime.tree;
+            inp.events = &.{};
+            return t_;
+        }
+    };
+    t = try S.click(h, t, &in, "settings");
+    try testing.expect(h.app.open and h.ui.signals.state.open);
+    // Backdrop, panel, the label, the checkbox (row, box, label) and the button (row, label).
+    try testing.expectEqual(rows_closed + 2 + 1 + 3 + 2, t.len);
+    try testing.expectEqual(@backingInt(a11y.Role.dialog), t.c.role[t.find(.from("prefs_panel"))]);
+    // Focus moves into the dialog the frame after it is first built (a step reads last
+    // frame's tree); Tab and Shift+Tab stay on its one focus stop, the checkbox. (At run time
+    // the button is a focus stop too; there Tab stays inside the panel's rows.)
+    t = (try h.frame(&in)).runtime.tree;
+    const W = AnyPage.Ui.Events.Widget;
+    try testing.expectEqual(@as(?W, .snap), h.ui.focus);
+    for ([_]bool{ false, true, false }) |shift| {
+        _ = try S.key(h, &in, &ev, popover.keys.tab, shift);
+        try testing.expectEqual(@as(?W, .snap), h.ui.focus);
+        const rt = &h.ctx.trees[h.ctx.cur];
+        const panel = rt.find(.from("prefs_panel"));
+        const at = rt.find(@fromBackingInt(h.ctx.inter.focus));
+        try testing.expect(at > panel and at < rt.c.end[panel]);
+    }
+    // The page under the backdrop takes no click: the grid checkbox stays off.
+    t = try S.click(h, t, &in, "grid");
+    try testing.expect(!h.app.grid and !h.ui.signals.state.grid and h.app.open);
+    t = try S.click(h, t, &in, "snap");
+    try testing.expect(h.app.snap and h.ui.signals.state.snap);
+    // Escape closes it.
+    t = try S.key(h, &in, &ev, popover.keys.escape, false);
+    try testing.expect(!h.app.open and !h.ui.signals.state.open);
+    t = (try h.frame(&in)).runtime.tree;
+    try testing.expectEqual(rows_closed, t.len);
+    // Opened again and closed by its button.
+    t = try S.click(h, t, &in, "settings");
+    t = try S.click(h, t, &in, "done");
+    try testing.expect(!h.app.open and !h.ui.signals.state.open);
+    try testing.expectEqual(rows_closed, t.len);
+}
+
+test "ct.dialog: the open field must be a bool" {
+    try testing.expectEqualStrings("dialog 'prefs' 'open' needs a bool field, not u8", comptime Modal(.default, "prefs", "open", 2).bindError(struct { open: u8 }, "open").?);
 }
 
 test "checkDialog: the state field and the buttons" {
