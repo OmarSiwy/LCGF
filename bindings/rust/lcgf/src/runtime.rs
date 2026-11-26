@@ -10,7 +10,7 @@
 //! f.open(Id::from("toolbar"), &Style { dir: Dir::X, gap: 8.0, fill: th.panel, ..Style::DEFAULT });
 //! if runtime::button(&mut f, Id::from("reset"), "Reset").clicked() { resets += 1; }
 //! f.close();
-//! let draw = ctx.end();
+//! let (draw, wake) = f.end();
 //! ```
 
 use crate::{DrawList, Input, RawFrame, Status};
@@ -690,7 +690,7 @@ impl<'a> Context<'a> {
         unsafe { lcgf_rt_needs_frame(self.rt, input) != 0 }
     }
 
-    /// Begins a frame; build it, then `end` it.
+    /// Begins a frame; build it, then [`Frame::end`] it.
     pub fn begin(&mut self, input: &Input) -> Frame<'_> {
         let mut view = core::mem::MaybeUninit::<View>::uninit();
         let view = unsafe {
@@ -701,15 +701,27 @@ impl<'a> Context<'a> {
         Frame {
             rt: self.rt,
             view,
-            _ctx: PhantomData,
+            last: &mut self.last,
         }
     }
+}
 
-    /// Lays out and paints the frame. The draw list borrows the context until the next frame.
-    pub fn end(&mut self) -> (DrawList<'_>, f32) {
+/// A frame being built: it borrows its context, and what its canvas nodes draw, until its draw
+/// list (from [`end`](Frame::end)) is dropped.
+pub struct Frame<'f> {
+    rt: Rt,
+    view: View,
+    last: &'f mut core::mem::MaybeUninit<RawFrame>,
+}
+
+impl<'f> Frame<'f> {
+    /// Lays out and paints the frame. The draw list keeps the context, and every canvas batch
+    /// and option the frame drew, borrowed while it is used; with the seconds until a frame is
+    /// needed though nothing happened.
+    pub fn end(self) -> (DrawList<'f>, f32) {
         let f = unsafe {
             lcgf_rt_end(self.rt, self.last.as_mut_ptr());
-            self.last.assume_init()
+            self.last.assume_init_read()
         };
         (
             DrawList {
@@ -719,16 +731,7 @@ impl<'a> Context<'a> {
             f.wake,
         )
     }
-}
 
-/// A frame being built.
-pub struct Frame<'a> {
-    rt: Rt,
-    view: View,
-    _ctx: PhantomData<&'a mut ()>,
-}
-
-impl Frame<'_> {
     #[inline(always)]
     pub fn open(&mut self, id: Id, s: &Style) -> u32 {
         self.open_row(id, &Row::from(s))
@@ -770,13 +773,9 @@ impl Frame<'_> {
         unsafe { lcgf_rt_custom_row(self.rt, id.0, r, data) }
     }
     /// A node that draws `o.ranges` of `c` under `o.camera` (`Frame.canvas`); needs
-    /// [`Context::enable_canvas`]. `u32::MAX` past the limits' customs.
-    ///
-    /// # Safety
-    /// The draw list keeps pointers to `c` and to what `o` borrows: they must stay alive and
-    /// unchanged until the frame's draw list has been drawn, and through the next frame when it
-    /// reuses this node.
-    pub unsafe fn canvas(&mut self, id: Id, s: &Style, c: &crate::canvas::Canvas<'_>, o: &crate::canvas::Options<'_>) -> u32 {
+    /// [`Context::enable_canvas`]. `u32::MAX` past the limits' customs. The draw list reads
+    /// `c` and what `o` borrows, so both stay borrowed until it is dropped.
+    pub fn canvas(&mut self, id: Id, s: &Style, c: &'f crate::canvas::Canvas<'_>, o: &crate::canvas::Options<'f>) -> u32 {
         let raw = o.raw();
         unsafe { lcgf_rt_canvas(self.rt, id.0, s, c.raw(), &raw) }
     }

@@ -40,7 +40,7 @@ fn main() {
             let th = *c.theme();
             let mut f = c.begin(&input);
             s.build(&mut f, &th);
-            let (d, _) = c.end();
+            let (d, _) = f.end();
             d.command_count() as u64 + d.quads().len() as u64
         },
         harness::block_on_stdin,

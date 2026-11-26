@@ -417,7 +417,10 @@ public:
     LCGF_INLINE Node Custom(Id id, const Style& s, std::uint64_t data) { return Custom(id, Row(s), data); }
     LCGF_INLINE Node Custom(Id id, const Row& r, std::uint64_t data) { return {lcgf_rt_custom_row(rt_, id.value, r.raw(), data)}; }
     /// A node that draws `o.ranges` of `c` under `o.camera` (`Frame.canvas`); needs
-    /// `Context::EnableCanvas`. LCGF_NO_WIDGET past the limits' customs.
+    /// `Context::EnableCanvas`. LCGF_NO_WIDGET past the limits' customs. Lifetimes: the draw
+    /// list `Context::End` returns reads `c` and the layers, ranges and overrides `o` points
+    /// at (not `o` itself): keep them alive and unchanged until it has been drawn, and through
+    /// the next frame if that frame reuses this node.
     Node Canvas(Id id, const Style& s, const lcgf::Canvas& c, const canvas::Options& o) {
         const lcgf_canvas_options r = o.raw();
         return {lcgf_rt_canvas(rt_, id.value, s.raw(), c.raw(), &r)};

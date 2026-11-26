@@ -159,10 +159,12 @@ if ctx.needs_frame(&input) {
     if runtime::button(&mut f, Id::from("reset"), "Reset").clicked() { resets += 1; }
     runtime::slider(&mut f, Id::from("exposure"), &mut exposure, 0.0, 1.0);
     f.close();
-    let (draw, wake) = ctx.end();
+    let (draw, wake) = f.end();
 }
 ```
 
+In Rust the frame ends itself (`f.end()`), and the draw list it returns keeps the context, and
+any canvas batch and options the frame drew (`Frame::canvas`), borrowed while it is used.
 `Frame::Custom` / `Frame::custom` make a node the host draws itself (its rect comes back in the
 draw list's customs), and `Animate` / `animate` give a value that eases toward a target on a
 spring. `bench/vs/lcgf-cpp` and `bench/vs/lcgf-rust` run bench/scenes' scenes this way.

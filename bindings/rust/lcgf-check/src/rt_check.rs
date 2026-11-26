@@ -68,17 +68,16 @@ impl Plot {
         }
     }
 
-    fn build(&mut self, f: &mut lcgf::runtime::Frame<'_>, k: u32) {
+    fn build<'f>(&'f mut self, f: &mut lcgf::runtime::Frame<'f>, k: u32) {
         if k % 10 == 9 {
             let n = self.s.len();
             self.s.kill((k / 10) % n);
         }
+        // The frame borrows the batch and its ranges until its draw list is dropped.
+        let me: &'f Self = self;
         f.open(Id::from("plot-root"), &Style { size: [Size::FILL, Size::FILL], ..Style::DEFAULT });
-        // SAFETY: the batch and everything the options borrow live until the program ends.
-        unsafe {
-            f.canvas(Id::from("plot"), &Style { size: [Size::FILL, Size::FILL], ..Style::DEFAULT }, &self.s, &Self::options(k, &self.all, &PLOT_MARKS));
-            f.canvas(Id::from("overlay"), &Style { size: [Size::px(120.0), Size::px(80.0)], floating: 1, ..Style::DEFAULT }, &self.s, &Self::options(k, &PLOT_SUB, &[]));
-        }
+        f.canvas(Id::from("plot"), &Style { size: [Size::FILL, Size::FILL], ..Style::DEFAULT }, &me.s, &Self::options(k, &me.all, &PLOT_MARKS));
+        f.canvas(Id::from("overlay"), &Style { size: [Size::px(120.0), Size::px(80.0)], floating: 1, ..Style::DEFAULT }, &me.s, &Self::options(k, &PLOT_SUB, &[]));
         f.close();
     }
 }
@@ -96,7 +95,7 @@ impl Kit {
         input.dt = 1.0 / 60.0;
     }
 
-    fn build(&mut self, f: &mut lcgf::runtime::Frame<'_>, k: u32) {
+    fn build<'f>(&'f mut self, f: &mut lcgf::runtime::Frame<'f>, k: u32) {
         use lcgf::runtime::{
             ButtonOptions, CheckboxOptions, Color, Ease, Id, SliderOptions, TextStyle, rgb,
         };
@@ -337,7 +336,7 @@ fn main() {
             } else {
                 state.build(&mut f, &th);
             }
-            let (d, wake) = ctx.end();
+            let (d, wake) = f.end();
             out.extend_from_slice(&(d.quads().len() as u32).to_le_bytes());
             out.extend_from_slice(bytes(d.quads()));
             out.extend_from_slice(&(d.runs().len() as u32).to_le_bytes());
