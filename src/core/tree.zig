@@ -489,21 +489,27 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
                     inline for (0..2) |a| @field(c, name)[a][i] = v[a];
                 } else @field(c, name)[i] = v;
             }
-            const up = if (i == 0) types.Participation.all else t.x.row[c.scope[parent]].active_participation;
-            var active: types.Participation = @bitCast(@as(u8, @bitCast(rowField(row, "participation"))) & @as(u8, @bitCast(up)));
-            if (!active.layout) {
-                active = .collapsed;
-                inline for (0..2) |axis| {
-                    c.min[axis][i] = 0;
-                    c.max[axis][i] = 0;
-                    c.grow[axis][i] = 0;
-                    c.pct[axis][i] = -1;
-                    c.pad_lo[axis][i] = 0;
-                    c.pad_hi[axis][i] = 0;
-                }
-                c.flow[i] = 0;
-                c.gap[i] = 0;
+            // The root reads its own `scope` as its parent's, so it is 0 before the read: row 0
+            // of `x` holds the defaults (`.all`, no cursor), with no `i == 0` test.
+            c.scope[i] = 0;
+            const up = t.x.row[c.scope[parent]].active_participation;
+            const up_cursor = t.x.row[c.scope[parent]].active_cursor;
+            const active_in: u8 = @as(u8, @bitCast(rowField(row, "participation"))) & @as(u8, @bitCast(up));
+            // No layout collapses the node: every domain off (`.collapsed` is 0) and its
+            // layout inputs zeroed, by masks rather than a branch on the style.
+            const layout = @as(types.Participation, @bitCast(active_in)).layout;
+            const m8 = 0 -% @as(u8, @intFromBool(layout));
+            const active: types.Participation = @bitCast(active_in & m8);
+            inline for (0..2) |axis| {
+                c.min[axis][i] = simd.selF(layout, c.min[axis][i], 0);
+                c.max[axis][i] = simd.selF(layout, c.max[axis][i], 0);
+                c.grow[axis][i] = simd.selF(layout, c.grow[axis][i], 0);
+                c.pct[axis][i] = simd.selF(layout, c.pct[axis][i], -1);
+                c.pad_lo[axis][i] = simd.selF(layout, c.pad_lo[axis][i], 0);
+                c.pad_hi[axis][i] = simd.selF(layout, c.pad_hi[axis][i], 0);
             }
+            c.flow[i] = simd.selF(layout, c.flow[i], 0);
+            c.gap[i] = simd.selF(layout, c.gap[i], 0);
             c.role[i] &= 0 -% @as(u8, @intFromBool(active.semantics));
             c.sense[i] &= 0 -% @as(u8, @intFromBool(active.hit));
             // Count this node in its parent, then clear its own count. The root is its own
@@ -518,8 +524,6 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             const r = @min(t.xlen, t.cap);
             t.xlen = r + row.own;
             c.extra[i] = simd.selU(own, r, 0);
-            // The root reads its own `scope` as its parent's: 0 first (see `nkids`).
-            c.scope[i] = 0;
             c.scope[i] = simd.selU(own, r, c.scope[parent]);
             // One branch, taken by the few nodes with extras (well predicted). Writing every
             // node's extras to a spare row instead, with no branch, measured 156 against
@@ -544,7 +548,7 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             x.participation = rowField(row, "participation");
             x.active_participation = active;
             x.cursor = rowField(row, "cursor");
-            x.active_cursor = if (rowField(row, "cursor") != 255) rowField(row, "cursor") else if (i == 0) 255 else t.x.row[c.scope[parent]].active_cursor;
+            x.active_cursor = if (rowField(row, "cursor") != 255) rowField(row, "cursor") else up_cursor;
             return i;
         }
 
