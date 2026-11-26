@@ -1,0 +1,18 @@
+<!doctype html>
+<html lcgf-page="counter">
+<head>
+  <title>Counter</title>
+  <link rel="stylesheet" href="counter.css">
+</head>
+<body>
+  <main>
+    <h1>Counter</h1>
+    <div class="row">
+      <button id="dec" on:click="dec">-</button>
+      <span class="count">{count:.0}</span>
+      <button id="inc" on:click="inc">+</button>
+    </div>
+    <label><input type="checkbox" id="step10" bind:checked="by_ten" on:change="step_changed"> Count by ten</label>
+  </main>
+</body>
+</html>
