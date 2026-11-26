@@ -79,6 +79,8 @@ inline fn openLines(c: *const Tree.Columns, f: *const Flex.Columns, i: usize, li
 /// Zeroes line `l`'s accumulators. Called for the next free line whether or not it is used, so
 /// no line is ever read before it is written.
 inline fn clearLine(f: *const Flex.Columns, l: u32) void {
+    f.line_base[l] = 0;
+    f.line_below[l] = 0;
     f.line_main[l] = 0;
     f.line_count[l] = 0;
     f.line_cross[l] = 0;
@@ -102,7 +104,12 @@ pub inline fn linesGap(t: *const Tree, fx: *const Flex, a: u1, i: usize) f32 {
 pub inline fn foldLine(t: *const Tree, fx: *const Flex, a: u1, i: usize, p: usize, contrib: f32, folded: f32) f32 {
     const f = &fx.c;
     const l = f.line[i];
-    f.line_cross[l] = @max(f.line_cross[l], contrib);
+    // A baseline-aligned line is as tall as its highest part above the shared baseline plus
+    // its deepest below; children with their own cross alignment do not take part.
+    const part = f.align_base[p] * b01(f.self_cross[i] < 0);
+    f.line_base[l] = @max(f.line_base[l], part * (f.margin_lo[1][i] + f.base[i]));
+    f.line_below[l] = @max(f.line_below[l], part * (t.c.nat[1][i] + f.margin_hi[1][i] - f.base[i]));
+    f.line_cross[l] = @max(f.line_cross[l], contrib, f.line_base[l] + f.line_below[l]);
     const stacked = t.c.fit[a][p] + f.head[i] * f.line_cross[l];
     const on_y: f32 = @floatFromInt(a);
     return folded + on_y * wraps(t, fx, p) * (stacked - folded);
@@ -136,8 +143,12 @@ pub inline fn inLine(t: *const Tree, fx: *const Flex, comptime a: u1, i: usize, 
     const l = f.line[i];
     const at = if (a == 0)
         @max(inner - f.line_main[l], 0) * c.align_main[p] + f.line_cursor[l]
-    else
-        f.line_off[l] + @max(f.line_cross[l] + f.line_extra[p] - c.size[1][i] - fx.margin(1, i), 0) * cross;
+    else blk: {
+        const aligned = f.line_off[l] + @max(f.line_cross[l] + f.line_extra[p] - c.size[1][i] - fx.margin(1, i), 0) * cross;
+        // On the line's baseline in a baseline-aligned row, unless it has its own cross.
+        const based = f.line_off[l] + f.line_base[l] - f.base[i] - f.margin_lo[1][i];
+        break :blk aligned + f.align_base[p] * b01(f.self_cross[i] < 0) * (based - aligned);
+    };
     return in_flow + wraps(t, fx, p) * (at + f.margin_lo[a][i] - in_flow);
 }
 
@@ -474,4 +485,35 @@ test "line_space: between, around and evenly share a wrapping row's spare height
     // Stretch: two lines of 10 leave 80, 40 each; the filling box takes its line's 50.
     try testing.expectEqual(50, t.c.size[1][a]);
     try testing.expectEqual(50, t.c.pos[1][b]);
+}
+
+test "baseline on a wrapping row: each line lines its children up on its own baseline" {
+    var s: Scene = .{};
+    const t = s.init();
+    const root = t.push(0, .none, &.{ .size = .{ .px(200), .px(200) } });
+    // Inner width 100: two 40 px boxes per line. Baselines: 8, 20 | 5, 5.
+    const r = t.push(root, .none, &.{ .dir = .x, .size = .{ .px(100), .fit } });
+    const kids = [_]u32{
+        t.push(r, .none, &.{ .size = .{ .px(40), .px(10) } }),
+        t.push(r, .none, &.{ .size = .{ .px(40), .px(30) } }),
+        t.push(r, .none, &.{ .size = .{ .px(40), .px(10) } }),
+        t.push(r, .none, &.{ .size = .{ .px(40), .px(6) } }),
+    };
+    t.seal(r);
+    s.fx.set(r, &.{ .wrap = true, .baseline = true });
+    s.t.seal(0);
+    layout.prepare(t);
+    layout.fitFlex(t, &s.fx, .x);
+    layout.resolveFlex(t, &s.fx, .x, 200);
+    wrap(t, &s.fx);
+    layout.fitFlex(t, &s.fx, .y);
+    // Boxes without text take their bottom edge as baseline: 10, 30 | 10, 6.
+    layout.resolveFlex(t, &s.fx, .y, 200);
+    layout.placeFlex(t, &s.fx);
+    // Line 1: baseline at 30; the 10 px box sits 20 down. Line 2 starts at 30: baseline 10.
+    try testing.expectEqual(20, t.c.pos[1][kids[0]]);
+    try testing.expectEqual(0, t.c.pos[1][kids[1]]);
+    try testing.expectEqual(30, t.c.pos[1][kids[2]]);
+    try testing.expectEqual(34, t.c.pos[1][kids[3]]);
+    try testing.expectEqual(40, t.c.size[1][r]);
 }

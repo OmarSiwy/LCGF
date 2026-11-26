@@ -84,6 +84,10 @@ pub const Flex = struct {
         line_off: []f32,
         /// Per line: main-axis cursor (`placeFlex`).
         line_cursor: []f32,
+        /// Per line of a baseline-aligned wrapping row: the largest distance above the line's
+        /// shared baseline and below it among the line's children (`fitFlex`, y).
+        line_base: []f32,
+        line_below: []f32,
 
         // ---- baselines (baseline.zig)
         /// Distance from the top of the node's text run to its first baseline, scattered from
@@ -137,11 +141,12 @@ pub const Flex = struct {
         /// Where a wrapping row's lines sit across it when they leave space (CSS
         /// `align-content`, without stretch).
         lines: types.Align = .start,
-        /// For a row that does not wrap: its in-flow children sit so that their first baselines
-        /// (baseline.zig) are on one line, as CSS `align-items: baseline`, and the row is as
-        /// tall as the highest part above that line plus the deepest below it. A child with its
-        /// own `cross` is placed by that instead (it still counts toward the row's baseline and
-        /// height, unlike CSS). Ignored on a column and on a wrapping row.
+        /// For a row: its in-flow children sit so that their first baselines (baseline.zig)
+        /// are on one line, as CSS `align-items: baseline`, and the row is as tall as the
+        /// highest part above that line plus the deepest below it; in a wrapping row, each line
+        /// has its own baseline and height. A child with its own `cross` is placed by that
+        /// instead (in a row that does not wrap it still counts toward the row's baseline and
+        /// height, unlike CSS). Ignored on a column.
         baseline: bool = false,
         /// Free space along the main axis between this node's in-flow children instead of
         /// before them (CSS `justify-content: space-*`), in place of `Style.main`. Ignored on

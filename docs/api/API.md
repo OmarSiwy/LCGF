@@ -638,7 +638,7 @@ Fields: `c`
 ### `Flex.Columns` (struct)
 One row per tree node, `simd.rows(cap)` rows each.
 
-Fields: `aspect`, `shrink`, `regrow`, `self_cross`, `margin_lo`, `margin_hi`, `wrap`, `align_lines`, `align_base`, `space`, `line_space`, `space_lead`, `space_step`, `line_lead`, `line_step`, `line_extra`, `shrink_sum`, `grow_extra`, `line`, `head`, `open`, `nlines`, `line_main`, `line_count`, `line_cross`, `line_off`, `line_cursor`, `text_base`, `text_has`, `base`, `base_kids`, `below_kids`
+Fields: `aspect`, `shrink`, `regrow`, `self_cross`, `margin_lo`, `margin_hi`, `wrap`, `align_lines`, `align_base`, `space`, `line_space`, `space_lead`, `space_step`, `line_lead`, `line_step`, `line_extra`, `shrink_sum`, `grow_extra`, `line`, `head`, `open`, `nlines`, `line_main`, `line_count`, `line_cross`, `line_off`, `line_cursor`, `line_base`, `line_below`, `text_base`, `text_has`, `base`, `base_kids`, `below_kids`
 
 
 ### `Flex.Style` (struct)
