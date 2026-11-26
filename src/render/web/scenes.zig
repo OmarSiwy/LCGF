@@ -80,6 +80,37 @@ export fn lcgf_scene_draw(pass: u32) void {
     }
 }
 
+// The canvas scene (conformance.canvas_scene; golden tools/golden/ref/draw/canvas.png), by a
+// renderer of its own with the canvas pipeline: init once, prepare before the pass, draw in it.
+
+var canvas_scene: conformance.CanvasStorage = undefined;
+var canvas_gfx: webgpu.Renderer = undefined;
+var canvas_atlas: lcgf.types.Texture = .white;
+
+/// `white`, `sampler` and `atlas_view` as for `lcgf_webgpu_init`. Returns the scene's size
+/// (width low 16 bits, height high 16) and its clear colour through `lcgf_canvas_clear`.
+export fn lcgf_canvas_init(device: u32, format: u32, white: u32, sampler: u32, atlas_view: u32) u32 {
+    const sc = conformance.canvas_scene;
+    canvas_scene.load();
+    canvas_gfx = .init(device, .{ .format = @fromBackingInt(@intCast(format)), .max_quads = 1, .max_glyphs = 1, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, white, sampler);
+    if (canvas_gfx.canvas == null) @panic("the canvas pipeline failed");
+    canvas_atlas = canvas_gfx.addTexture(device, atlas_view, sampler);
+    return @as(u32, @intFromFloat(sc.viewport[0])) | (@as(u32, @intFromFloat(sc.viewport[1])) << 16);
+}
+
+/// The canvas scene's clear colour, rgba8.
+export fn lcgf_canvas_clear() u32 {
+    return @bitCast(conformance.canvas_scene.clear);
+}
+
+export fn lcgf_canvas_prepare() void {
+    canvas_gfx.prepare(queue, &canvas_scene.draw, .{ .texture = canvas_atlas }, conformance.canvas_scene.viewport, 1);
+}
+
+export fn lcgf_canvas_draw(pass: u32) void {
+    iface.render(&canvas_gfx, pass, &canvas_scene.draw);
+}
+
 // The projection's checks (src/render/gpu/check.zig), split where the browser's asynchronous
 // readback has to happen: record into the page's encoder, let the page submit and read back
 // into `check_pixels` and `check_values`, then verify.

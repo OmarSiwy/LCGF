@@ -40,6 +40,24 @@ pub const Binding = struct {
     /// The JS side names them by `@tagName` order: lcgf.js `formats`.
     pub const TextureFormat = enum(u32) { rgba8unorm, bgra8unorm };
 
+    /// lcgf_render.gpu over the same device (gpu.zig), for the canvas pipeline (wgpu.zig
+    /// `Binding`).
+    pub const canvas = struct {
+        pub const projection = @import("gpu.zig");
+        pub fn device(d: Device, q: ?Queue) projection.Device {
+            return .wrap(d, q orelse 0);
+        }
+        pub fn format(f: TextureFormat) projection.TextureFormat {
+            return if (f == .bgra8unorm) .bgra8_unorm else .rgba8_unorm;
+        }
+        pub fn view(v: TextureView) projection.TextureView {
+            return .{ .view = v, .width = 0, .height = 0 };
+        }
+        pub fn upload(d: projection.Device) projection.Upload {
+            return .begin(d, 0);
+        }
+    };
+
     pub fn createBuffer(d: Device, size: u64, use: wgpu.BufferUse) Buffer {
         return imports.gpu_create_buffer(d, @intCast(size), @backingInt(use));
     }

@@ -6,7 +6,8 @@
      the goldens: an RGBA8 target cleared to black, nearest sampling, scale 1, the stand-in glyph
      atlas, and the custom draw through lcgf_render.gpu (src/render/gpu/gradient.zig, compiled into
      scenes.wasm and calling WebGPU through lcgf.js gpuProjection). browser.py --out writes
-     the images; ci/jobs/web.sh compares them with src/render/conformance/*.png. -->
+     the images; ci/jobs/web.sh compares them with src/render/conformance/*.png, and the canvas
+     scene with tools/golden/ref/draw/canvas.png. -->
 <script type="module">
 import { load, webgpu, gpuProjection, canvas2d } from "./lcgf.js";
 import { readback, base64, standInAtlas } from "./test_util.js";
@@ -43,6 +44,24 @@ window.lcgfTest = (async () => {
         pass.end();
         device.queue.submit([encoder.finish()]);
         images[name] = { w, h, rgba: base64(await readback(device, target, w, h)) };
+        target.destroy();
+    }
+    // The canvas scene, by a renderer with the canvas pipeline (sw's golden of it).
+    {
+        const size = ui.exports.lcgf_canvas_init(put(device), 0, put(texture(1, 1, new Uint8Array([255, 255, 255, 255]))), put(sampler), put(texture(64, 64, standInAtlas())));
+        const c = ui.exports.lcgf_canvas_clear();
+        const w = size & 0xffff, h = size >>> 16;
+        const target = device.createTexture({ size: [w, h], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+        ui.exports.lcgf_canvas_prepare();
+        const encoder = device.createCommandEncoder();
+        const clearValue = [(c & 255) / 255, ((c >>> 8) & 255) / 255, ((c >>> 16) & 255) / 255, 1];
+        const pass = encoder.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: "clear", storeOp: "store", clearValue }] });
+        const p = put(pass);
+        ui.exports.lcgf_canvas_draw(p);
+        release(p);
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+        images.canvas = { w, h, rgba: base64(await readback(device, target, w, h)) };
         target.destroy();
     }
     return { ok: errors.length === 0, errors, adapter: adapter.info?.description || adapter.info?.vendor, images };

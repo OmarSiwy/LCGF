@@ -15,6 +15,8 @@ for p in $pages; do
         python3 tools/golden/golden.py "$out/$p/$(basename "$ref")" "$ref"
     done
 done
+# The canvas scene through the canvas pipeline, against sw's golden of it.
+python3 tools/golden/golden.py "$out/test_webgpu/canvas.png" tools/golden/ref/draw/canvas.png
 # The smoke test: demo.html, the page a person opens, with WebGPU and without (the 2D-canvas
 # fallback, its screenshot compared with the goldens).
 python3 src/render/web/smoke.py zig-out/web zig-out/web-smoke
