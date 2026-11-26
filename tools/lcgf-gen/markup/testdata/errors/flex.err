@@ -1,0 +1,3 @@
+flex.html:3:49: error: align-items: baseline is lowered on rows only (flex-direction: row)
+  .col { display: flex; flex-direction: column; align-items: baseline; }
+                                                ^

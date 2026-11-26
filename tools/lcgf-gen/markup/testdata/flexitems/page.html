@@ -8,10 +8,13 @@
     .bar span:last-child { margin-left: 0; }
     .tall { display: flex; height: 40px; }
     .mid { align-self: center; }
+    .base { display: flex; align-items: baseline; gap: 4px; }
+    .big { font-size: 24px; }
   </style>
 </head>
 <body>
   <div class="bar"><span>A</span><span>B</span></div>
   <div class="tall"><span>top</span><span class="mid">C</span></div>
+  <div class="base"><span class="big">Big</span><span>small</span></div>
 </body>
 </html>

@@ -1116,7 +1116,10 @@ pub const Lowerer = struct {
             if (alignOf(kw)) |a| s.main = a else if (!l.refused("value", kw, "justify-content", l.declared(n, .@"justify-content").?.loc)) l.badValue(l.declared(n, .@"justify-content").?.first, .@"justify-content", l.declared(n, .@"justify-content").?.end);
         }
         if (l.keyword(n, .@"align-items")) |kw| {
-            if (alignOf(kw)) |a| s.cross = a else if (!css.eq(kw, "stretch") and !css.eq(kw, "normal")) {
+            if (alignOf(kw)) |a| s.cross = a else if (css.eq(kw, "baseline")) {
+                // Flex.Style.baseline lines up a row's children; a column has one per line.
+                if (dir == .x) l.flex.baseline = true else l.ds.err(l.declared(n, .@"align-items").?.loc, "align-items: baseline is lowered on rows only (flex-direction: row)", .{});
+            } else if (!css.eq(kw, "stretch") and !css.eq(kw, "normal")) {
                 if (!l.refused("value", kw, "align-items", l.declared(n, .@"align-items").?.loc)) l.badValue(l.declared(n, .@"align-items").?.first, .@"align-items", l.declared(n, .@"align-items").?.end);
             }
         }

@@ -18,4 +18,9 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         label.ct.label(theme, "top"),
         s.flexed(label.ct.label(theme, "C"), .{ .cross = .center }),
     }),
+    // align-items: baseline on a row: Flex.Style.baseline.
+    s.flexed(s.row(.{ .gap = 4 }, .{
+        s.textStyled(label.ct.label(theme, "Big"), .{ .px = 24, .color = .rgb(230, 230, 235) }),
+        label.ct.label(theme, "small"),
+    }), .{ .baseline = true }),
 });

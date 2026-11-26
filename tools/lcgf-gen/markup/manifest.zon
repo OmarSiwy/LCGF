@@ -140,7 +140,7 @@
         .{ .kind = "value", .name = "space-around", .applies_to = "justify-content", .status = .planned, .diagnostic = "justify-content: space-around is not lowered yet; use gap or flex-grow" },
         .{ .kind = "value", .name = "space-evenly", .applies_to = "justify-content", .status = .planned, .diagnostic = "justify-content: space-evenly is not lowered yet; use gap or flex-grow" },
         .{ .kind = "property", .name = "align-items", .status = .mapped, .target = "Style.cross", .fixture = "counter" },
-        .{ .kind = "value", .name = "baseline", .applies_to = "align-items", .status = .planned, .diagnostic = "align-items: baseline is not lowered yet (engine spec F2)", .spec = "F2" },
+        .{ .kind = "value", .name = "baseline", .applies_to = "align-items", .status = .mapped, .target = "on a row: spec.flexed(s, .{ .baseline = true }) (Flex.Style.baseline); on a column an error", .fixture = "flexitems", .spec = "F2" },
         .{ .kind = "value", .name = "start", .applies_to = "align-self", .status = .mapped, .target = "spec.flexed(s, .{ .cross = .start }) (Flex.Style.cross); stretch -> Style.size[cross] = .fill", .fixture = "flexitems", .spec = "F2" },
         .{ .kind = "value", .name = "center", .applies_to = "align-self", .status = .mapped, .target = "spec.flexed(s, .{ .cross = .center }) (Flex.Style.cross); stretch -> Style.size[cross] = .fill", .fixture = "flexitems", .spec = "F2" },
         .{ .kind = "value", .name = "end", .applies_to = "align-self", .status = .mapped, .target = "spec.flexed(s, .{ .cross = .end }) (Flex.Style.cross); stretch -> Style.size[cross] = .fill", .fixture = "flexitems", .spec = "F2" },
