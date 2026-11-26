@@ -29,7 +29,7 @@ every file matched. This records source identity at import time, not a promise
 that future revisions will retain the same timing or source bytes.
 
 For fresh runs use the
-[architecture-lab benchmark guide](../../examples/architecture-lab/docs/BENCHMARKS.md).
+architecture-lab benchmark guide (`examples/architecture-lab/docs/BENCHMARKS.md` at `e0ad0404`).
 Build both versions from the same packaged harness, finish compilation before
 timing, preserve the full run range, and check equivalent output and updates
 before interpreting a speed difference. Original raw reports predate the added

@@ -27,12 +27,12 @@ git -C ../lcgf-software-reference diff --check
 ```
 
 Use the same version of the
-[architecture lab](../../../examples/architecture-lab/README.md) in an external
+architecture lab (`examples/architecture-lab/README.md` at `e0ad0404`) in an external
 copy, selecting that worktree with `zig fetch --save=lcgf PATH_TO_CHECKOUT` as
 the example guide describes. Build `bench-build reuse_bench-build` for the
 reference; `incremental_bench-build` requires the current retained host. Build
 the candidate separately and compare executable paths using the
-[benchmark runners](../../../examples/architecture-lab/docs/BENCHMARKS.md).
+benchmark runners (`examples/architecture-lab/docs/BENCHMARKS.md` at `e0ad0404`).
 Use Zig `0.18.0-dev.1151+8dfb7a7cc`, the same target/vector width, and the same
 application sources and limits on both sides. Reconstructed binaries constitute
 a new run; their packaging and hashes can differ from the archived executables.

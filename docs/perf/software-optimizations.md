@@ -39,7 +39,7 @@ frames, idle samples average 1,000 scheduler calls, and architecture cases use
 501 samples. Core/reuse cases use 100 warmups and 1,001 measured frames.
 Incremental cases use 32 warmups and 101 measured frames. Storage setup and
 output checking are outside timing. The
-[benchmark guide](../../examples/architecture-lab/docs/BENCHMARKS.md) defines
+benchmark guide (`examples/architecture-lab/docs/BENCHMARKS.md` at `e0ad0404`) defines
 each timing boundary.
 
 These are CPU wall-time measurements. They exclude X11 transfer,
@@ -150,20 +150,25 @@ the X11 server owns a separate backing pixmap. The old RGBA atlas expansion was
 compile-time work, so Alpha8 saves representation bytes, not a per-frame atlas
 conversion. Sources: [raw context metadata](../../bench/software/results/static/800x600-candidate-0.json),
 [retained metadata](../../bench/software/results/retained/summary.json),
-[example storage](../../examples/architecture-lab/src/platform/x11.zig), and
+example storage (`examples/architecture-lab/src/platform/x11.zig` at `e0ad0404`), and
 [atlas source](../../src/example/font.zig).
 
 Retained rendering requires persistent, exclusively owned pixel/glyph/snapshot
 storage; external writes require `invalidate()`. Storage, dimensions, scale,
 format, or background changes force full drawing. Unsupported drawing effects,
 images, and insufficient capacity retain full-render fallbacks. The
-[software optimization guide](../../examples/architecture-lab/docs/SOFTWARE_OPTIMIZATION_GUIDE.md)
+software optimization guide (`examples/architecture-lab/docs/SOFTWARE_OPTIMIZATION_GUIDE.md` at `e0ad0404`)
 documents these contracts and the SIMD/data-layout changes.
 
 ## Run a new measurement
 
-Use the [architecture lab](../../examples/architecture-lab/README.md) and its
-[benchmark commands](../../examples/architecture-lab/docs/BENCHMARKS.md). From
+The architecture lab was later split into one example per architecture (`examples/viper`,
+`mvp`, `mvvp`, `mvvm`, `mvvm-c`), which carry no benchmark harness. The harness below is
+the lab at commit `e0ad0404`: `git worktree add lab e0ad0404`, then work in
+`lab/examples/architecture-lab`.
+
+Use the architecture lab (`examples/architecture-lab/README.md` at `e0ad0404`) and its
+benchmark commands (`examples/architecture-lab/docs/BENCHMARKS.md` at `e0ad0404`). From
 that example directory, build before timing:
 
 ```sh
