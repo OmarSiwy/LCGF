@@ -1,9 +1,33 @@
-//! T-RT: the runtime page reads its `--t-*` tokens from the caller's table while it builds.
-//! A change of the table is seen (`themeChanged`) and gives the new geometry on the next frame.
+//! T-RT and T-CT: both frontends' pages read their `--t-*` tokens from the caller's table
+//! while they build. A change of the table is seen (`themeChanged`) and gives the new
+//! geometry on the next frame.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
 const page = @import("page_rt");
+const spec_page = @import("page");
+
+test "the comptime page reads the table too" {
+    const S = struct {
+        var ui: spec_page.Ui = .{};
+        var tokens: spec_page.ThemeTable = .{};
+    };
+    S.ui.tokens = &S.tokens;
+    const in: lcgf.input.Input = .{};
+    var t = S.ui.frame(&in).tree;
+    try std.testing.expectEqual(8, t.rect(3).y0 - t.rect(2).y0);
+    const h0 = t.rect(3).y1 - t.rect(3).y0;
+    S.tokens.set(.space, 20);
+    S.tokens.set(.big, 30);
+    S.tokens.set(.panel, .rgb(1, 2, 3));
+    try std.testing.expect(S.ui.themeChanged());
+    t = S.ui.frame(&in).tree;
+    try std.testing.expect(!S.ui.themeChanged());
+    try std.testing.expectEqual(20, t.rect(3).y0 - t.rect(2).y0);
+    try std.testing.expectEqual(20, t.rect(4).y0 - t.rect(3).y1);
+    try std.testing.expect(t.rect(3).y1 - t.rect(3).y0 > h0);
+    try std.testing.expectEqual(lcgf.types.Color.rgb(1, 2, 3).bitsOf(), t.c.look[2].fill);
+}
 
 var buffer: [lcgf.context.Context.requiredBytes(page.limits)]u8 align(lcgf.mem.column_align) = undefined;
 

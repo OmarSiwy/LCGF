@@ -208,6 +208,26 @@ pub const Emit = struct {
             e.write("s.named(");
             close.print(e.arena, ", \"{f}\")", .{std.zig.fmtString(n.name)}) catch unreachable;
         }
+        // Run-time theme tokens: `spec.tokened(s, uses)` (T-CT), read when the row is pushed.
+        var tokens_close: []const u8 = "";
+        const texty = n.kind == .label or n.kind == .text or n.kind == .heading;
+        const text_uses: ir.TextTokens = if (texty) n.text_uses else .{};
+        if (n.uses.len > 0 or text_uses.px != none or text_uses.color != none) {
+            e.write("s.tokened(");
+            var buf: std.ArrayList(u8) = .empty;
+            buf.appendSlice(e.arena, ", &.{") catch unreachable;
+            var k: usize = 0;
+            for (n.uses) |u| {
+                buf.print(e.arena, "{s}.{{ .target = .{s}, .token = \"{s}\" }}", .{ if (k == 0) " " else ", ", @tagName(u.target), e.page.tokens.items[u.token].field }) catch unreachable;
+                k += 1;
+            }
+            inline for (.{ .{ "px", "text_px" }, .{ "color", "text_color" } }) |tu| if (@field(text_uses, tu[0]) != none) {
+                buf.print(e.arena, "{s}.{{ .target = .{s}, .token = \"{s}\" }}", .{ if (k == 0) " " else ", ", tu[1], e.page.tokens.items[@field(text_uses, tu[0])].field }) catch unreachable;
+                k += 1;
+            };
+            buf.appendSlice(e.arena, " })") catch unreachable;
+            tokens_close = buf.items;
+        }
         // Flex item margins: engine spec F2, `spec.flexed(s, Flex.Style)`.
         var margin_close: []const u8 = "";
         if (n.margin) |m| {
@@ -345,6 +365,7 @@ pub const Emit = struct {
         var all: std.ArrayList(u8) = .empty;
         all.appendSlice(e.arena, inner_close.items) catch unreachable;
         all.appendSlice(e.arena, margin_close) catch unreachable;
+        all.appendSlice(e.arena, tokens_close) catch unreachable;
         all.appendSlice(e.arena, close.items) catch unreachable;
         if (!has_children) {
             e.write(all.items);
@@ -469,12 +490,16 @@ pub const Emit = struct {
         e.write("pub const theme: w.Theme = ");
         e.structure(page.theme, ir.Theme{});
         e.write(";\n\n");
+        e.tokensDecl();
         e.write(body.items);
         if (e.runtime) {
             e.write(rt.items);
             e.runtimePage();
         } else {
-            e.write("\npub const Ui = w.ComptimeUi(State, spec, theme);\npub const Widget = Ui.Events.Widget;\n\n");
+            if (page.tokens.items.len > 0)
+                e.write("\npub const Ui = w.ComptimeUiTokens(State, spec, theme, Tokens);\npub const Widget = Ui.Events.Widget;\n\n")
+            else
+                e.write("\npub const Ui = w.ComptimeUi(State, spec, theme);\npub const Widget = Ui.Events.Widget;\n\n");
             e.page_fn();
         }
         e.checkBlock();
@@ -659,23 +684,27 @@ pub const Emit = struct {
         return null;
     }
 
+    /// `Tokens`, `ThemeTable` and `default_tokens` of a page with run-time theme tokens.
+    fn tokensDecl(e: *Emit) void {
+        const tokens = e.page.tokens.items;
+        if (tokens.len == 0) return;
+        e.write("/// The page's run-time theme tokens (its `--t-*` custom properties), with the defaults its\n/// CSS gives. The page reads them from the caller's table (`ui.tokens`) as it builds.\npub const Tokens = struct {\n");
+        for (tokens) |t| switch (t.kind) {
+            .length => e.print("    {f}: f32 = {d}, // {s}\n", .{ std.zig.fmtId(t.field), t.default_px, e.where(t.loc) }),
+            .color => {
+                e.print("    {f}: lcgf.types.Color = ", .{std.zig.fmtId(t.field)});
+                e.color(t.default_color);
+                e.print(", // {s}\n", .{e.where(t.loc)});
+            },
+        };
+        e.write("};\npub const ThemeTable = lcgf.theme_table.ThemeTable(Tokens);\npub const default_tokens: ThemeTable = .{};\n\n");
+    }
+
     /// `Ui` of the runtime frontend: the state store the comptime page has (`signals`), and
     /// `build(ui, f)`, which builds the page into a runtime `Frame` and records its events.
     fn runtimeUi(e: *Emit) void {
         const nodes = e.page.nodes.slice();
         const tokens = e.page.tokens.items;
-        if (tokens.len > 0) {
-            e.write("\n/// The page's run-time theme tokens (its `--t-*` custom properties), with the defaults its\n/// CSS gives. The page reads them from the caller's table while it builds.\npub const Tokens = struct {\n");
-            for (tokens) |t| switch (t.kind) {
-                .length => e.print("    {f}: f32 = {d}, // {s}\n", .{ std.zig.fmtId(t.field), t.default_px, e.where(t.loc) }),
-                .color => {
-                    e.print("    {f}: lcgf.types.Color = ", .{std.zig.fmtId(t.field)});
-                    e.color(t.default_color);
-                    e.print(", // {s}\n", .{e.where(t.loc)});
-                },
-            };
-            e.write("};\npub const ThemeTable = lcgf.theme_table.ThemeTable(Tokens);\npub const default_tokens: ThemeTable = .{};\n");
-        }
         e.write(
             \\
             \\/// The page in the runtime front end: the same state store as the comptime page's

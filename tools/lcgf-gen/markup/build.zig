@@ -72,14 +72,14 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
     pages.append(b.allocator, .{ .name = "lcgf", .module = lcgf }) catch @panic("out of memory");
     for (manifest.manifest.fixtures) |f| {
         const html = b.path(b.fmt("{s}/{s}/page.html", .{ dir, f.name }));
-        const page = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec" });
+        const page = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec", .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
         const page_rt = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
         if (f.runtime_vars.len > 0) {
             const rt_test = b.addTest(.{ .name = b.fmt("markup-{s}-tokens", .{f.name}), .root_module = b.createModule(.{
                 .root_source_file = b.path(b.fmt("{s}/{s}/runtime_test.zig", .{ dir, f.name })),
                 .target = target,
                 .optimize = optimize,
-                .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page_rt", .module = page_rt } },
+                .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "page_rt", .module = page_rt }, .{ .name = "page", .module = page } },
             }) });
             step.dependOn(&b.addRunArtifact(rt_test).step);
         }

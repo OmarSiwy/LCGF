@@ -1096,6 +1096,17 @@ pub const Lowerer = struct {
         }
     }
 
+    /// Run-time tokens on a widget: its builder makes its own rows, so neither frontend can
+    /// write a token into them (engine spec R1 for runtime, `spec.tokened` for comptime).
+    pub fn checkTokens(l: *Lowerer) void {
+        const nodes = l.page.nodes.slice();
+        for (0..nodes.len) |i| switch (nodes.items(.kind)[i]) {
+            .container, .landmark, .label, .text, .heading, .when, .list, .choice => {},
+            else => if (nodes.items(.uses)[i].len > 0)
+                l.ds.err(nodes.items(.loc)[i], "run-time theme tokens set only containers and text; this widget's builder makes its own rows", .{}),
+        };
+    }
+
     /// Regions whose content is not exactly one element; checked after the walk.
     fn checkRegions(l: *Lowerer) void {
         const kinds = l.page.nodes.items(.kind);

@@ -267,8 +267,7 @@ pub fn compile(io: std.Io, arena: std.mem.Allocator, ds: *diag.Diags, deps: *std
         .auto => l.page.runtime,
     };
     if (runtime) l.checkRuntime();
-    if (!runtime and l.page.tokens.items.len > 0)
-        ds.err(l.page.tokens.items[0].loc, "run-time theme tokens (--runtime-vars) need the runtime frontend until the comptime page takes them (T-CT)", .{});
+    l.checkTokens();
     if (explain) ds.note(.{ .file = file, .off = 0 }, "{s}", .{if (runtime) "runtime frontend: the page is a build(ui, frame) of Frame and widget calls" else "spec frontend: every construct on this page lowers to a comptime Spec"});
     if (ds.errors > 0) return null;
     var e: emit_zig.Emit = .{ .arena = arena, .ds = ds, .page = &l.page, .runtime = runtime };

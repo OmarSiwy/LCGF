@@ -101,13 +101,13 @@ With `--runtime-vars=t-` (`.runtime_vars = "t-"` in `addMarkup`), each `var(--t-
 reads becomes a token instead of being folded at build time. A token is one length or one
 colour (hex or a name); its default is the CSS value.
 
-The runtime page then exports `Tokens`, with those defaults, and `ThemeTable`
+The page then exports `Tokens`, with those defaults, and `ThemeTable`
 (`lcgf.theme_table.ThemeTable(Tokens)`). Point `ui.tokens` at your table.
 
 `table.set(.name, value)` bumps the table's generation. `ui.themeChanged()` is then true, and
 the next frame lays the page out with the new values. Pages that use no token compile to the
-same code as without the option (`ci/run.sh markup-zero-cost`). The comptime frontend reads
-tokens once T-CT lands (docs/plans/markup-engine-api.md).
+same code as without the option (`ci/run.sh markup-zero-cost`). Both frontends read them: a
+comptime page is `ComptimeUiTokens(State, spec, theme, Tokens)` over `spec.tokened` nodes.
 
 ## Handlers
 

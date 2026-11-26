@@ -215,7 +215,7 @@
         .{ .kind = "at-rule", .name = "@media", .status = .planned, .diagnostic = "@media rules are not lowered yet", .spec = "F3" },
         .{ .kind = "custom-property", .name = "--x", .status = .mapped, .target = "build-time var() substitution", .fixture = "landmarks" },
         .{ .kind = "custom-property", .name = "--t-*", .applies_to = "runtime", .status = .mapped, .target = "--runtime-vars=t-: a field of Tokens, read from the caller's ThemeTable (theme/table.zig) while the runtime page builds", .fixture = "tokens" },
-        .{ .kind = "custom-property", .name = "--t-*", .applies_to = "spec", .status = .planned, .diagnostic = "run-time theme tokens (--runtime-vars) need the runtime frontend until the comptime page takes them (T-CT)", .spec = "T-CT" },
+        .{ .kind = "custom-property", .name = "--t-*", .applies_to = "spec", .status = .mapped, .target = "--runtime-vars=t-: spec.tokened(s, uses) with the CSS defaults in the Spec; ComptimeUiTokens(State, spec, theme, Tokens) pushes the rows from ui.tokens", .fixture = "tokens" },
         .{ .kind = "custom-property", .name = "--lcgf-*", .status = .mapped, .target = "base.Theme fields base.zig:88 (the page's theme)", .fixture = "counter" },
     },
     .fixtures = .{
