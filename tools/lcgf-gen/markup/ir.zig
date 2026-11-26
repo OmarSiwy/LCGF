@@ -48,6 +48,9 @@ pub const Kind = enum(u8) {
     choice,
     /// `spec.list(.bind, max, style, template)`: its only child is the template.
     list,
+    /// `widgets_scroll.ct.scroll(theme, .id, .bind, children)`: the content of a box with
+    /// `overflow-y: auto | scroll`, scrolled by the f32 field `bind`.
+    scroll,
     /// `widgets_spacer.ct.spacer(axis)`: free space for `justify-content: space-*`.
     spacer,
     /// `<template lcgf-each="item in items">`: a run-time region (`ct_interop.region`) the page

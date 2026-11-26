@@ -353,7 +353,7 @@ pub const Emit = struct {
         if (n.placed.layer != 0) pos_close.print(e.arena, ", {d})", .{n.placed.layer}) catch unreachable;
         const restyle = !std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0;
         const has_children = switch (n.kind) {
-            .container, .landmark, .when, .choice, .list, .dialog, .section, .popover => true,
+            .container, .landmark, .when, .choice, .list, .dialog, .section, .popover, .scroll => true,
             .component => e.hasChild(i),
             else => false,
         };
@@ -542,6 +542,10 @@ pub const Emit = struct {
                     e.fields(n.style, types.Style{}, &.{}, n.params_expr);
                     e.print(", {s}, .{{", .{e.backdrop(n)});
                 } else e.print("{s}.ct.dialog(theme, .{f}, .{f}, .{{", .{ e.use("dialog"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                inner_close.appendSlice(e.arena, "})") catch unreachable;
+            },
+            .scroll => {
+                e.print("{s}.ct.scroll(theme, .{f}, .{f}, .{{", .{ e.use("scroll"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 inner_close.appendSlice(e.arena, "})") catch unreachable;
             },
             .spinner => unreachable,
@@ -1133,6 +1137,10 @@ pub const Emit = struct {
                 e.print("if ({s}.{s}(f, &theme, \"{s}\", &{s}{s})) {{", .{ e.use("dialog"), e.faced("begin", face), n.id, e.stateRef(n.bind), face });
                 return e.arena.dupe(u8, "dialog.end(f); }") catch unreachable;
             },
+            .scroll => {
+                e.print("{s}.open(f, &theme, {s}, &{s});", .{ e.use("scroll"), e.rtId(n.id, list_depth), e.stateRef(n.bind) });
+                return std.fmt.allocPrint(e.arena, "scroll.close(f, &theme, {s}, {s});", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind) }) catch unreachable;
+            },
             .spacer, .spinner, .each => unreachable,
         }
     }
@@ -1702,7 +1710,7 @@ pub const Emit = struct {
             e.print(" // {s}\n", .{e.where(nodes.items(.loc)[i])});
             // A leaf inside a choice closes its prong at once.
             const leaf = switch (nodes.items(.kind)[i]) {
-                .container, .landmark, .when, .list, .choice, .dialog, .section, .popover => false,
+                .container, .landmark, .when, .list, .choice, .dialog, .section, .popover, .scroll => false,
                 .component => !e.hasChild(i),
                 else => true,
             };
@@ -2056,7 +2064,7 @@ pub const Emit = struct {
             e.anchorPlace(a);
             e.write(", vp);");
         }
-        if (n.placed.sticky) |top| e.print(" _ = st.push(n{d}, 0, .{{ 0, {d} }}, .{{ false, true }});", .{ i, top });
+        if (n.placed.sticky) |top| e.print(" _ = st.push(n{d}, lcgf.widgets_scroll.scrollerOf(f.tree(), f.tree().c.parent[n{d}]), .{{ 0, {d} }}, .{{ false, true }});", .{ i, i, top });
         if (n.placed.layer != 0) e.print(" ly.c.own[n{d}] = {d};", .{ i, n.placed.layer });
         return close;
     }

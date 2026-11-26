@@ -97,6 +97,7 @@ const Lower = struct {
             // lcgf-if with lcgf-else: a choice over a bool, which the seam's plan refuses (its
             // selectors are u8 and u32).
             .choice => "<template lcgf-else>",
+            .scroll => "overflow: auto or scroll",
             .container, .label, .text, .button, .checkbox, .slider, .when, .list => "",
         };
         if (what.len > 0) {

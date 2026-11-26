@@ -308,8 +308,10 @@ Positioning: `relative` is a translate (`right` and `bottom` move the other way)
 floats the box at its parent's content box: `top`/`left` are its offset, `right`/`bottom`
 anchor it to that edge (`spec.anchored`), and `left: 0; right: 0` with no width makes it as
 wide as the parent (`top`/`bottom` alike). `fixed` anchors the box to the viewport. `sticky`
-with `top` holds the box that far below the top of the viewport (`spec.sticky`); scroll
-containers are not lowered yet. Fixed and sticky boxes paint above the in-flow ones, and
+with `top` holds the box that far below the top of its scroller (`spec.sticky`): the nearest
+box with `overflow-y: auto` or `scroll`, else the viewport. Such a box holds its content in a
+scroll area (`widgets_scroll`) scrolled by the `f32` field `<id>_scroll` (`scroll<N>_scroll`
+without an id); horizontal scrolling is not lowered yet. Fixed and sticky boxes paint above the in-flow ones, and
 `z-index` N from 0 to 254 on a positioned box paints it and its subtree above that, in layer
 N + 1 (`spec.layer`); absolute and relative boxes with `z-index: auto` keep tree order. A negative `z-index` on an
 absolute or fixed box paints it below its siblings and above its parent's background, as if the

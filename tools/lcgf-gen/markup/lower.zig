@@ -84,6 +84,8 @@ pub const Lowerer = struct {
     /// cell's slot in its row (`table`), by document node.
     rows: std.AutoHashMapUnmanaged(u32, [2]u32) = .empty,
     slots: std.AutoHashMapUnmanaged(u32, lcgf.grid.Item) = .empty,
+    /// The box being lowered has `overflow-y: auto | scroll` (`boxStyle`), taken by `container`.
+    scrolls: bool = false,
     /// `repeat(auto-fill | auto-fit, track)` read by the last `tracks` call.
     repeat: ?lcgf.grid.Decl.AutoRepeat = null,
     /// `grid-template-areas` of each grid container, by IR node (engine spec F7).
@@ -1125,6 +1127,8 @@ pub const Lowerer = struct {
         node.placed.layer = l.placed.layer;
         node.placed.below = l.placed.below;
         l.placed = .{};
+        if (l.scrolls) l.ds.err(node.loc, "overflow-y: auto or scroll is lowered on a block or flex column box only", .{});
+        l.scrolls = false;
         node.flex = l.flex;
         l.flex = .{};
         if (l.marker.len > 0) l.markItem(&node);
@@ -1493,8 +1497,17 @@ pub const Lowerer = struct {
         if (has_margin) margin.* = m;
         if (l.declared(n, .@"aspect-ratio")) |v| l.aspectRatio(v);
         // overflow
+        l.scrolls = false;
         inline for (.{ Prop.@"overflow-x", Prop.@"overflow-y" }) |p| if (l.keyword(n, p)) |kw| {
-            if (css.eq(kw, "hidden") or css.eq(kw, "clip")) s.clip = true else if (!css.eq(kw, "visible")) l.ds.err(l.declared(n, p).?.loc, "overflow: {s} needs a scroll container, which the compiler does not lower yet", .{kw});
+            if (css.eq(kw, "hidden") or css.eq(kw, "clip")) {
+                s.clip = true;
+            } else if (css.eq(kw, "auto") or css.eq(kw, "scroll")) {
+                // A vertical scroll area (`widgets_scroll`) around the box's content: `container`.
+                if (p == .@"overflow-x") l.ds.err(l.declared(n, p).?.loc, "horizontal scrolling is not lowered yet; overflow-x takes hidden or clip", .{}) else {
+                    s.clip = true;
+                    l.scrolls = true;
+                }
+            } else if (!css.eq(kw, "visible")) l.badValue(l.declared(n, p).?.first, p, l.declared(n, p).?.end);
         };
         if (l.colorOf(n, .@"background-color")) |col| {
             s.fill = col;
@@ -1963,7 +1976,18 @@ pub const Lowerer = struct {
         if (listRole(t)) |r| node.style.role = r;
         if (std.mem.eql(u8, t, "li")) l.marker = l.markerOf(n);
         node.name = l.accessibleName(n);
+        const scrolls = l.scrolls;
+        l.scrolls = false;
+        if (scrolls and dir == .x) l.ds.err(l.declared(n, .@"overflow-y").?.loc, "overflow-y: auto or scroll on a flex row is not lowered; scroll a column", .{});
         l.ir_of[n] = l.addNode(node);
+        if (scrolls) {
+            // The box's content goes in a scroll area that fills it, scrolled by a field of
+            // its own: `<id>_scroll` (the box's id, or `scroll<N>`).
+            const id = if (l.attr(n, "id")) |v| v else ok(std.fmt.allocPrint(l.arena, "scroll{d}", .{l.page.nodes.len}));
+            const bind = ok(std.fmt.allocPrint(l.arena, "{s}_scroll", .{id}));
+            l.field(bind, .f32, l.loc(n), "overflow-y: auto");
+            l.ir_of[n] = l.addNode(.{ .kind = .scroll, .parent = l.ir_of[n], .loc = l.loc(n), .id = id, .bind = bind });
+        }
     }
 
     // ---- grid (engine spec F7) -------------------------------------------------------------
