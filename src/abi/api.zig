@@ -89,6 +89,12 @@ pub const declared = .{
 
 pub const column_align = @import("../core/mem.zig").column_align;
 
+/// The bindings' own forms of the Zig types a program writes (bindings/cpp/include/lcgf/
+/// types.hpp, bindings/rust/lcgf/src/types.rs, by tools/abi-gen): the enums by name, and the
+/// structs field for field with Zig's defaults, laid out as their words (`lcgf_style`).
+pub const idiom_enums = .{ .{ types.Axis, "Dir" }, .{ types.Align, "Align" }, .{ types.Role, "Role" }, .{ Ease, "Ease" } };
+pub const idiom_structs = .{ .{ types.Size, "Size" }, .{ types.Style, "Style" }, .{ types.TextStyle, "TextStyle" }, .{ base.Theme, "Theme" }, .{ Spring, "Spring" } };
+
 /// Field names C, C++ or Rust cannot take, and what they are called there.
 pub const renames = .{.{ "float", "floating" }};
 

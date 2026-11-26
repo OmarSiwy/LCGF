@@ -142,6 +142,9 @@ A UI built in code each frame, as a Zig program does with `ctx.begin` and `f.ope
   call is a Zig function under its mechanical name (`Frame.open` is `lcgf_frame_open`,
   `base.button` is `lcgf_button`), and each type crosses as itself (an extern struct) or as
   its words in declaration order (`lcgf_style`, `lcgf_theme`).
+  The same run writes Rust's `lcgf::sys` (lcgf.h for Rust) and the types a program writes,
+  `Style`, `TextStyle`, `Size`, `Theme`, `Spring` and their enums, with Zig's defaults
+  (`lcgf/types.hpp`, `types.rs`).
 - **The layouts are checked.** Every type the header names is hashed into `LCGF_LAYOUT`; making a context fails with
   `Status::layout_hash` / `Status::LayoutHash` if the library was built with another layout.
 

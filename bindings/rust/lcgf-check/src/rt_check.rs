@@ -385,7 +385,7 @@ fn rows(path: &str) {
         let zig = &pair[sw..];
         let mine = Row::from(&st);
         let mut lib = Row::DEFAULT;
-        unsafe { lcgf::runtime::lcgf_template_from(&st, &mut lib) };
+        unsafe { lcgf::sys::lcgf_template_from((&raw const st).cast(), (&raw mut lib).cast()) };
         if bytes(&[mine]) != zig || bytes(&[lib]) != zig {
             if bad < 5 {
                 for (i, (a, z)) in bytes(&[mine]).chunks(4).zip(zig.chunks(4)).enumerate() {
@@ -431,7 +431,7 @@ fn main() {
     // The style the library has for `Style::DEFAULT` must be this crate's: the words are the
     // contract.
     let mut lib = Style::DEFAULT;
-    unsafe { lcgf::runtime::lcgf_style_default(&mut lib) };
+    unsafe { lcgf::sys::lcgf_style_default((&raw mut lib).cast()) };
     assert!(
         bytes(&[lib]) == bytes(&[Style::DEFAULT]),
         "Style::DEFAULT is not the library's default style"

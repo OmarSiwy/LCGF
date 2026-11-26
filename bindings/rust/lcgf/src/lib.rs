@@ -32,6 +32,13 @@ pub mod canvas;
 pub mod gpu;
 pub mod runtime;
 
+/// lcgf.h for Rust: liblcgf's C types, constants and functions, generated from
+/// src/abi/api.zig by tools/abi-gen.
+#[allow(non_camel_case_types, dead_code, clippy::all)]
+pub mod sys {
+    include!("sys.rs");
+}
+
 use core::marker::PhantomData;
 
 /// Alignment of the UI's buffer.
@@ -368,22 +375,7 @@ pub struct Tables<const N: usize>(pub [u32; N]);
 #[repr(C, align(64))]
 pub struct StaticTables<const N: usize>(pub [u32; N]);
 
-unsafe extern "C" {
-    fn lcgf_ct_init(tables: *const u32, len: usize, buf: *mut u8, buf_len: usize) -> i32;
-    pub fn lcgf_ct_layout() -> u32;
-    fn lcgf_ct_relayout(ui: *mut u8, state: *const u8, field: u32, out: *mut RawDraw) -> i32;
-    fn lcgf_ct_patch(ui: *mut u8, state: *const u8, field: u32);
-    fn lcgf_ct_dirty(ui: *mut u8) -> *const u8;
-    fn lcgf_ct_clear_dirty(ui: *mut u8);
-    fn lcgf_ct_draw(ui: *mut u8, out: *mut RawDraw);
-    fn lcgf_ct_at(ui: *mut u8, x: f32, y: f32) -> u32;
-    fn lcgf_ct_pointer(ui: *mut u8, input: *const Input, widget: *mut u32, value: *mut f32) -> i32;
-    fn lcgf_ct_focus_keys(ui: *mut u8, input: *const Input, tab: u8);
-    fn lcgf_ct_focus(ui: *mut u8) -> u32;
-    fn lcgf_ct_set_focus(ui: *mut u8, widget: u32);
-    fn lcgf_ct_next_focus(ui: *mut u8, from: u32, back: i32) -> u32;
-    fn lcgf_ct_shortcut(list: *const u8, len: usize, code: u8, mods: u8) -> u32;
-}
+pub use sys::lcgf_ct_layout;
 
 /// A static UI's own frame, `lcgf_ui_<name>_frame`: liblcgf's static frame specialized to the
 /// UI's tables, built by `lcgf_build::static_ui` in the crate's build script (from
@@ -438,10 +430,10 @@ impl<'a, T: StaticSpec> StaticUi<'a, T> {
     /// Checks the tables once and places the UI at the start of `buf` (a `Buffer<BYTES>`).
     pub fn new(buf: &'a mut [u8], state: T::State) -> Result<Self, Status> {
         let r = unsafe {
-            lcgf_ct_init(
+            sys::lcgf_ct_init(
                 T::WORDS.as_ptr(),
                 T::WORDS.len(),
-                buf.as_mut_ptr(),
+                buf.as_mut_ptr().cast(),
                 buf.len(),
             )
         };
@@ -451,7 +443,7 @@ impl<'a, T: StaticSpec> StaticUi<'a, T> {
         }
         let mut out = core::mem::MaybeUninit::<RawDraw>::uninit();
         let last = unsafe {
-            lcgf_ct_draw(buf.as_mut_ptr(), out.as_mut_ptr());
+            sys::lcgf_ct_draw(buf.as_mut_ptr().cast(), out.as_mut_ptr().cast());
             out.assume_init()
         };
         Ok(Self { state, buf, last })
@@ -490,11 +482,11 @@ impl<'a, T: StaticSpec> StaticUi<'a, T> {
     pub fn relayout(&mut self, field: T::Field) -> DrawList<'_> {
         let state = self.state_ptr();
         unsafe {
-            lcgf_ct_relayout(
-                self.buf.as_mut_ptr(),
-                state,
+            sys::lcgf_ct_relayout(
+                self.buf.as_mut_ptr().cast(),
+                state.cast(),
                 T::field(field),
-                &mut self.last,
+                (&raw mut self.last).cast(),
             )
         };
         self.draw()
@@ -504,17 +496,17 @@ impl<'a, T: StaticSpec> StaticUi<'a, T> {
     /// dirty. No layout, no paint.
     pub fn patch(&mut self, field: T::Field) {
         let state = self.state_ptr();
-        unsafe { lcgf_ct_patch(self.buf.as_mut_ptr(), state, T::field(field)) };
+        unsafe { sys::lcgf_ct_patch(self.buf.as_mut_ptr().cast(), state.cast(), T::field(field)) };
     }
 
     /// The draw list's quads a patch changed since `clear_dirty`, one byte each; all of them
     /// after a frame.
     pub fn dirty(&mut self) -> &[u8] {
         let n = self.last.quad_len as usize;
-        unsafe { core::slice::from_raw_parts(lcgf_ct_dirty(self.buf.as_mut_ptr()), n) }
+        unsafe { core::slice::from_raw_parts(sys::lcgf_ct_dirty(self.buf.as_mut_ptr().cast()), n) }
     }
     pub fn clear_dirty(&mut self) {
-        unsafe { lcgf_ct_clear_dirty(self.buf.as_mut_ptr()) }
+        unsafe { sys::lcgf_ct_clear_dirty(self.buf.as_mut_ptr().cast()) }
     }
 
     fn widget(row: u32) -> Option<T::Widget> {
@@ -524,7 +516,7 @@ impl<'a, T: StaticSpec> StaticUi<'a, T> {
     /// The topmost widget under (x, y) in the last frame's layout: half-open edges, and the
     /// latest widget wins where widgets overlap.
     pub fn at(&mut self, x: f32, y: f32) -> Option<T::Widget> {
-        Self::widget(unsafe { lcgf_ct_at(self.buf.as_mut_ptr(), x, y) })
+        Self::widget(unsafe { sys::lcgf_ct_at(self.buf.as_mut_ptr().cast(), x, y) })
     }
 
     /// This frame's pointer event: a press picks the widget under the pointer; a checkbox is
@@ -532,25 +524,40 @@ impl<'a, T: StaticSpec> StaticUi<'a, T> {
     /// held.
     pub fn pointer(&mut self, input: &Input) -> Option<T::Event> {
         let (mut row, mut value) = (0u32, 0f32);
-        let kind = unsafe { lcgf_ct_pointer(self.buf.as_mut_ptr(), input, &mut row, &mut value) };
+        let kind = unsafe {
+            sys::lcgf_ct_pointer(
+                self.buf.as_mut_ptr().cast(),
+                (input as *const Input).cast(),
+                &mut row,
+                &mut value,
+            )
+        };
         (kind != 0).then(|| T::event(row, value))
     }
 
     /// Moves focus for every Tab press and repeat in this frame's keys; Shift goes back.
     pub fn focus_keys(&mut self, input: &Input, tab: u8) {
-        unsafe { lcgf_ct_focus_keys(self.buf.as_mut_ptr(), input, tab) }
+        unsafe {
+            sys::lcgf_ct_focus_keys(
+                self.buf.as_mut_ptr().cast(),
+                (input as *const Input).cast(),
+                tab,
+            )
+        }
     }
     pub fn focus(&mut self) -> Option<T::Widget> {
-        Self::widget(unsafe { lcgf_ct_focus(self.buf.as_mut_ptr()) })
+        Self::widget(unsafe { sys::lcgf_ct_focus(self.buf.as_mut_ptr().cast()) })
     }
     pub fn set_focus(&mut self, w: Option<T::Widget>) {
         let row = w.map(T::widget_row).unwrap_or(NO_WIDGET);
-        unsafe { lcgf_ct_set_focus(self.buf.as_mut_ptr(), row) }
+        unsafe { sys::lcgf_ct_set_focus(self.buf.as_mut_ptr().cast(), row) }
     }
     /// The widget Tab (`back` false) or Shift+Tab moves focus to from `from`, wrapping.
     pub fn next_focus(&mut self, from: Option<T::Widget>, back: bool) -> Option<T::Widget> {
         let row = from.map(T::widget_row).unwrap_or(NO_WIDGET);
-        Self::widget(unsafe { lcgf_ct_next_focus(self.buf.as_mut_ptr(), row, back as i32) })
+        Self::widget(unsafe {
+            sys::lcgf_ct_next_focus(self.buf.as_mut_ptr().cast(), row, back as i32)
+        })
     }
 
     /// The widget a shortcut of `list` activates for key `code` with exactly `mods` held.
@@ -559,18 +566,19 @@ impl<'a, T: StaticSpec> StaticUi<'a, T> {
             core::mem::size_of::<Shortcut<T::Widget>>() == 8,
             "a widget is a u32"
         );
-        Self::widget(unsafe { lcgf_ct_shortcut(list.as_ptr().cast(), list.len(), code, mods) })
+        Self::widget(unsafe { sys::lcgf_ct_shortcut(list.as_ptr().cast(), list.len(), code, mods) })
     }
 }
 
+pub use sys::lcgf_layout_hash;
+
+// The lane-named frame (lcgf_lanes.h, by hand): the name says the lane count.
 unsafe extern "C" {
-    fn lcgf_ui_init(tables: *const u32, len: usize, buf: *mut u8, buf_len: usize) -> i32;
     #[cfg_attr(lcgf_lanes = "4", link_name = "lcgf_frame_u32_f32_l4")]
     #[cfg_attr(lcgf_lanes = "8", link_name = "lcgf_frame_u32_f32_l8")]
     #[cfg_attr(lcgf_lanes = "16", link_name = "lcgf_frame_u32_f32_l16")]
     #[cfg_attr(lcgf_lanes = "auto", link_name = "lcgf_frame_u32_f32_auto")]
     fn lcgf_frame(ui: *mut u8, state: *mut u8, input: *const Input, out: *mut RawFrame);
-    pub fn lcgf_layout_hash() -> u32;
 }
 
 /// A UI over its tables, in the caller's buffer. The generated `Ui` wraps it and adds a setter
@@ -584,7 +592,14 @@ pub struct Ui<'a, S, W> {
 impl<'a, S, W: WidgetEnum> Ui<'a, S, W> {
     /// Checks the tables once and places the UI at the start of `buf`.
     pub fn new(tables: &[u32], buf: &'a mut [u8], state: S) -> Result<Self, Status> {
-        let r = unsafe { lcgf_ui_init(tables.as_ptr(), tables.len(), buf.as_mut_ptr(), buf.len()) };
+        let r = unsafe {
+            sys::lcgf_ui_init(
+                tables.as_ptr(),
+                tables.len(),
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+            )
+        };
         if r != 0 {
             // SAFETY: lcgf_ui_init returns 0 or one of Status's values.
             return Err(unsafe { core::mem::transmute::<i32, Status>(r) });
@@ -625,3 +640,11 @@ impl<'a, S, W: WidgetEnum> Ui<'a, S, W> {
 }
 
 const _: () = assert!(core::mem::size_of::<Quad>() == 136 && core::mem::size_of::<TextRun>() == 96);
+const _: () = {
+    use core::mem::size_of;
+    assert!(size_of::<Quad>() == size_of::<sys::lcgf_quad>());
+    assert!(size_of::<TextRun>() == size_of::<sys::lcgf_text_run>());
+    assert!(size_of::<Input>() == size_of::<sys::lcgf_input>());
+    assert!(size_of::<RawDraw>() == size_of::<sys::lcgf_draw>());
+    assert!(size_of::<RawFrame>() == size_of::<sys::lcgf_ui_output>());
+};

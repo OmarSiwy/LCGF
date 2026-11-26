@@ -19,6 +19,11 @@
 //!   keeps only what is not a store: the overflow clamp, the participation collapse, the child
 //!   count, the extras row's place and the computed fields.
 //!
+//! - bindings/cpp/include/lcgf/types.hpp and bindings/rust/lcgf/src/types.rs: the types a
+//!   program writes (api.zig's `idiom_enums`, `idiom_structs`: Style, TextStyle, Size, Theme,
+//!   Spring and their enums) with Zig's defaults, laid out as lcgf.h's structs.
+//! - bindings/rust/lcgf/src/sys.rs: lcgf.h for Rust, the same constants, types and functions.
+//!
 //! The tripwire: every `pub fn` of a container api.zig lists (and every `pub const f = x.f`
 //! alias of one) is exported or skipped with a reason, and every skip names one that exists. Without it the bindings fall silently
 //! behind the Zig API.
@@ -51,6 +56,9 @@ pub fn main(init: std.process.Init) !void {
         .{ .path = "src/abi/lcgf.h", .text = try header(&src) },
         .{ .path = "bindings/cpp/include/lcgf/rows.hpp", .text = try rowsCpp(arena) },
         .{ .path = "bindings/rust/lcgf/src/rows.rs", .text = try rowsRust(arena) },
+        .{ .path = "bindings/cpp/include/lcgf/types.hpp", .text = try typesCpp(arena) },
+        .{ .path = "bindings/rust/lcgf/src/types.rs", .text = try typesRust(arena) },
+        .{ .path = "bindings/rust/lcgf/src/sys.rs", .text = try sysRust(&src) },
     };
     for (outputs) |o| {
         if (check) {
@@ -657,5 +665,355 @@ fn rowsRust(arena: std.mem.Allocator) ![]const u8 {
         }
     }
     try o.appendSlice(arena, "    }\n}\n");
+    return o.items;
+}
+
+// ---- the idiomatic types ---------------------------------------------------------------------
+
+const Lang = enum { cpp, rust };
+
+fn idiomEnum(comptime T: type) ?[]const u8 {
+    inline for (api.idiom_enums) |e| if (e[0] == T) return e[1];
+    return null;
+}
+
+fn idiomStruct(comptime T: type) ?[]const u8 {
+    inline for (api.idiom_structs) |e| if (e[0] == T) return e[1];
+    return null;
+}
+
+/// `in_out` as `InOut`.
+fn camel(a: std.mem.Allocator, name: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var up = true;
+    for (name) |c| {
+        if (c == '_') {
+            up = true;
+            continue;
+        }
+        try out.append(a, if (up) std.ascii.toUpper(c) else c);
+        up = false;
+    }
+    return out.items;
+}
+
+/// The type of a field of an idiomatic struct (arrays aside).
+fn idiomType(comptime T: type, comptime lang: Lang) []const u8 {
+    if (comptime idiomEnum(T)) |n| return n;
+    if (comptime idiomStruct(T)) |n| return n;
+    if (T == f32) return if (lang == .cpp) "float" else "f32";
+    return if (lang == .cpp) "std::uint32_t" else "u32";
+}
+
+fn float(a: std.mem.Allocator, x: f32, lang: Lang) ![]const u8 {
+    if (std.math.isInf(x)) return if (lang == .cpp) (if (x > 0) "inf" else "-inf") else (if (x > 0) "f32::INFINITY" else "f32::NEG_INFINITY");
+    const s = try std.fmt.allocPrint(a, "{d}", .{x});
+    if (lang == .cpp) return if (std.mem.indexOfScalar(u8, s, '.') != null) try std.fmt.allocPrint(a, "{s}f", .{s}) else s;
+    return if (std.mem.indexOfAny(u8, s, ".e") == null) try std.fmt.allocPrint(a, "{s}.0", .{s}) else s;
+}
+
+/// Value `v` of type `T` as `lang` writes it.
+fn value(a: std.mem.Allocator, comptime T: type, v: T, comptime lang: Lang) ![]const u8 {
+    if (T == f32) return float(a, v, lang);
+    if (comptime idiomEnum(T)) |n| {
+        const tag = @tagName(v);
+        return std.fmt.allocPrint(a, "{s}::{s}", .{ n, if (lang == .cpp) tag else try camel(a, tag) });
+    }
+    switch (@typeInfo(T)) {
+        .array => {
+            var out: std.ArrayList(u8) = .empty;
+            try out.append(a, if (lang == .cpp) '{' else '[');
+            for (v, 0..) |e, k| {
+                if (k != 0) try out.appendSlice(a, ", ");
+                try out.appendSlice(a, try value(a, @typeInfo(T).array.child, e, lang));
+            }
+            try out.append(a, if (lang == .cpp) '}' else ']');
+            return out.items;
+        },
+        .@"struct" => |st| if (st.backing_integer == null) {
+            var out: std.ArrayList(u8) = .empty;
+            try out.appendSlice(a, if (lang == .cpp) "{" else comptime idiomStruct(T).? ++ " { ");
+            inline for (st.field_names, 0..) |n, k| {
+                if (k != 0) try out.appendSlice(a, ", ");
+                if (lang == .rust) try out.print(a, "{s}: ", .{comptime fieldName(n)});
+                try out.appendSlice(a, try value(a, @FieldType(T, n), @field(v, n), lang));
+            }
+            try out.appendSlice(a, if (lang == .cpp) "}" else " }");
+            return out.items;
+        },
+        else => {},
+    }
+    var w: [1]u32 = undefined;
+    words.put(T, v, &w);
+    // Colours and sentinels in hex: 0xAABBGGRR reads as one.
+    if (w[0] > 0xffff) return std.fmt.allocPrint(a, if (lang == .cpp) "0x{x:0>8}u" else "0x{x:0>8}", .{w[0]});
+    return std.fmt.allocPrint(a, "{d}", .{w[0]});
+}
+
+fn arrayDims(comptime T: type) struct { E: type, dims: []const comptime_int } {
+    comptime var E = T;
+    comptime var dims: []const comptime_int = &.{};
+    inline while (@typeInfo(E) == .array) {
+        dims = dims ++ &[_]comptime_int{@typeInfo(E).array.len};
+        E = @typeInfo(E).array.child;
+    }
+    return .{ .E = E, .dims = dims };
+}
+
+const types_note = "Generated by tools/abi-gen (zig build abi-gen) from src/abi/api.zig's idiom lists: Zig's\n{s} types with their defaults, laid out as the words lcgf.h's structs are. Do not edit.\n";
+
+fn typesCpp(a: std.mem.Allocator) ![]const u8 {
+    @setEvalBranchQuota(100_000);
+    var o: std.ArrayList(u8) = .empty;
+    try o.print(a, "// " ++ types_note, .{"//"});
+    try o.appendSlice(a,
+        \\// clang-format off
+        \\#pragma once
+        \\#include <cstdint>
+        \\#include <limits>
+        \\
+        \\#include <lcgf.h>
+        \\
+        \\namespace lcgf {
+        \\
+        \\inline constexpr float inf = std::numeric_limits<float>::infinity();
+        \\
+        \\
+    );
+    inline for (api.idiom_enums) |e| {
+        const info = @typeInfo(e[0]).@"enum";
+        try o.print(a, "enum class {s} : std::uint32_t {{", .{e[1]});
+        inline for (info.field_names, info.field_values, 0..) |n, v, k| try o.print(a, "{s} {s} = {d}", .{ if (k == 0) "" else ",", n, v });
+        try o.appendSlice(a, " };\n");
+    }
+    try o.append(a, '\n');
+    inline for (api.idiom_structs) |e| {
+        const T = e[0];
+        const st = @typeInfo(T).@"struct";
+        try o.print(a, "struct {s} {{\n", .{e[1]});
+        const d: T = .{};
+        inline for (st.field_names) |n| {
+            const ad = comptime arrayDims(@FieldType(T, n));
+            try o.print(a, "    {s} {s}", .{ comptime idiomType(ad.E, .cpp), comptime fieldName(n) });
+            inline for (ad.dims) |x| try o.print(a, "[{d}]", .{x});
+            try o.print(a, " = {s};\n", .{try value(a, @FieldType(T, n), @field(d, n), .cpp)});
+        }
+        // Size's constants and constructors: Zig's `pub const fill: Size` and `pub fn px(v)`.
+        inline for (st.decl_names) |n| {
+            if (comptime @TypeOf(@field(T, n)) == T and !std.mem.eql(u8, n, "default")) try o.print(a, "    static constexpr {s} {s}() {{ return {s}; }}\n", .{ e[1], try camel(a, n), try value(a, T, @field(T, n), .cpp) });
+            if (comptime @typeInfo(@TypeOf(@field(T, n))) == .@"fn" and @hasField(T, "kind") and @hasField(@FieldType(T, "kind"), n)) {
+                const tag = @backingInt(@field(@FieldType(T, "kind"), n));
+                try o.print(a, "    static constexpr {s} {s}(float v) {{ return {{{d}, v}}; }}\n", .{ e[1], try camel(a, n), tag });
+            }
+        }
+        try o.print(a, "    const {s}* raw() const {{ return reinterpret_cast<const {s}*>(this); }}\n}};\n", .{ comptime nameOf(T), comptime nameOf(T) });
+        try o.print(a, "static_assert(sizeof({s}) == sizeof({s}) && sizeof({s}) == {d} * 4);\n\n", .{ e[1], comptime nameOf(T), e[1], words.wordsOf(T) });
+    }
+    try o.appendSlice(a, "} // namespace lcgf\n");
+    return o.items;
+}
+
+fn typesRust(a: std.mem.Allocator) ![]const u8 {
+    @setEvalBranchQuota(100_000);
+    var o: std.ArrayList(u8) = .empty;
+    try o.print(a, "// " ++ types_note, .{"//"});
+    try o.appendSlice(a, "// Included into runtime.rs (`include!`).\n\n");
+    inline for (api.idiom_enums) |e| {
+        const info = @typeInfo(e[0]).@"enum";
+        try o.print(a, "#[repr(u32)]\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub enum {s} {{\n", .{e[1]});
+        inline for (info.field_names, info.field_values) |n, v| try o.print(a, "    {s} = {d},\n", .{ try camel(a, n), v });
+        try o.appendSlice(a, "}\n\n");
+    }
+    inline for (api.idiom_structs) |e| {
+        const T = e[0];
+        const st = @typeInfo(T).@"struct";
+        try o.print(a, "#[repr(C)]\n#[derive(Clone, Copy, Debug, PartialEq)]\npub struct {s} {{\n", .{e[1]});
+        inline for (st.field_names) |n| {
+            const ad = comptime arrayDims(@FieldType(T, n));
+            var ty: []const u8 = comptime idiomType(ad.E, .rust);
+            comptime var k = ad.dims.len;
+            inline while (k > 0) : (k -= 1) ty = try std.fmt.allocPrint(a, "[{s}; {d}]", .{ ty, ad.dims[k - 1] });
+            try o.print(a, "    pub {s}: {s},\n", .{ comptime fieldName(n), ty });
+        }
+        try o.print(a, "}}\n\nimpl {s} {{\n", .{e[1]});
+        const d: T = .{};
+        try o.appendSlice(a, "    pub const DEFAULT: Self = Self {\n");
+        inline for (st.field_names) |n| try o.print(a, "        {s}: {s},\n", .{ comptime fieldName(n), try value(a, @FieldType(T, n), @field(d, n), .rust) });
+        try o.appendSlice(a, "    };\n");
+        inline for (st.decl_names) |n| {
+            if (comptime @TypeOf(@field(T, n)) == T and !std.mem.eql(u8, n, "default")) try o.print(a, "    pub const {s}: Self = {s};\n", .{ try upper(a, n), try value(a, T, @field(T, n), .rust) });
+            if (comptime @typeInfo(@TypeOf(@field(T, n))) == .@"fn" and @hasField(T, "kind") and @hasField(@FieldType(T, "kind"), n)) {
+                const tag = @backingInt(@field(@FieldType(T, "kind"), n));
+                try o.print(a, "    pub const fn {s}(v: f32) -> Self {{\n        Self {{ kind: {d}, v }}\n    }}\n", .{ n, tag });
+            }
+        }
+        try o.print(a, "}}\n\nimpl Default for {s} {{\n    fn default() -> Self {{\n        Self::DEFAULT\n    }}\n}}\n\nconst _: () = assert!(core::mem::size_of::<{s}>() == {d} * 4);\n\n", .{ e[1], e[1], words.wordsOf(T) });
+    }
+    return o.items;
+}
+
+// ---- sys.rs: lcgf.h for Rust -----------------------------------------------------------------
+
+const rust_keywords = [_][]const u8{ "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "async", "await", "dyn", "box" };
+
+fn rustName(a: std.mem.Allocator, n: []const u8) ![]const u8 {
+    for (rust_keywords) |k| if (std.mem.eql(u8, k, n)) return std.fmt.allocPrint(a, "{s}_", .{n});
+    return n;
+}
+
+/// The Rust spelling of C type `T` (what `spell` writes for C).
+fn rs(comptime T: type) []const u8 {
+    return switch (T) {
+        void => "()",
+        bool => "bool",
+        f32 => "f32",
+        f64 => "f64",
+        u8 => "u8",
+        u16 => "u16",
+        u32 => "u32",
+        u64 => "u64",
+        i32 => "i32",
+        i64 => "i64",
+        usize => "usize",
+        c_int => "i32",
+        anyopaque => "core::ffi::c_void",
+        else => switch (@typeInfo(T)) {
+            .pointer => |p| (if (p.attrs.@"const") "*const " else "*mut ") ++ rs(p.child),
+            .optional => |o| rs(o.child),
+            .array => |x| std.fmt.comptimePrint("[{s}; {d}]", .{ rs(x.child), x.len }),
+            .@"enum" => |e| rs(e.tag_type),
+            .@"struct" => |st| if (st.backing_integer) |B| (if (named(T)) nameOf(T) else rs(B)) else nameOf(zigOf(T)),
+            .@"opaque" => nameOf(zigOf(T)),
+            else => @compileError("abi-gen: no Rust spelling for " ++ @typeName(T)),
+        },
+    };
+}
+
+/// A leaf of a words struct in Rust: f32, else u32, a nested struct its words struct.
+fn rsWord(comptime T: type) []const u8 {
+    if (T == f32) return "f32";
+    return switch (@typeInfo(T)) {
+        .@"struct" => |st| if (st.backing_integer != null) "u32" else nameOf(T),
+        .optional => |o| rsWord(o.child),
+        .array => |x| std.fmt.comptimePrint("[{s}; {d}]", .{ rsWord(x.child), x.len }),
+        else => "u32",
+    };
+}
+
+fn sysTypes(a: std.mem.Allocator, o: *std.ArrayList(u8), done: *Emitted, comptime T: type) !void {
+    switch (@typeInfo(T)) {
+        .pointer => |p| return sysTypes(a, o, done, p.child),
+        .optional => |p| return sysTypes(a, o, done, p.child),
+        .array => |p| return sysTypes(a, o, done, p.child),
+        .@"struct" => |st| {
+            if (st.backing_integer) |B| {
+                if (comptime !named(T)) return;
+                if (done.contains(comptime nameOf(T))) return;
+                try done.put(a, comptime nameOf(T), {});
+                return o.print(a, "pub type {s} = {s};\n\n", .{ comptime nameOf(T), comptime rs(B) });
+            }
+            if (@hasDecl(T, "Zig")) return sysWords(a, o, done, T.Zig);
+            if (st.layout != .@"extern") return;
+            if (done.contains(comptime nameOf(T))) return;
+            inline for (st.field_types) |F| try sysTypes(a, o, done, F);
+            try done.put(a, comptime nameOf(T), {});
+            try o.print(a, "#[repr(C)]\n#[derive(Clone, Copy)]\npub struct {s} {{\n", .{comptime nameOf(T)});
+            inline for (st.field_names, st.field_types) |n, F| try o.print(a, "    pub {s}: {s},\n", .{ try rustName(a, n), comptime rs(F) });
+            try o.print(a, "}}\nconst _: () = assert!(core::mem::size_of::<{s}>() == {d});\n\n", .{ comptime nameOf(T), @sizeOf(T) });
+        },
+        else => {},
+    }
+}
+
+fn sysWords(a: std.mem.Allocator, o: *std.ArrayList(u8), done: *Emitted, comptime T: type) !void {
+    if (done.contains(comptime nameOf(T))) return;
+    const st = @typeInfo(T).@"struct";
+    inline for (st.field_types) |F| {
+        const E = comptime arrayDims(F).E;
+        if (@typeInfo(E) == .@"struct" and @typeInfo(E).@"struct".backing_integer == null) try sysWords(a, o, done, E);
+    }
+    try done.put(a, comptime nameOf(T), {});
+    try o.print(a, "#[repr(C)]\n#[derive(Clone, Copy)]\npub struct {s} {{\n", .{comptime nameOf(T)});
+    inline for (st.field_names, st.field_types) |n, F| try o.print(a, "    pub {s}: {s},\n", .{ try rustName(a, comptime fieldName(n)), comptime rsWord(F) });
+    try o.print(a, "}}\nconst _: () = assert!(core::mem::size_of::<{s}>() == {d} * 4);\n\n", .{ comptime nameOf(T), words.wordsOf(T) });
+}
+
+fn sysFn(a: std.mem.Allocator, o: *std.ArrayList(u8), c_name: []const u8, comptime F: type, names: []const []const u8, doc: []const u8, comptime raw: bool) !void {
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, doc, "\n"), '\n');
+    if (doc.len != 0) while (lines.next()) |l| try o.print(a, "    ///{s}\n", .{l});
+    try o.print(a, "    pub fn {s}(", .{c_name});
+    const info = @typeInfo(F).@"fn";
+    var first = true;
+    inline for (info.param_types, 0..) |P, k| {
+        const C = comptime if (raw) &[_]type{P.?} else abi.CParams(P.?, api.handles);
+        inline for (C, 0..) |T, j| {
+            if (!first) try o.appendSlice(a, ", ");
+            first = false;
+            try o.print(a, "{s}{s}: {s}", .{ try rustName(a, names[k]), if (j == 1) "_len" else "", comptime rs(T) });
+        }
+    }
+    const R = info.return_type.?;
+    if (comptime !raw and hasOut(F)) {
+        const C = comptime abi.cParamsOf(F, api.handles);
+        try o.print(a, "{s}{s}: {s}", .{ if (first) "" else ", ", if (@typeInfo(R) == .pointer) "len" else "out", comptime rs(C[C.len - 1]) });
+    }
+    const r = comptime if (raw) R else abi.CResult(R);
+    if (r == void) try o.appendSlice(a, ");\n") else try o.print(a, ") -> {s};\n", .{comptime rs(r)});
+}
+
+fn sysRust(src: *Sources) ![]const u8 {
+    @setEvalBranchQuota(100_000);
+    const a = src.arena;
+    var o: std.ArrayList(u8) = .empty;
+    var done: Emitted = .empty;
+    try o.appendSlice(a,
+        \\// Generated by tools/abi-gen (zig build abi-gen) from src/abi/api.zig: lcgf.h for Rust, the
+        \\// same types, constants and functions under the same names. Do not edit. Included into
+        \\// lib.rs as `sys` (`include!`). The lane-named frames are lib.rs's (lcgf_lanes.h).
+        \\
+        \\
+    );
+    try o.print(a, "/// The layout of every type here the library reads: compare with `lcgf_layout()`.\npub const LCGF_LAYOUT: u32 = 0x{x:0>8};\n", .{api.layout});
+    try o.print(a, "pub const LCGF_CONTEXT_ALIGN: usize = {d};\npub const LCGF_COLUMN_ALIGN: usize = {d};\npub const LCGF_NO_WIDGET: u32 = 0xffff_ffff;\n", .{ api.column_align, api.column_align });
+    try o.print(a, "pub const LCGF_FORMAT_VERSION: u32 = {d};\npub const LCGF_CT_FORMAT_VERSION: u32 = {d};\npub const LCGF_CT_LAYOUT: u32 = 0x{x:0>8};\n", .{ lcgf.abi_plan.version, lcgf.abi_ct.version, lcgf.abi_ct.layout_hash });
+    try o.print(a, "/// The bit of `lcgf_view::status` set when the stack overflowed.\npub const LCGF_DEPTH_BIT: u32 = {d};\n", .{lcgf.abi_view.depth_bit});
+    inline for (@typeInfo(lcgf.abi_seam.Status).@"enum".field_names, @typeInfo(lcgf.abi_seam.Status).@"enum".field_values) |n, v|
+        try o.print(a, "pub const LCGF_{s}: i32 = {d};\n", .{ try upper(a, n), v });
+    try o.append(a, '\n');
+    inline for (api.handles) |H| {
+        if (comptime isValue(H)) {
+            try o.print(a, "/// Held by value; only the library reads it.\n#[repr(C)]\n#[derive(Clone, Copy)]\npub struct {s} {{\n    pub p_: [*mut core::ffi::c_void; {d}],\n}}\n\n", .{ nameOf(H), @sizeOf(H) / @sizeOf(usize) });
+        } else try o.print(a, "#[repr(C)]\npub struct {s} {{\n    _p: [u8; 0],\n}}\n\n", .{nameOf(H)});
+    }
+    inline for (api.exports) |E| {
+        const F = @TypeOf(E.func);
+        if (comptime api.isC(E.func)) {
+            inline for (@typeInfo(F).@"fn".param_types) |P| try sysTypes(a, &o, &done, P.?);
+            try sysTypes(a, &o, &done, @typeInfo(F).@"fn".return_type.?);
+        } else {
+            inline for (comptime abi.cParamsOf(F, api.handles)) |P| try sysTypes(a, &o, &done, P);
+            try sysTypes(a, &o, &done, comptime abi.CResult(@typeInfo(F).@"fn".return_type.?));
+            try sysTypes(a, &o, &done, @typeInfo(F).@"fn".return_type.?);
+        }
+    }
+    inline for (api.declared) |d| inline for (0..d[1].len) |k| {
+        const F = @TypeOf(d[1][k][1].*);
+        inline for (@typeInfo(F).@"fn".param_types) |P| try sysTypes(a, &o, &done, P.?);
+        try sysTypes(a, &o, &done, @typeInfo(F).@"fn".return_type.?);
+    };
+    try o.appendSlice(a, "unsafe extern \"C\" {\n");
+    inline for (api.exports) |E| {
+        const impl = try src.find(E.impl);
+        const doc = if (impl.doc.len != 0) impl.doc else if (E.api) |l| (try src.find(l)).doc else "";
+        try sysFn(a, &o, E.c, @TypeOf(E.func), impl.params, doc, api.isC(E.func));
+    }
+    inline for (api.declared) |d| inline for (0..d[1].len) |k| {
+        const name: []const u8 = d[1][k][0];
+        if (comptime std.mem.indexOf(u8, name, "_u32_f32_l") == null) {
+            const f = try src.find(.{ .file = d[0], .decl = null, .name = try implName(src, d[0], name) });
+            try sysFn(a, &o, name, @TypeOf(d[1][k][1].*), f.params, f.doc, true);
+        }
+    };
+    try o.appendSlice(a, "}\n");
     return o.items;
 }

@@ -8684,53 +8684,6 @@ Fields: `title`, `show`, `show_text`, `len`, `mode`, `level`
 - `Mode = enum(u8) { compact, detailed }`
 - `springs = .{ .level = @import("../anim/anims.zig").Spring{} }`
 
-## `lcgf.abi_runtime` (src/abi/runtime.zig)
-
-The runtime front end behind the C seam: `Context`, `Frame` and the reference widgets, for C++ (lcgf/runtime.hpp) and Rust (`lcgf::runtime`) programs that build their UI each frame in code, as Zig programs do with `ctx.begin` and `f.open`.
-
-### Top level
-
-- `style_words = plan.wordsOf(Style)`
-- `text_style_words = plan.wordsOf(TextStyle)`
-- `theme_words = plan.wordsOf(base.Theme)`
-- `row_words = plan.wordsOf(Template)`
-- `layout: u32 = plan.layoutHashOf(.{ Style, TextStyle, Template, CView, Look, Extra })`: What C++ and Rust must agree on to call the runtime front end: the words of a style, a text style and a row, and the columns they push rows into.
-- `depth_bit: u5 = @bitOffsetOf(context.Status, "depth")`: Bit of `CView.status` that `enter` sets when the stack overflows (`Status.depth`).
-- `fn cLimitsBytes(l: *const CLimits) callconv(.c) usize`
-- `fn cInit(buf: [*]u8, len: usize, l: *const CLimits) callconv(.c) c_int`
-- `fn cNeedsFrame(p: *anyopaque, in: *const seam.CInput) callconv(.c) c_int`: `int`, as lcgf.h declares it: a C `bool` return would leave the caller reading the upper bits.
-- `fn cBegin(p: *anyopaque, in: *const seam.CInput) callconv(.c) void`
-- `fn cCanvasBytes(l: *const CLimits) callconv(.c) usize`: Bytes `lcgf_rt_enable_canvas` needs for `l`: the context's canvas rows and their palettes, two generations of `customs` each.
-- `fn cEnableCanvas(p: *anyopaque, buf: [*]u8, len: usize) callconv(.c) c_int`
-- `fn cCanvas(p: *anyopaque, id: u32, s: [*]const u32, shapes: *const canvas.Instances, o: *const abi_canvas.COptions) callconv(.c) u32`: `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of them the caller's until the frame is drawn.
-- `fn cEnd(p: *anyopaque, out: *seam.CFrame) callconv(.c) void`
-- `fn cOpen(p: *anyopaque, id: u32, s: [*]const u32) callconv(.c) u32`
-- `fn cView(p: *anyopaque, out: *CView) callconv(.c) void`
-- `fn cRowFromStyle(s: [*]const u32, out: [*]u32) callconv(.c) void`: `Template.from`: the row of a style, for C callers and for the gate that holds the C++ and Rust ports to it.
-- `fn cClose(p: *anyopaque) callconv(.c) void`
-- `fn cAnimate(p: *anyopaque, id: u32, target: f32, stiffness: f32, damping: f32) callconv(.c) f32`
-- `fn cButton(p: *anyopaque, id: u32, str: [*]const u8, len: usize) callconv(.c) u8`
-- `fn cSlider(p: *anyopaque, id: u32, value: *f32, lo: f32, hi: f32) callconv(.c) u8`
-- `fn exportAll() void`
-
-### `CLimits` (struct)
-`Limits`' sizes, as C passes them.
-
-Fields: `nodes`, `texts`, `customs`, `strings`, `anims`, `depth`
-
-
-### `CView` (struct)
-The frame's tree as `open` and `leaf` write it: where `Tree.pushRow` and `Frame.enter` store, so C++ and Rust push a row they made with the stores Zig's inlined `leaf` makes, and no call (`lcgf_view` in lcgf.h).
-
-Fields: `len`, `xlen`, `overflow`, `depth`, `status`, `cap`, `depth_cap`, `stack`, `id`, `parent`, `end`, `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `nkids`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `extra`, `scope`, `x_node`, `x_row`
-
-
-### `Runtime` (struct)
-The context, its frame in progress, and the theme and font the widgets use.
-
-Fields: `ctx`, `frame`, `input`, `theme`, `font`, `palettes`, `palette_len`
-
-
 ## `lcgf.abi_api` (src/abi/api.zig)
 
 The export list: which Zig functions liblcgf exports to C, under which names, and which C name each type that crosses has (docs/plans/bindings-rust.md §6).
@@ -8740,6 +8693,8 @@ The export list: which Zig functions liblcgf exports to C, under which names, an
 - `handles = .{ Frame, Context, canvas.Instances }`: Types passed as opaque pointers (`lcgf_frame *`).
 - `value_handles = .{Frame}`
 - `column_align = @import("../core/mem.zig").column_align`
+- `idiom_enums = .{ .{ types.Axis, "Dir" }, .{ types.Align, "Align" }, .{ types.Role, "Role" }, .{ Ease, "Ease" } }`: The bindings' own forms of the Zig types a program writes (bindings/cpp/include/lcgf/ types.hpp, bindings/rust/lcgf/src/types.rs, by tools/abi-gen): the enums by name, and the structs field for field with Zig's defaults, laid out as their words (`lcgf_style`).
+- `idiom_structs = .{ .{ types.Size, "Size" }, .{ types.Style, "Style" }, .{ types.TextStyle, "TextStyle" }, .{ base.Theme, "Theme" }, .{ Spring, "Spring" } }`
 - `renames = .{.{ "float", "floating" }}`: Field names C, C++ or Rust cannot take, and what they are called there.
 - `Loc = struct { file: []const u8, decl: ?[]const u8, name: []const u8 }`: Where a function is: its file, its container (`null` for the file's top level) and name.
 - `containers = .{ frame, context_, widgets, anim_values }`
@@ -8762,6 +8717,33 @@ One export: its C name, the function that implements it, the Zig function it is 
 - `func = f`
 - `api = api_loc`
 - `impl = impl_loc`
+
+### `CLimits` (struct)
+`Limits`' sizes, as C passes them (`lcgf_limits`; A5 makes it all of `Limits`).
+
+Fields: `nodes`, `texts`, `customs`, `strings`, `anims`, `depth`
+
+
+### `Session` (struct)
+What an `lcgf_context` is, at the start of the caller's buffer: the context, the input its frame reads until `lcgf_frame_end` (A5: `Context.begin` copies it), the font the frame is laid out with, and the palettes `lcgf_frame_canvas` makes from its options, in two generations as the canvas rows are (a reused canvas keeps last frame's).
+
+Fields: `ctx`, `input`, `font`, `palettes`, `palette_len`
+
+
+## `lcgf.abi_view` (src/abi/view.zig)
+
+The inline-push view (docs/plans/bindings-rust.md §6.3): where `Tree.pushRow` and `Frame.enter` store, so C++ and Rust push a row with the stores Zig's inlined `leaf` makes (bindings/cpp/include/lcgf/rows.hpp, bindings/rust/lcgf/src/rows.rs, from tools/abi-gen) and no call.
+
+### Top level
+
+- `depth_bit: u5 = @bitOffsetOf(context.Status, "depth")`: Bit of `CView.status` that `enter` sets when the stack overflows (`Status.depth`).
+- `fn of(f: *const Frame) CView`: The view of frame `f`'s tree.
+
+### `CView` (struct)
+The frame's tree as `open` and `leaf` write it (`lcgf_view`).
+
+Fields: `len`, `xlen`, `overflow`, `depth`, `status`, `cap`, `depth_cap`, `stack`, `id`, `parent`, `end`, `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `nkids`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `extra`, `scope`, `x_node`, `x_row`
+
 
 ## `lcgf.abi_canvas` (src/abi/canvas.zig)
 

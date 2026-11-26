@@ -3,6 +3,7 @@
 //! [`Frame::canvas`](crate::runtime::Frame::canvas) under a camera. Points are `i32` world
 //! units; a `width` of 0 is the layer's, in logical pixels.
 
+use crate::sys;
 use core::marker::PhantomData;
 
 /// How a segment or an arc ends.
@@ -202,49 +203,30 @@ impl Options<'_> {
     }
 }
 
-pub(crate) type Raw = *mut u8;
+pub(crate) type Raw = *mut sys::lcgf_canvas;
 
-unsafe extern "C" {
-    fn lcgf_canvas_bytes(rows: u32, verts: u32, dirty: u32, marks: i32) -> usize;
-    fn lcgf_canvas_init(
-        buf: *mut u8,
-        len: usize,
-        rows: u32,
-        verts: u32,
-        dirty: u32,
-        marks: i32,
-    ) -> Raw;
-    fn lcgf_canvas_mark(c: Raw, row: u32, color: u32);
-    fn lcgf_canvas_segment(c: Raw, ax: i32, ay: i32, bx: i32, by: i32, o: *const Line) -> u32;
-    fn lcgf_canvas_polyline(c: Raw, pts: *const [i32; 2], n: usize, o: *const Line) -> Range;
-    fn lcgf_canvas_rect(c: Raw, x0: i32, y0: i32, x1: i32, y1: i32, o: *const Rect) -> u32;
-    fn lcgf_canvas_circle(c: Raw, cx: i32, cy: i32, r: u32, o: *const Rect) -> u32;
-    fn lcgf_canvas_arc(c: Raw, cx: i32, cy: i32, r: u32, o: *const Arc) -> u32;
-    fn lcgf_canvas_polygon(c: Raw, pts: *const [i32; 2], n: usize, o: *const Area) -> u32;
-    fn lcgf_canvas_glyph(
-        c: Raw,
-        ax: i32,
-        ay: i32,
-        w: u32,
-        h: u32,
-        uv: *const [f32; 4],
-        layer: u8,
-        turns: u8,
-    ) -> u32;
-    fn lcgf_canvas_glyphs(
-        c: Raw,
-        s: *const u8,
-        len: usize,
-        x: i32,
-        y: i32,
-        o: *const Text,
-    ) -> Range;
-    fn lcgf_canvas_kill(c: Raw, row: u32);
-    fn lcgf_canvas_reset(c: Raw);
-    fn lcgf_canvas_clear_dirty(c: Raw);
-    fn lcgf_canvas_len(c: Raw) -> u32;
-    fn lcgf_canvas_hit(c: Raw, o: *const RawOptions, x: f32, y: f32, slop: f32) -> u32;
+/// A range as the library returns it.
+fn range(r: sys::lcgf_canvas_range) -> Range {
+    Range {
+        first: r.first,
+        count: r.count,
+    }
 }
+
+/// The crate's option types are laid out as lcgf.h's (checked below).
+fn c<T, U>(p: &T) -> *const U {
+    (p as *const T).cast()
+}
+
+const _: () = {
+    use core::mem::size_of;
+    assert!(size_of::<Line>() == size_of::<sys::lcgf_canvas_line_style>());
+    assert!(size_of::<Rect>() == size_of::<sys::lcgf_canvas_box_style>());
+    assert!(size_of::<Arc>() == size_of::<sys::lcgf_canvas_arc_style>());
+    assert!(size_of::<Area>() == size_of::<sys::lcgf_canvas_area_style>());
+    assert!(size_of::<Text>() == size_of::<sys::lcgf_canvas_text_style>());
+    assert!(size_of::<RawOptions>() == size_of::<sys::lcgf_canvas_options>());
+};
 
 /// A batch in your buffer.
 pub struct Canvas<'a> {
@@ -256,13 +238,13 @@ impl<'a> Canvas<'a> {
     /// Bytes a batch of `rows` rows, `verts` polygon vertices and `dirty` dirty ranges needs,
     /// with a mark a row when `marks`, aligned to `COLUMN_ALIGN`.
     pub fn bytes(rows: u32, verts: u32, dirty: u32, marks: bool) -> usize {
-        unsafe { lcgf_canvas_bytes(rows, verts, dirty, marks as i32) }
+        unsafe { sys::lcgf_canvas_bytes(rows, verts, dirty, marks as i32) }
     }
     /// None when `buf` is too small or not aligned to `COLUMN_ALIGN`.
     pub fn new(buf: &'a mut [u8], rows: u32, verts: u32, dirty: u32, marks: bool) -> Option<Self> {
         let c = unsafe {
-            lcgf_canvas_init(
-                buf.as_mut_ptr(),
+            sys::lcgf_canvas_init(
+                buf.as_mut_ptr().cast(),
                 buf.len(),
                 rows,
                 verts,
@@ -276,28 +258,28 @@ impl<'a> Canvas<'a> {
         })
     }
     pub fn len(&self) -> u32 {
-        unsafe { lcgf_canvas_len(self.c) }
+        unsafe { sys::lcgf_canvas_len(self.c) }
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
     pub fn segment(&mut self, a: [i32; 2], b: [i32; 2], o: &Line) -> u32 {
-        unsafe { lcgf_canvas_segment(self.c, a[0], a[1], b[0], b[1], o) }
+        unsafe { sys::lcgf_canvas_segment(self.c, a[0], a[1], b[0], b[1], c(o)) }
     }
     pub fn polyline(&mut self, points: &[[i32; 2]], o: &Line) -> Range {
-        unsafe { lcgf_canvas_polyline(self.c, points.as_ptr(), points.len(), o) }
+        range(unsafe { sys::lcgf_canvas_polyline(self.c, points.as_ptr(), points.len(), c(o)) })
     }
     pub fn rect(&mut self, lo: [i32; 2], hi: [i32; 2], o: &Rect) -> u32 {
-        unsafe { lcgf_canvas_rect(self.c, lo[0], lo[1], hi[0], hi[1], o) }
+        unsafe { sys::lcgf_canvas_rect(self.c, lo[0], lo[1], hi[0], hi[1], c(o)) }
     }
-    pub fn circle(&mut self, c: [i32; 2], r: u32, o: &Rect) -> u32 {
-        unsafe { lcgf_canvas_circle(self.c, c[0], c[1], r, o) }
+    pub fn circle(&mut self, at: [i32; 2], r: u32, o: &Rect) -> u32 {
+        unsafe { sys::lcgf_canvas_circle(self.c, at[0], at[1], r, c(o)) }
     }
-    pub fn arc(&mut self, c: [i32; 2], r: u32, o: &Arc) -> u32 {
-        unsafe { lcgf_canvas_arc(self.c, c[0], c[1], r, o) }
+    pub fn arc(&mut self, at: [i32; 2], r: u32, o: &Arc) -> u32 {
+        unsafe { sys::lcgf_canvas_arc(self.c, at[0], at[1], r, c(o)) }
     }
     pub fn polygon(&mut self, points: &[[i32; 2]], o: &Area) -> u32 {
-        unsafe { lcgf_canvas_polygon(self.c, points.as_ptr(), points.len(), o) }
+        unsafe { sys::lcgf_canvas_polygon(self.c, points.as_ptr(), points.len(), c(o)) }
     }
     pub fn glyph(
         &mut self,
@@ -308,32 +290,32 @@ impl<'a> Canvas<'a> {
         turns: u8,
     ) -> u32 {
         unsafe {
-            lcgf_canvas_glyph(
+            sys::lcgf_canvas_glyph(
                 self.c, anchor[0], anchor[1], size[0], size[1], &uv, layer, turns,
             )
         }
     }
     pub fn glyphs(&mut self, s: &str, at: [i32; 2], o: &Text) -> Range {
-        unsafe { lcgf_canvas_glyphs(self.c, s.as_ptr(), s.len(), at[0], at[1], o) }
+        range(unsafe { sys::lcgf_canvas_glyphs(self.c, s.as_ptr(), s.len(), at[0], at[1], c(o)) })
     }
     pub fn kill(&mut self, row: u32) {
-        unsafe { lcgf_canvas_kill(self.c, row) }
+        unsafe { sys::lcgf_canvas_kill(self.c, row) }
     }
     /// Row `row` in `color` (rgba8) over its layer and any override; 0 for none. Needs `marks`.
     pub fn mark(&mut self, row: u32, color: u32) {
-        unsafe { lcgf_canvas_mark(self.c, row, color) }
+        unsafe { sys::lcgf_canvas_mark(self.c, row, color) }
     }
     pub fn reset(&mut self) {
-        unsafe { lcgf_canvas_reset(self.c) }
+        unsafe { sys::lcgf_canvas_reset(self.c) }
     }
     /// Once every renderer that draws the batch has prepared its frame.
     pub fn clear_dirty(&mut self) {
-        unsafe { lcgf_canvas_clear_dirty(self.c) }
+        unsafe { sys::lcgf_canvas_clear_dirty(self.c) }
     }
     /// The topmost row within `slop` logical px of (x, y), from the node's corner.
     pub fn hit(&self, o: &Options<'_>, x: f32, y: f32, slop: f32) -> Option<u32> {
         let raw = o.raw();
-        let r = unsafe { lcgf_canvas_hit(self.c, &raw, x, y, slop) };
+        let r = unsafe { sys::lcgf_canvas_hit(self.c, c(&raw), x, y, slop) };
         (r != u32::MAX).then_some(r)
     }
     pub(crate) fn raw(&self) -> Raw {

@@ -25,6 +25,7 @@
 #include <type_traits>
 
 #include <lcgf/lcgf.hpp>
+#include <lcgf/types.hpp>
 
 // Row's constructor is the whole of Template.from: inlined, a style known at the call site
 // folds to stores of the row, as in Zig. Left to -O2's heuristics it is an out-of-line call.
@@ -63,92 +64,6 @@ constexpr std::uint32_t Rgba(std::uint8_t r, std::uint8_t g, std::uint8_t b, std
     return r | g << 8 | b << 16 | std::uint32_t(a) << 24;
 }
 inline constexpr std::uint32_t transparent = 0, white = 0xffffffffu;
-inline constexpr float inf = std::numeric_limits<float>::infinity();
-
-enum class Dir : std::uint32_t { x = 0,
-                                 y = 1 };
-enum class Align : std::uint32_t { start = 0,
-                                   center = 1,
-                                   end = 2 };
-enum class Role : std::uint32_t { none,
-                                  group,
-                                  label,
-                                  button,
-                                  checkbox,
-                                  slider,
-                                  image,
-                                  text_input,
-                                  link,
-                                  separator = 16,
-                                  heading,
-                                  article,
-                                  list = 20,
-                                  list_item,
-                                  table = 38,
-                                  row = 40,
-                                  cell,
-                                  column_header,
-                                  row_header,
-                                  dialog,
-                                  region = 48,
-                                  banner,
-                                  navigation,
-                                  main,
-                                  complementary,
-                                  content_info,
-                                  form,
-                                  search,
-                                  status };
-
-/// A length: `Size::Fit()`, `Fill()`, `Px(8)`, `Pct(0.5f)`, `Grow(2)`.
-struct Size {
-    std::uint32_t kind = 0;
-    float v = 0;
-    static constexpr Size Fit() { return {0, 0}; }
-    static constexpr Size Px(float v) { return {1, v}; }
-    static constexpr Size Grow(float w) { return {2, w}; }
-    static constexpr Size Fill() { return {2, 1}; }
-    static constexpr Size Pct(float f) { return {3, f}; }
-};
-
-/// Zig's `Style`, field for field, with its defaults: the words lcgf_style is. Fill it with
-/// designated initializers, in declaration order.
-struct Style {
-    std::uint32_t participation = 15;
-    std::uint32_t cursor = 0xffffffffu;
-    Dir dir = Dir::y;
-    Size size[2] = {Size::Fit(), Size::Fit()};
-    float min[2] = {0, 0};
-    float max[2] = {inf, inf};
-    float pad[4] = {0, 0, 0, 0};
-    float gap = 0;
-    Align main = Align::start;
-    Align cross = Align::start;
-    std::uint32_t shrink = 0;
-    std::uint32_t floating = 0;
-    float offset[2] = {0, 0};
-    std::uint32_t clip = 0;
-    float scroll[2] = {0, 0};
-    std::uint32_t fill = transparent;
-    std::uint32_t border_color = transparent;
-    float border = 0;
-    float radius = 0;
-    std::uint32_t texture = 0;
-    std::uint32_t material = 0;
-    float params[4] = {0, 0, 0, 0};
-    float radii[4] = {-1, -1, -1, -1};
-    float opacity = 1;
-    float transform[6] = {1, 0, 0, 1, 0, 0};
-    float transform_origin[2] = {0.5f, 0.5f};
-    float uv[4] = {0, 0, 1, 1};
-    std::uint32_t paint_reference = 0xffffffffu;
-    float paint_outset[4] = {0, 0, 0, 0};
-    Role role = Role::none;
-    float value = 0;
-
-    const lcgf_style* raw() const { return reinterpret_cast<const lcgf_style*>(this); }
-};
-static_assert(sizeof(Style) == sizeof(lcgf_style) && sizeof(Style) == 59 * 4);
 
 /// A node's row as the library stores it (lcgf_row, Zig's `Template`): `Row(style)` is
 /// `Template.from`, run here, at compile time for a constexpr style, so only the row crosses.
@@ -231,32 +146,6 @@ private:
     static constexpr float Min(float a, float b) { return a < b ? a : b; }
 };
 static_assert(sizeof(Row) == 66 * 4);
-
-struct TextStyle {
-    float px = 14;
-    std::uint32_t color = white;
-    std::uint32_t font = 0;
-    std::uint32_t wrap = 0;
-    const lcgf_text_style* raw() const { return reinterpret_cast<const lcgf_text_style*>(this); }
-};
-static_assert(sizeof(TextStyle) == sizeof(lcgf_text_style));
-
-/// The reference widgets' theme, as the library has it (`lcgf_theme_default`).
-struct Theme : lcgf_theme {};
-
-struct Spring {
-    float stiffness = 170, damping = 26;
-    const lcgf_spring* raw() const { return reinterpret_cast<const lcgf_spring*>(this); }
-};
-static_assert(sizeof(Spring) == sizeof(lcgf_spring));
-
-/// A tween's curve (`tweens.Ease`).
-enum class Ease : std::uint32_t { linear,
-                                  in_quad,
-                                  out_quad,
-                                  in_out,
-                                  in_cubic,
-                                  out_cubic };
 
 /// A colour by channel, to animate one (`Animate`, `Tween`): `Color::From(lcgf::Rgb(...))`,
 /// back with `rgba()`. Channels move as numbers, as Zig's `Color` does.
@@ -446,7 +335,7 @@ private:
 /// A frame being built. Valid between `Context::Begin` and `Context::End`.
 class Frame {
 public:
-    Frame(lcgf_frame* f, const lcgf_view* view, const lcgf_theme* theme, const lcgf_text_style* label)
+    Frame(lcgf_frame* f, const lcgf_view* view, const Theme* theme, const lcgf_text_style* label)
         : f_(f), v_(view), theme_(theme), label_(label) {}
     LCGF_INLINE Node Open(Id id) { return Open(id, kDefault); }
     LCGF_INLINE Node Open(Id id, const Style& s) { return Open(id, Row(s)); }
@@ -506,7 +395,7 @@ public:
     }
     lcgf_frame* raw() const { return f_; }
     /// The context's theme, which the widgets draw with.
-    const lcgf_theme* theme() const { return theme_; }
+    const Theme* theme() const { return theme_; }
     /// The theme's label text style (`Label`'s).
     const lcgf_text_style* label_style() const { return label_; }
 
@@ -585,16 +474,16 @@ private:
 
     lcgf_frame* f_;
     const lcgf_view* v_;
-    const lcgf_theme* theme_;
+    const Theme* theme_;
     const lcgf_text_style* label_;
 };
 
-inline Node Label(Frame& f, std::string_view str) { return {lcgf_label(f.raw(), f.theme(), str.data(), str.size())}; }
-inline Response Button(Frame& f, Id id, std::string_view str) { return {lcgf_button(f.raw(), f.theme(), id.value, str.data(), str.size())}; }
+inline Node Label(Frame& f, std::string_view str) { return {lcgf_label(f.raw(), f.theme()->raw(), str.data(), str.size())}; }
+inline Response Button(Frame& f, Id id, std::string_view str) { return {lcgf_button(f.raw(), f.theme()->raw(), id.value, str.data(), str.size())}; }
 inline Response Checkbox(Frame& f, Id id, bool& value, std::string_view str) {
-    return {lcgf_checkbox(f.raw(), f.theme(), id.value, &value, str.data(), str.size())};
+    return {lcgf_checkbox(f.raw(), f.theme()->raw(), id.value, &value, str.data(), str.size())};
 }
-inline Response Slider(Frame& f, Id id, float& value, float lo, float hi) { return {lcgf_slider(f.raw(), f.theme(), id.value, &value, lo, hi)}; }
+inline Response Slider(Frame& f, Id id, float& value, float lo, float hi) { return {lcgf_slider(f.raw(), f.theme()->raw(), id.value, &value, lo, hi)}; }
 
 /// `Label` of `args` formatted by `fmt` (`std::format`), written straight into the frame's
 /// strings: `lcgf::LabelF(f, "Gain {:.1f} dB", gain)`.
@@ -630,8 +519,7 @@ public:
         // Rows are made here, so the library must lay them out as this header does.
         status_ = lcgf_layout() != LCGF_LAYOUT ? Status::layout_hash
                                                : static_cast<Status>(lcgf_context_init(buffer.data(), buffer.size(), &limits));
-        lcgf_theme_default(&theme_);
-        lcgf_label_text(&theme_, &label_);
+        lcgf_label_text(theme_.raw(), &label_);
     }
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
