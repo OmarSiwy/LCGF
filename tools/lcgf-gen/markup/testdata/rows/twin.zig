@@ -1,6 +1,7 @@
 //! rows, written by hand: per-item view state inside a run-time region. The checkbox binds the
 //! item's `selected` and the details show while the item's `expanded` holds; both fields are
 //! the app's, written through the mutable slice it passes; lcgf-else shows "more" otherwise.
+//! Margins in the region's content are flex rules of its own Frame (`endFlex`).
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -42,9 +43,9 @@ pub fn events(comptime page: type, p: anytype, h: anytype) !void {
     var in: lcgf.input.Input = .{};
     var out = p.frame(h, &in, .{ .rows = &rows });
     try std.testing.expect(runOf(out.draw, "first") == null);
-    // The checkbox sits left of its row's text.
+    // The checkbox sits left of its row's text, past the two margins between them.
     const two = runOf(out.draw, "two").?;
-    in.pointer = .{ two[0] - 12, (two[1] + two[3]) / 2 };
+    in.pointer = .{ two[0] - 20, (two[1] + two[3]) / 2 };
     in.buttons.left = true;
     _ = p.frame(h, &in, .{ .rows = &rows });
     in.buttons.left = false;

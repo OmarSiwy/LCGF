@@ -1256,6 +1256,12 @@ pub const Emit = struct {
         e.rtDispatch();
     }
 
+    /// Whether region `each`'s content has flex rules (margins and the other flex item rules).
+    fn regionFlex(e: *Emit, each: u32) bool {
+        for (0..e.page.nodes.len) |k| if (k != each and e.eachOf(@intCast(k)) == each and flexOf(e.page.nodes.get(k)) != null) return true;
+        return false;
+    }
+
     fn regionCount(e: *Emit) u32 {
         return @intCast(std.mem.count(ir.Kind, e.page.nodes.items(.kind), &.{.each}));
     }
@@ -1654,6 +1660,23 @@ pub const Emit = struct {
             decls.print(e.arena, "        const {s}_limits: lcgf.context.Limits = .{{ .nodes = {d}, .texts = {d}, .customs = 4, .strings = 16384, .depth = 64 }};\n", .{ n.id, n.max, @as(u32, @intFromFloat(n.range[0])) }) catch unreachable;
             rows.print(e.arena, " + {s}_limits.nodes", .{n.id}) catch unreachable;
             e.editorFields(@intCast(i), "        ");
+            // The region's flex rules (margins in its content), for its own Frame's `endFlex`.
+            if (e.regionFlex(@intCast(i))) {
+                e.print(
+                    \\        /// The flex rules of region `{s}`'s content, written as it builds.
+                    \\        {s}_flex_buf: [{s}_flex_bytes]u8 align(lcgf.mem.column_align) = undefined,
+                    \\        {s}_flex: ?lcgf.flex.Flex = null,
+                    \\
+                , .{ n.id, n.id, n.id, n.id });
+                decls.print(e.arena,
+                    \\        const {s}_flex_bytes = blk: {{
+                    \\            var carver: lcgf.mem.Carver = .{{ .buf = null }};
+                    \\            _ = carver.columns(lcgf.flex.Flex.Columns, lcgf.simd.rows({s}_limits.nodes));
+                    \\            break :blk carver.off;
+                    \\        }};
+                    \\
+                , .{ n.id, n.id }) catch unreachable;
+            }
             strings.print(e.arena, " + {s}_limits.strings", .{n.id}) catch unreachable;
         }
         e.print(
@@ -1721,13 +1744,22 @@ pub const Emit = struct {
             \\                const f = &region_frame;
             \\
         , .{ n.id, n.id, n.id, n.id, n.id, if (fit) "var" else "const", fitViewport(e, n), n.id });
+        const flex = e.regionFlex(each);
+        if (flex) e.print(
+            \\                if (p.{s}_flex == null) {{
+            \\                    var carver: lcgf.mem.Carver = .{{ .buf = &p.{s}_flex_buf }};
+            \\                    p.{s}_flex = lcgf.flex.Flex.init(&carver, {s}_limits.nodes);
+            \\                }}
+            \\                const fx = &p.{s}_flex.?;
+            \\
+        , .{ n.id, n.id, n.id, n.id, n.id });
         e.write(body);
         e.print(
-            \\                const region_out = f.end(.{{}});{s}
+            \\                const region_out = {s};{s}
             \\                if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}
             \\            }}
             \\
-        , .{ if (fit) std.fmt.allocPrint(e.arena, "\n                // The content's size before snapping, for the region's next layout, so the\n                // page around it lays out as it would around the content itself.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
+        , .{ if (flex) "f.endFlex(.{}, fx)" else "f.end(.{})", if (fit) std.fmt.allocPrint(e.arena, "\n                // The content's size before snapping, for the region's next layout, so the\n                // page around it lays out as it would around the content itself.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
     }
 
     /// The comptime checks of region `each`: the item fields the page reads and its
