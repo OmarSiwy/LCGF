@@ -43,7 +43,8 @@ pub fn ui(input: TokenStream) -> TokenStream {
 }
 
 /// `include_ui!("toolbar.zon")`: a spec from a file, relative to `$LCGF_SPECS` when set, else
-/// to the crate's manifest directory. `include_ui!("card.zon", static)` makes a static UI:
+/// to the crate's manifest directory. `include_ui!("ui/page.html")` takes an HTML page and its
+/// CSS instead (docs/guide/markup.md, "C++ and Rust"). `include_ui!("card.zon", static)` makes a static UI:
 /// the comptime pipeline's tables (`lcgf::StaticUi`: folded layout, paint templates) for a
 /// spec whose structure never changes (`lcgf-gen --static`); its frame, `lcgf_ui_<name>_frame`,
 /// comes from `lcgf_build::static_ui` in the crate's build script.
@@ -70,6 +71,14 @@ pub fn include_ui(input: TokenStream) -> TokenStream {
         .or_else(|_| std::env::var("CARGO_MANIFEST_DIR"))
         .unwrap_or_default();
     let full = PathBuf::from(base).join(path);
+    if path.ends_with(".html") {
+        if static_ {
+            return compile_error(
+                "include_ui!: an HTML page makes the widgets' tables; `static` takes a .zon",
+            );
+        }
+        return include_html(&full);
+    }
     let zon = match std::fs::read_to_string(&full) {
         Ok(z) => z,
         Err(e) => return compile_error(&format!("include_ui!: {}: {e}", full.display())),
@@ -254,6 +263,62 @@ pub fn include_shader(input: TokenStream) -> TokenStream {
     format!("#[allow(dead_code, clippy::all)] pub mod {name} {{ {code} }}")
         .parse()
         .unwrap()
+}
+
+/// `include_ui!("page.html")`: the page and its CSS lowered by lcgf-gen to the `.zon` the seam
+/// reads, then generated as that `.zon` would be. lcgf-gen's errors (GNU format, at the HTML or
+/// CSS line) become the `compile_error!`; every file of its depfile is tracked.
+fn include_html(html: &std::path::Path) -> TokenStream {
+    let Ok(gen_path) = lcgf_gen() else {
+        return compile_error(
+            "set LCGF_GEN or LCGF_PREFIX (an installed `zig build abi`) to find lcgf-gen",
+        );
+    };
+    let stem = html.file_stem().and_then(|s| s.to_str()).unwrap_or("ui");
+    let dir = std::env::temp_dir().join(format!("lcgf-macros-{}-{stem}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let (zon_path, dep_path) = (
+        dir.join(format!("{stem}.zon")),
+        dir.join(format!("{stem}.d")),
+    );
+    let out = Command::new(&gen_path)
+        .arg(html)
+        .args(["--lang", "zon", "-o"])
+        .arg(&zon_path)
+        .arg("--depfile")
+        .arg(&dep_path)
+        .output();
+    let zon = std::fs::read_to_string(&zon_path);
+    let deps = std::fs::read_to_string(&dep_path).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    match out {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => return compile_error(String::from_utf8_lossy(&o.stderr).trim_end()),
+        Err(e) => return compile_error(&format!("lcgf: running {}: {e}", gen_path.display())),
+    }
+    let Ok(zon) = zon else {
+        return compile_error(&format!("lcgf-gen wrote no spec for {}", html.display()));
+    };
+    let name = zon
+        .split(".name = \"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .unwrap_or("ui")
+        .to_string();
+    let mut out = generate(&name, &zon);
+    // The depfile is `out: dep dep ...`, spaces in a path escaped.
+    let list = deps
+        .split_once(": ")
+        .map_or("", |d| d.1)
+        .replace("\\ ", "\0");
+    for dep in list.split_whitespace() {
+        let track = format!(
+            "const _: &[u8] = include_bytes!({:?});",
+            dep.replace('\0', " ")
+        );
+        out.extend(track.parse::<TokenStream>().unwrap());
+    }
+    out
 }
 
 fn lcgf_gen() -> Result<PathBuf, std::env::VarError> {

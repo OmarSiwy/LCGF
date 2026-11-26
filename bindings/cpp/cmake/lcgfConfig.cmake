@@ -73,12 +73,31 @@ endif()
 # tables (lcgf::StaticUi: folded layout, paint templates) for a spec whose structure never
 # changes, and builds its frame (above); without it the widgets' tables (lcgf::Ui: events,
 # focus, springs).
+# lcgf_add_ui(target page.html): an HTML page and its CSS, lowered to the same tables
+# (docs/guide/markup.md, "C++ and Rust"). lcgf-gen writes a depfile, so editing the page or a
+# stylesheet it links regenerates the header; its errors name the HTML or CSS line.
 function(lcgf_add_ui target spec)
   cmake_parse_arguments(_ui "STATIC" "" "" ${ARGN})
   get_filename_component(_spec "${spec}" ABSOLUTE)
   get_filename_component(_name "${spec}" NAME_WE)
   set(_dir "${CMAKE_CURRENT_BINARY_DIR}/lcgf_gen")
   set(_out "${_dir}/${_name}.lcgf.hpp")
+  if(_spec MATCHES "\\.html$")
+    if(_ui_STATIC)
+      message(FATAL_ERROR "lcgf_add_ui: an HTML page makes the widgets' tables; STATIC takes a .zon")
+    endif()
+    file(MAKE_DIRECTORY "${_dir}")
+    add_custom_command(OUTPUT "${_out}"
+      COMMAND "${LCGF_GEN}" "${_spec}" --lang cpp -o "${_out}" --depfile "${_out}.d"
+      DEPENDS "${_spec}" "${LCGF_GEN}"
+      DEPFILE "${_out}.d"
+      COMMENT "lcgf-gen ${_name}.html"
+      VERBATIM)
+    target_sources(${target} PRIVATE "${_out}")
+    target_include_directories(${target} PRIVATE "${_dir}")
+    target_link_libraries(${target} PRIVATE lcgf::lcgf)
+    return()
+  endif()
   set(_static "")
   if(_ui_STATIC)
     # Its own directory, so one project can hold a static and a widgets' UI of the same name.
