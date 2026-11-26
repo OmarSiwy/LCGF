@@ -534,7 +534,10 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             x.opacity = row.opacity;
             x.transform = row.transform;
             x.transform_origin = rowField(row, "transform_origin");
-            x.paint_reference = rowField(row, "paint_reference");
+            // The paint passes read the source's rect, clip and transform and rely on it being
+            // an earlier row: a reference to this row or a later one paints from the node itself.
+            const reference = rowField(row, "paint_reference");
+            x.paint_reference = if (reference < i) reference else none;
             x.paint_outset = rowField(row, "paint_outset");
             x.prepared_texture = rowField(row, "prepared_texture");
             x.paint_revision = rowField(row, "paint_revision");
@@ -839,6 +842,18 @@ test "push: a row in Extras only for a style with a paint extra or a clip; scope
     t.reset();
     try testing.expectEqual(1, t.xlen);
     try testing.expectEqual(1, t.x.row[0].opacity);
+}
+
+test "push: a paint reference to the node itself or a later row becomes none" {
+    var fx: Fixture(8) = .{};
+    var t = fx.tree();
+    const root = t.push(0, Id.from("root"), &.{});
+    const kept = t.push(root, Id.from("kept"), &.{ .paint_reference = root });
+    const self = t.push(root, Id.from("self"), &.{ .paint_reference = 2 });
+    const later = t.push(root, Id.from("later"), &.{ .paint_reference = 7 });
+    try testing.expectEqual(root, t.x.row[t.c.extra[kept]].paint_reference);
+    try testing.expectEqual(none, t.x.row[t.c.extra[self]].paint_reference);
+    try testing.expectEqual(none, t.x.row[t.c.extra[later]].paint_reference);
 }
 
 test "initSharing: a second tree shares the scratch columns and carves the rest" {
