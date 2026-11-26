@@ -3121,6 +3121,8 @@ The projection's own checks, written once against `lcgf_render.gpu` and run by e
 
 - `fn RenderToTexture(comptime gpu: type, comptime shaders: type) type`: Upload a 2x2 pattern through staging, draw it into a 4x4 texture, sample that into an 8x8 one in a second pass (the render-to-texture convention), read it back: each source texel is a 4x4 block.
 - `fn Compute(comptime gpu: type, comptime shaders: type) type`: A compute pass writes a storage buffer from its index and a uniform; the host reads it.
+- `fn Instancing(comptime gpu: type, comptime shaders: type) type`: Instanced draws (instanced.wgsl): a vertex-step buffer of corners, an instance-step buffer of `sint32x2` and `uint32` attributes, and a second instance-step buffer of `sint32x4` bound at an offset, drawn three times with first instances 5, 0 and 2.
+- `fn instancing(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: anytype) !void`
 - `fn renderToTexture(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: anytype) !void`
 - `fn compute(comptime gpu: type, comptime shaders: type, dev: gpu.Device, h: anytype) !void`
 
@@ -3147,6 +3149,19 @@ Fields: `shared`, `staging`, `out`, `base`, `pipeline`, `group`
 - `fn deinit(k: *K, dev: gpu.Device) void`
 - `fn record(k: *K, up: *gpu.Upload) void`
 - `fn verify(values: []const u32) bool`: Whether element i of `values` is i * 3 + 7.
+
+### `Instancing(..)` (generic struct)
+Instanced draws (instanced.wgsl): a vertex-step buffer of corners, an instance-step buffer of `sint32x2` and `uint32` attributes, and a second instance-step buffer of `sint32x4` bound at an offset, drawn three times with first instances 5, 0 and 2.
+
+Fields: `arena`, `host_arena`, `staging`, `target`, `corners`, `rows`, `checks`, `pipeline`
+
+- `width = 8`
+- `drawn = [width]bool{ true, false, true, false, false, true, true, false }`: The columns drawn: instances 5 and 6, then 0, then 2.
+- `fn init(r: *I, dev: gpu.Device) !void`
+- `fn deinit(r: *I, dev: gpu.Device) void`
+- `fn color(i: u32) [4]u8`: Column `i`'s colour, as `unpack4x8unorm` reads it (red in the low byte).
+- `fn record(r: *I, up: *gpu.Upload) void`
+- `fn verify(px: []const u8) bool`: Whether `px` (the target's RGBA8 row) has each drawn column's colour and the clear colour elsewhere.
 
 ## `lcgf.gpu_naga` (src/render/gpu/naga.zig)
 
