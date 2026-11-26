@@ -14,11 +14,8 @@ flex.html:4:64: error: align-content: 'baseline' is not a supported value
   .rw { display: flex; flex-wrap: wrap-reverse; align-content: baseline; }
                                                                ^
 flex.html:7:43: error: a wrapping row has one gap: give row-gap and column-gap the same length
-  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; justify-content: space-around; }
+  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; justify-content: space-around; }
                                           ^
-flex.html:7:97: error: justify-content: space-around is not lowered on a wrapping row
-  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; justify-content: space-around; }
-                                                                                                ^
-flex.html:7:74: error: align-items: baseline is not lowered on a wrapping row
-  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; align-items: baseline; justify-content: space-around; }
+flex.html:7:74: error: justify-content: space-around is not lowered on a wrapping row
+  .gaps { display: flex; flex-wrap: wrap; row-gap: 2px; column-gap: 4px; justify-content: space-around; }
                                                                          ^

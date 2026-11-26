@@ -15,6 +15,7 @@
     .around { display: flex; flex-direction: column; height: 60px; justify-content: space-evenly; }
     .split { display: flex; flex-wrap: wrap; width: 60px; height: 80px; align-content: space-between; }
     .fillwrap { display: flex; flex-wrap: wrap; width: 60px; height: 80px; }
+    .wrapbase { display: flex; flex-wrap: wrap; width: 60px; align-items: baseline; align-content: start; }
     .colbase { display: flex; flex-direction: column; align-items: baseline; }
     .wide { width: 40px; aspect-ratio: 2 / 1; background-color: #c04040; }
   </style>
@@ -26,6 +27,7 @@
   <div class="tags" aria-label="Tags"><span>one</span><span>two</span><span>three</span></div>
   <div class="split"><span>one</span><span>two</span><span>three</span></div>
   <div class="fillwrap"><span>one</span><span>two</span></div>
+  <div class="wrapbase"><span class="big">Big</span><span>small</span><span>next</span></div>
   <div class="colbase"><span>p</span><span>q</span></div>
   <div class="wide"></div>
   <div class="spread"><span>L</span><span>M</span><span>R</span></div>

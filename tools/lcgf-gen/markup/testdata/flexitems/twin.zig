@@ -33,6 +33,12 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     // align-content: space-between, and normal (unset): Flex.Style.line_space.
     s.flexed(s.row(.{ .size = .{ .px(60), .px(80) } }, .{ label.ct.label(theme, "one"), label.ct.label(theme, "two"), label.ct.label(theme, "three") }), .{ .wrap = true, .line_space = .between }),
     s.flexed(s.row(.{ .size = .{ .px(60), .px(80) } }, .{ label.ct.label(theme, "one"), label.ct.label(theme, "two") }), .{ .wrap = true, .line_space = .stretch }),
+    // align-items: baseline on a wrapping row: a baseline per line.
+    s.flexed(s.row(.{ .size = .{ .px(60), .fit } }, .{
+        s.textStyled(label.ct.label(theme, "Big"), .{ .px = 24, .color = .rgb(230, 230, 235) }),
+        label.ct.label(theme, "small"),
+        label.ct.label(theme, "next"),
+    }), .{ .wrap = true, .baseline = true }),
     // align-items: baseline on a column: start, CSS's fallback.
     s.col(.{ .cross = .start }, .{ label.ct.label(theme, "p"), label.ct.label(theme, "q") }),
     // aspect-ratio: Flex.Style.aspect, width over height.
