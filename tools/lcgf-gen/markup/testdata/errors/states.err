@@ -16,10 +16,10 @@ states.html:5:3: error: ::before is not lowered yet
 states.html:8:11: error: media feature 'any-hover' is not lowered; use min-/max-width, min-/max-height, orientation, hover, pointer, prefers-color-scheme, prefers-reduced-motion or prefers-contrast
   @media (any-hover: hover) { button { color: red; } }
           ^
-states.html:6:31: error: @media on <p> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text field or a search field outside lcgf-each
+states.html:6:31: error: @media on <p> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text field, a search field or a text area outside lcgf-each
   @media (min-width: 600px) { p { gap: 2px; } }
                               ^
-states.html:10:3: error: state CSS on <p> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text field or a search field outside lcgf-each
+states.html:10:3: error: state CSS on <p> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text field, a search field or a text area outside lcgf-each
   p:hover { color: red; }
   ^
 states.html:11:6: error: :hover here styles another element than its own; a state pseudo-class is lowered on the element the rule styles

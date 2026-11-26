@@ -20,6 +20,7 @@ const textfield_zig = @import("../widgets/textfield.zig");
 const link_zig = @import("../widgets/link.zig");
 const toggle_zig = @import("../widgets/toggle.zig");
 const search_zig = @import("../widgets/search.zig");
+const textarea_zig = @import("../widgets/textarea.zig");
 const simd = @import("../core/simd.zig");
 const edit = @import("../text/edit/edit.zig");
 const Parts = style.Parts;
@@ -490,19 +491,7 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                         part.size = .{ .px(band[1] - band[0]), .px(textfield_zig.lineHeight(&th)) };
                         _ = tb.t.push(row, .none, &part);
                     }
-                    const text_part = if (shown.hint) hint else content;
-                    const selected = controls.selectionSections(text_part, selection, shown.band);
-                    var original = text_part;
-                    original.box.participation.paint = original.box.participation.paint and !selected.active;
-                    pushText(ui, row, shown.str, original);
-                    for (selected.sections) |section| {
-                        const boxes = controls.selectionTextBoxes(text_part, section, 0, textfield_zig.lineHeight(&th), selected.active);
-                        const clip = tb.t.push(row, .none, &boxes.clip);
-                        var selected_text = if (section.selected) selection else text_part;
-                        selected_text.box = boxes.text;
-                        if (boxes.clip.participation.paint) pushText(ui, clip, shown.str, selected_text) else _ = tb.t.push(clip, .none, &boxes.text);
-                        tb.t.seal(clip);
-                    }
+                    pushSelected(ui, row, shown.str, if (shown.hint) hint else content, selection, shown.band, 0, textfield_zig.lineHeight(&th));
                     var part = caret.box;
                     part.float = true;
                     part.offset = .{ shown.caret, 0 };
@@ -570,6 +559,141 @@ fn Widget(comptime kind: Kind, comptime name: [:0]const u8, comptime bind: []con
                     if (field.result.changed or field.result.submitted) return @unionInit(Ui.Events.Event, name, field.result);
                 },
             }
+            return null;
+        }
+    };
+}
+
+/// `controls.selectedText` in the comptime front end: the text, then a clipped copy per
+/// section of it, the selected ones in the selection's colours.
+fn pushSelected(ui: anytype, parent: u32, text: []const u8, content: style.Computed, selection: style.Computed, bands: [textfield_zig.bands][2]f32, top: f32, height: f32) void {
+    const t = &ui.tables.t;
+    const selected = controls.selectionSections(content, selection, bands);
+    var original = content;
+    original.box.participation.paint = original.box.participation.paint and !selected.active;
+    pushText(ui, parent, text, original);
+    for (selected.sections) |section| {
+        const boxes = controls.selectionTextBoxes(content, section, top, height, selected.active);
+        const clip = t.push(parent, .none, &boxes.clip);
+        var selected_text = if (section.selected) selection else content;
+        selected_text.box = boxes.text;
+        if (boxes.clip.participation.paint) pushText(ui, clip, text, selected_text) else _ = t.push(clip, .none, &boxes.text);
+        t.seal(clip);
+    }
+}
+
+/// A text area, as `recipe_parts.textarea`: `rows` lines of the Text(cap) field `bind`,
+/// `hint` (a string field or a literal) on the first while empty.
+pub fn textarea(comptime id: @EnumLiteral(), comptime bind: @EnumLiteral(), comptime rows: u32, comptime hint: anytype, comptime config: Config) Spec {
+    if (rows == 0) @compileError("recipe textarea needs at least one row");
+    const label_node: Spec = if (isLiteral(hint)) .{ .kind = .label, .text = hint } else .{ .kind = .label };
+    const bands: [rows * textfield_zig.bands]Spec = @splat(.{ .kind = .col });
+    const sections: [controls.selection_sections]Spec = @splat(.{ .kind = .col, .children = &.{label_node} });
+    const line = [1]Spec{label_node} ++ sections;
+    var lines: [rows * line.len]Spec = undefined;
+    for (0..rows) |i| lines[i * line.len ..][0..line.len].* = line;
+    const kids = bands ++ lines ++ [2]Spec{ .{ .kind = .col }, .{ .kind = .col } };
+    const final = kids;
+    return .{ .kind = .col, .id = @tagName(id), .bind = @tagName(bind), .children = &final, .widget = TextArea(@tagName(id), @tagName(bind), rows, captionName(hint), isLiteral(hint), config) };
+}
+
+fn TextArea(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: []const u8, comptime literal: bool, comptime config: Config) type {
+    // The stock recipe is the editor's, as `recipe_parts.textarea`.
+    comptime var stocked = config;
+    if (stocked.recipe == null) stocked.recipe = model.editor;
+    const W = Widget(.input, name, bind, hint, .{}, stocked, literal);
+    return struct {
+        pub const focusable = true;
+        pub const Payload = edit.Result;
+        pub const inputAvailability = W.inputAvailability;
+
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            _ = field;
+            return textarea_zig.bindError(State, bind, rows) orelse W.bindError(State, bind);
+        }
+
+        const Resolved = struct { root: style.Computed, content: style.Computed, placeholder: style.Computed, selection: style.Computed, caret: style.Computed, focus: style.Computed, metrics: base.Theme };
+
+        fn resolve(ui: anytype, in: *const Input, response: types.Response) Resolved {
+            const use = W.useFor(ui, in, response);
+            var r: Resolved = undefined;
+            r.root = W.resolvePart(ui, Parts.root, use);
+            var child = use;
+            child.parent = &r.root;
+            child.local = &.{};
+            r.content = W.resolvePart(ui, Parts.content, child);
+            r.placeholder = W.resolvePart(ui, Parts.placeholder, child);
+            r.selection = W.resolvePart(ui, Parts.selection, child);
+            r.caret = W.resolvePart(ui, Parts.caret, child);
+            r.focus = W.resolvePart(ui, Parts.focus, child);
+            r.metrics = controls.fieldMetrics(r.root, r.content, false);
+            return r;
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = n;
+            const Ui = @TypeOf(ui.*);
+            var response = ui.response(next.*, in);
+            response.focused = ui.focus == @field(Ui.Events.Widget, name);
+            var r = resolve(ui, in, response);
+            const t = &ui.tables.t;
+            const field = &@field(ui.signals.state, bind);
+            const editor = field.editor();
+            r.root.box.role = .text_input;
+            r.root.box.scroll = .{ 0, 0 }; // textarea.behave already selects the visible line window.
+            const row = t.push(parent, .hash(name), &r.root.box);
+            ui.setCursor(t.cursor(row) orelse .text, response.hovered);
+            const value = editor.text();
+            const scroll: u32 = @intFromFloat(field.scroll);
+            const selected = editor.selection();
+            const advance = textfield_zig.advance(&r.metrics);
+            const height = textfield_zig.lineHeight(&r.metrics);
+            const fresh = textfield_zig.fresh(field);
+            for (0..rows) |i| {
+                const line = textarea_zig.shownLine(value, scroll, @intCast(i), selected, advance);
+                for (textarea_zig.lineBands(fresh, scroll + @as(u32, @intCast(i)), selected, line.sel)) |band| {
+                    var b = r.selection.box;
+                    b.float = true;
+                    b.offset = .{ band[0], @as(f32, @floatFromInt(i)) * height };
+                    b.size = .{ .px(band[1] - band[0]), .px(height) };
+                    _ = t.push(row, .none, &b);
+                }
+            }
+            for (0..rows) |i| {
+                const line = textarea_zig.shownLine(value, scroll, @intCast(i), selected, advance);
+                const show_hint = value.len == 0 and i == 0;
+                var part = if (show_hint) r.placeholder else r.content;
+                part.box.size[1] = .px(height);
+                const bands = textarea_zig.lineBands(fresh, scroll + @as(u32, @intCast(i)), selected, line.sel);
+                pushSelected(ui, row, if (show_hint) (if (literal) hint else @field(ui.signals.state, hint)) else line.str, part, r.selection, bands, @as(f32, @floatFromInt(i)) * height, height);
+            }
+            const at = textarea_zig.caretAt(value, editor.shownCaret(), scroll, rows, &r.metrics, fresh);
+            var caret_box = r.caret.box;
+            caret_box.float = true;
+            caret_box.offset = .{ at.x, at.y };
+            caret_box.size[1] = .px(height);
+            if (!at.shown) caret_box.fill = .transparent;
+            _ = t.push(row, .none, &caret_box);
+            _ = outline.append(t, row, @fromBackingInt(row), controls.outlineOptions(r.focus, config.focus_offset));
+            next.* += 1 + rows * (textfield_zig.bands + 1 + controls.selection_sections * 2) + 2;
+            t.seal(row);
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {
+            const Ui = @TypeOf(ui.*);
+            const response = base.ctResponse(ui, row, event, in);
+            const states = W.state(ui);
+            const r = resolve(ui, in, response);
+            const field = &@field(ui.signals.state, bind);
+            const editor = field.editor();
+            const previous = editor.mode.read_only;
+            editor.mode.read_only = previous or states.read_only or states.disabled;
+            defer editor.mode.read_only = previous;
+            var last = ui.lastRect(row);
+            last.y0 += r.root.box.pad[1] - textfield_zig.padding(&r.metrics)[1];
+            textarea_zig.behave(field, &r.metrics, .hash(name), response, last, rows, in);
+            if (editor.mode.read_only) field.input.reset();
+            if (field.result.changed or field.result.submitted) return @unionInit(Ui.Events.Event, name, field.result);
             return null;
         }
     };

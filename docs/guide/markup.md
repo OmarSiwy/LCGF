@@ -388,9 +388,9 @@ while the runs' byte offsets are fixed at build time. Other elements inside it a
 
 `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within`, `:checked`, `:indeterminate`,
 `:disabled`, `:enabled`, `:invalid`, `:valid`, `:required` and `:optional` on a `<button>`, a link, a toggle button
-(`<button aria-pressed>`), a checkbox, a radio group, a switch, a range, a text field or a search field
+(`<button aria-pressed>`), a checkbox, a radio group, a switch, a range, a text field, a search field or a `<textarea>`
 make it a recipe widget (`theme_recipes`): `recipes.ct.button` on a comptime page,
-`recipes.button` on a runtime one (`link`, `toggle`, `radio`, `slider`, `textfield`, `search` likewise), with a generated
+`recipes.button` on a runtime one (`link`, `toggle`, `radio`, `slider`, `textfield`, `search`, `textarea` likewise), with a generated
 `recipe_<id>`. The recipe is the stock
 one, then one rule per CSS rule in cascade order: the widget's static CSS, then each state
 rule requiring its states. A static declaration that outranks a state one drops it, as in a
@@ -401,8 +401,8 @@ checkbox or switch the colours and border are the box's. A radio group's static 
 group, as without state CSS, and its state rules style each option under that option's own
 states (`:checked` is the selected one); every radio of a group takes the same state rules,
 and a radio group neither eases nor animates. A search field's CSS styles the box around its
-field and Clear button (`model.search`, the text field's rules); it neither eases nor animates
-either. Margins and `box-shadow` there are
+field and Clear button (`model.search`, the text field's rules), and a text area takes the editor recipe
+(`model.editor`) with the text field's validation; neither eases nor animates either. Margins and `box-shadow` there are
 errors. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
 looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), inside
 `:not()` or `:is()`, or inside lcgf-each is an error.

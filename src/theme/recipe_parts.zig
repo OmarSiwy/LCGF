@@ -165,28 +165,29 @@ pub fn textarea(f: *Frame, id: types.Id, field: anytype, rows: u32, hint: []cons
     if (options.semantics) |s| if (f.tree().len >= s.cap) return error.NoSpace;
     const recipe = options.recipe orelse model.editor;
     const response = try controls.policyResponse(f, id, recipe, options, options.states);
-    const states = controls.statesFor(options.states, response, controls.visibleFocus(f, options));
-    const use = controls.useFor(f, options, states);
-    var root = try recipe.resolve(Parts.root, use, null);
-    var inside = use;
-    inside.parent = &root;
-    inside.local = &.{};
-    const content = try recipe.resolve(Parts.content, inside, null);
-    const placeholder = try recipe.resolve(Parts.placeholder, inside, null);
-    const selection = try recipe.resolve(Parts.selection, inside, null);
-    const caret = try recipe.resolve(Parts.caret, inside, null);
-    const focus = try recipe.resolve(Parts.focus, inside, null);
-    var metrics = model.metrics(root);
-    metrics.text_px = content.text.px;
-    metrics.text = content.text.color;
+    var states = options.validation.states(controls.statesFor(options.states, response, controls.visibleFocus(f, options)), field.text());
+    var r = try resolveArea(f, recipe, options, states);
     const editor = field.editor();
     const previous_read_only = editor.mode.read_only;
     editor.mode.read_only = previous_read_only or states.read_only or states.disabled;
     defer editor.mode.read_only = previous_read_only;
     var last = f.lastRect(id);
-    last.y0 += root.box.pad[1] - textfield.padding(&metrics)[1];
-    textarea_zig.behave(field, &metrics, id, response, last, rows, f.in);
+    last.y0 += r.root.box.pad[1] - textfield.padding(&r.metrics)[1];
+    const was_invalid = options.validation.invalid(field.text());
+    textarea_zig.behave(field, &r.metrics, id, response, last, rows, f.in);
     if (editor.mode.read_only) field.input.reset();
+    // The comptime front end resolves after this frame's edit: validity follows the new text.
+    if (options.validation.invalid(field.text()) != was_invalid) {
+        states.invalid = options.states.invalid or options.validation.invalid(field.text());
+        r = try resolveArea(f, recipe, options, states);
+    }
+    var root = r.root;
+    const content = r.content;
+    const placeholder = r.placeholder;
+    const selection = r.selection;
+    const caret = r.caret;
+    const focus = r.focus;
+    const metrics = r.metrics;
     textfield.platform(f, field);
     root.box.role = .text_input;
     root.box.scroll = .{ 0, 0 }; // textarea.behave already selects the visible line window.
@@ -229,6 +230,24 @@ pub fn textarea(f: *Frame, id: types.Id, field: anytype, rows: u32, hint: []cons
     controls.expose(options.semantics, node, states);
     if (options.semantics) |s| s.c.state[node.ix()] |= (a11y.State{ .multiline = true }).bitsOf();
     return response;
+}
+
+const Area = struct { root: style.Computed, content: style.Computed, placeholder: style.Computed, selection: style.Computed, caret: style.Computed, focus: style.Computed, metrics: @import("../widgets/base.zig").Theme };
+
+fn resolveArea(f: *Frame, recipe: model.Recipe, options: controls.Options, states: style.States) style.Error!Area {
+    const use = controls.useFor(f, options, states);
+    var a: Area = undefined;
+    a.root = try recipe.resolve(Parts.root, use, null);
+    var inside = use;
+    inside.parent = &a.root;
+    inside.local = &.{};
+    a.content = try recipe.resolve(Parts.content, inside, null);
+    a.placeholder = try recipe.resolve(Parts.placeholder, inside, null);
+    a.selection = try recipe.resolve(Parts.selection, inside, null);
+    a.caret = try recipe.resolve(Parts.caret, inside, null);
+    a.focus = try recipe.resolve(Parts.focus, inside, null);
+    a.metrics = controls.fieldMetrics(a.root, a.content, false);
+    return a;
 }
 
 /// Emits an editor's independently styled support/error text. Use outside the clipped field

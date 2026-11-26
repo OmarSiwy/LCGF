@@ -533,8 +533,8 @@ pub const Lowerer = struct {
             if (x == none or !l.disabledElement(n)) continue;
             nodes.items(.live)[x].disabled = true;
             switch (nodes.items(.kind)[x]) {
-                .button, .toggle, .checkbox, .radio, .@"switch", .container, .slider, .textfield, .search => {},
-                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a toggle button, a checkbox, a radio group, a switch, a range, a text field or a search field", .{l.tag(n)}),
+                .button, .toggle, .checkbox, .radio, .@"switch", .container, .slider, .textfield, .search, .textarea => {},
+                else => l.ds.err(l.attrLoc(n, "disabled"), "disabled on <{s}> is not lowered yet; it disables a <button>, a toggle button, a checkbox, a radio group, a switch, a range, a text field, a search field or a text area", .{l.tag(n)}),
             }
             if (l.attr(n, "disabled")) |v| if (isBound(v)) l.ds.err(l.valueLoc(n, "disabled"), "a bound disabled is not lowered yet; write the attribute or leave it out", .{});
         }
@@ -551,8 +551,7 @@ pub const Lowerer = struct {
             const x = l.ir_of[n];
             if (x == none or nodes.items(.recipe)[x].len > 0) continue;
             const kind = nodes.items(.kind)[x];
-            // ponytail: a recipe radio group or search field neither eases nor plays; add Fade/Clock to them when asked.
-            const control = l.recipeWidget(n, x) and kind != .container and kind != .radio and kind != .search;
+            const control = l.recipeWidget(n, x) and kind != .container and !l.composite(kind);
             const eases = l.transitionOf(n) != null and control;
             const plays = l.k.get(n, .animation).decl != none and (control or (kind == .container and l.eachOf(n) == none));
             if ((nodes.items(.live)[x].disabled and kind != .container) or eases or plays) l.recipeOf(n, &reported);
@@ -604,7 +603,7 @@ pub const Lowerer = struct {
             const r = l.transitionOf(n) orelse continue;
             const at = l.c.decls.items(.loc)[l.k.get(n, .transition).decl];
             const node = l.page.nodes.get(x);
-            if (node.recipe.len > 0 and node.kind != .radio and node.kind != .search) {
+            if (node.recipe.len > 0 and !l.composite(node.kind)) {
                 const t = l.transition(r, at) orelse continue;
                 l.page.nodes.items(.live)[x].transition = t;
                 l.field(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition");
@@ -630,7 +629,7 @@ pub const Lowerer = struct {
             const r = l.substitute(n, d.first, d.end, d.loc) orelse continue;
             if (r[1] - r[0] == 1 and values.isIdent(l.c, r[0], "none")) continue;
             const node = l.page.nodes.get(x);
-            if (node.recipe.len == 0 or node.kind == .radio or node.kind == .search) {
+            if (node.recipe.len == 0 or l.composite(node.kind)) {
                 l.ds.err(d.loc, "animation on <{s}> is not lowered: it plays on a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch, a range or a text field outside lcgf-each", .{l.tag(n)});
                 continue;
             }
@@ -1001,7 +1000,7 @@ pub const Lowerer = struct {
         };
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text field or a search field outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a text field, a search field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }
@@ -1087,8 +1086,16 @@ pub const Lowerer = struct {
         return l.eachOf(n) == none and switch (l.page.nodes.items(.kind)[x]) {
             .button, .link, .toggle, .checkbox, .radio, .@"switch", .container, .slider => true,
             .textfield, .search => !l.page.nodes.items(.secure)[x],
+            .textarea => true,
             else => false,
         };
+    }
+
+    /// Recipe widgets whose builders take no Fade or Clock: a transition or animation on them
+    /// stays an error.
+    // ponytail: add Fade/Clock to the radio, search and text area builders when asked.
+    fn composite(_: *const Lowerer, kind: ir.Kind) bool {
+        return kind == .radio or kind == .search or kind == .textarea;
     }
 
     /// The first `<input type=radio>` of document node `n`'s group when `n` is a later one.

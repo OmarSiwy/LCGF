@@ -506,7 +506,11 @@ pub const Emit = struct {
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(")");
             },
-            .textarea => {
+            .textarea => if (n.recipe.len > 0) {
+                e.print("recipes.ct.textarea(.{f}, .{f}, {d}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind), n.level });
+                e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
+                e.print(", {s})", .{e.config(n, false)});
+            } else {
                 e.print("{s}.ct.textarea(theme, .{f}, .{f}, {d}, ", .{ e.use("textarea"), std.zig.fmtId(n.id), std.zig.fmtId(n.bind), n.level });
                 e.caption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
                 e.write(")");
@@ -791,6 +795,7 @@ pub const Emit = struct {
                 .slider => "slider",
                 .textfield => "input",
                 .search => "search",
+                .textarea => "editor",
                 else => "switch_control",
             };
             const rules = switch (n.kind) {
@@ -1253,11 +1258,13 @@ pub const Emit = struct {
                 e.itemText(n, list_depth);
                 return "";
             } else if (n.kind == .textarea) {
-                const face = e.rtFace(n);
-                e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.faced("textarea", face), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
+                const face = if (n.recipe.len == 0) e.rtFace(n) else "";
+                if (n.recipe.len > 0)
+                    e.print("_ = recipes.textarea(f, {s}, &{s}, {d}, ", .{ e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level })
+                else
+                    e.print("_ = {s}.{s}(f, &theme, {s}, &{s}, {d}, ", .{ e.use("textarea"), e.faced("textarea", face), e.rtId(n.id, list_depth), e.stateRef(n.bind), n.level });
                 e.rtCaption(if (n.text_kind == .none) .literal else n.text_kind, n.text);
-                e.write(face);
-                e.write(");");
+                if (n.recipe.len > 0) e.print(", {s}) catch unreachable;", .{e.config(n, true)}) else e.print("{s});", .{face});
                 e.submitFlag(n);
                 return "";
             } else if (n.recipe.len > 0) {
@@ -2373,6 +2380,19 @@ pub const Emit = struct {
             nodes += e.page.nodes.items(.max)[i];
             texts += @intFromFloat(e.page.nodes.items(.range)[i][0]);
             strings += 16384;
+        };
+        // A recipe text widget's lines carry a clipped text copy per selection section.
+        const line_rows = lcgf.widgets_textfield.bands + 1 + 2 * lcgf.theme_recipes.controls.selection_sections;
+        for (0..n) |i| if (e.page.nodes.items(.recipe)[i].len > 0) switch (e.page.nodes.items(.kind)[i]) {
+            .textfield, .search => {
+                nodes += line_rows + 4;
+                texts += line_rows;
+            },
+            .textarea => {
+                nodes += e.page.nodes.items(.level)[i] * line_rows + 3;
+                texts += e.page.nodes.items(.level)[i] * line_rows;
+            },
+            else => {},
         };
         const regions = e.hasRegions();
         e.print(
