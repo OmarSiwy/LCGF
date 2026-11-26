@@ -26,7 +26,15 @@ pub const Environment = struct {
     rtl: ?bool = null,
 
     pub fn fromInput(input: *const Input) Environment {
-        return .{ .viewport = input.viewport, .scale = input.scale, .dark = input.appearance.dark, .accent = if (input.appearance.accent.a != 0) input.appearance.accent else null };
+        const pointer = input.primary_pointer;
+        return .{
+            .viewport = input.viewport,
+            .scale = input.scale,
+            .dark = input.appearance.dark,
+            .accent = if (input.appearance.accent.a != 0) input.appearance.accent else null,
+            .coarse_pointer = if (pointer) |p| p == .coarse else null,
+            .hover = if (pointer) |p| p == .fine else null,
+        };
     }
 
     /// Read existing accessibility settings without overwriting unrelated preference inputs.
@@ -128,6 +136,16 @@ test "unknown preferences do not match false; viewport and container conditions 
     const compact: Conditions = .{ .width = .{ .min = 800 }, .container_width = .{ .max = 300 } };
     try std.testing.expect(!compact.matches(.{ .viewport = .{ 1024, 768 } }));
     try std.testing.expect(compact.matches(.{ .viewport = .{ 1024, 768 }, .container = .{ 240, 500 } }));
+}
+
+test "the input's primary pointer answers hover and coarse-pointer conditions; none, neither" {
+    const hovers: Conditions = .{ .hover = true };
+    const coarse: Conditions = .{ .coarse_pointer = true };
+    try std.testing.expect(!hovers.matches(.fromInput(&.{})));
+    try std.testing.expect(hovers.matches(.fromInput(&.{ .primary_pointer = .fine })));
+    try std.testing.expect(!coarse.matches(.fromInput(&.{ .primary_pointer = .fine })));
+    try std.testing.expect(coarse.matches(.fromInput(&.{ .primary_pointer = .coarse })));
+    try std.testing.expect(!hovers.matches(.fromInput(&.{ .primary_pointer = .coarse })));
 }
 
 test "orientation: portrait when the viewport is at least as tall as it is wide" {

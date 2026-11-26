@@ -42,6 +42,10 @@ pub const Input = struct {
     /// The platform's light or dark mode and accent colour. A change builds a frame; an app
     /// that follows it restyles when it differs from the one it last styled for.
     appearance: Appearance = .{},
+    /// The primary pointing device, as CSS `pointer` and `hover` ask about it: `fine` (a mouse
+    /// or touchpad, which hovers), `coarse` (a finger, which does not); null when the shell does
+    /// not say, and then neither media feature matches.
+    primary_pointer: ?Pointer = null,
     /// This frame only: the shell lost what it showed (the app came back from the background,
     /// its surface was made again), so a frame is needed though no other field changed.
     redraw: bool = false,
@@ -64,6 +68,8 @@ pub const Input = struct {
             return ((k.bits[code >> 6] >> @as(u6, @truncate(code))) & 1) != 0;
         }
     };
+
+    pub const Pointer = enum(u8) { fine, coarse };
 
     /// The system's appearance setting, as far as the shell can read it.
     pub const Appearance = struct {
