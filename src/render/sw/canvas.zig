@@ -16,45 +16,71 @@ const canvas = @import("../../draw/canvas.zig");
 const DrawList = @import("../../draw/draw_list.zig").DrawList;
 const sw = @import("sw.zig");
 const draw_list = @import("../../draw/draw_list.zig");
+const mem = @import("../../core/mem.zig");
 
 const W = simd.lanes;
 const F = simd.F;
 const U = simd.U;
 const B = simd.B;
 
-/// Draws canvas command `k` of `list` into `t`, `scale` physical pixels per logical one;
-/// glyph instances sample `atlas`.
-pub fn draw(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas: sw.Image) void {
-    if (!std.math.isFinite(scale) or scale <= 0) return;
+/// What every band of canvas command `k` shares: the node's pixels inside `scissor`, the
+/// view, and that area in world units from the origin, widened by the widest stroke the
+/// palette can give and a pixel of antialiasing (`slop`, in pixels).
+const Prep = struct {
+    c: draw_list.CanvasDraw,
+    opacity: f32,
+    area: [4]u32,
+    v: canvas.View,
+    world: [4]i32,
+    slop: f32,
+};
+
+fn prep(list: *const DrawList, k: u32, scale: f32, scissor: [4]u32) ?Prep {
+    if (!std.math.isFinite(scale) or scale <= 0) return null;
     const node = list.customs[k];
     const c = list.canvases[k];
-    const s = c.instances;
     const rect: @Vector(4, f32) = @as(@Vector(4, f32), node.rect) * @as(@Vector(4, f32), @splat(scale));
     const clip: @Vector(4, f32) = @as(@Vector(4, f32), node.clip) * @as(@Vector(4, f32), @splat(scale));
     const half: @Vector(4, f32) = @splat(0.5);
     // Pixel x is drawn when its centre x + 0.5 is in [rect0, rect2) and in [clip0, clip2].
     const lo = @max(@ceil(rect - half), @ceil(clip - half));
     const hi = @min(@ceil(rect - half), @floor(clip - half) + @as(@Vector(4, f32), @splat(1)));
-    const area = clampBox(pixels(.{ lo[0], lo[1], hi[2], hi[3] }), t.scissor);
-    if (area[0] >= area[2] or area[1] >= area[3]) return;
+    const area = clampBox(pixels(.{ lo[0], lo[1], hi[2], hi[3] }), scissor);
+    if (area[0] >= area[2] or area[1] >= area[3]) return null;
     const v = canvas.View.of(c.camera, c.palette, .{ node.rect[0], node.rect[1] }, scale);
-    const red: u5 = @as(u5, @intFromBool(t.fb.format == .bgra8)) * 16;
-    // The area in world units from the origin, widened by the widest stroke the palette can
-    // give and a pixel of antialiasing: an instance whose `reach` misses it is skipped on four
-    // integer compares, before it is decoded.
     var widest: f32 = 0;
     for (c.palette.layers) |l| widest = @max(widest, l.width);
-    const slop = (widest * 4 * v.line + 2) / v.scale;
+    const slop = widest * 4 * v.line + 2;
     const limit: f32 = 2e9;
-    const world = [4]i32{
-        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[0])) - v.base[0]) / v.scale - slop), -limit, limit)),
-        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[1])) - v.base[1]) / v.scale - slop), -limit, limit)),
-        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[2])) - v.base[0]) / v.scale + slop), -limit, limit)),
-        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[3])) - v.base[1]) / v.scale + slop), -limit, limit)),
+    return .{ .c = c, .opacity = node.opacity, .area = area, .v = v, .slop = slop, .world = .{
+        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[0])) - v.base[0] - slop) / v.scale), -limit, limit)),
+        @intFromFloat(std.math.clamp(@floor((@as(f32, @floatFromInt(area[1])) - v.base[1] - slop) / v.scale), -limit, limit)),
+        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[2])) - v.base[0] + slop) / v.scale), -limit, limit)),
+        @intFromFloat(std.math.clamp(@ceil((@as(f32, @floatFromInt(area[3])) - v.base[1] + slop) / v.scale), -limit, limit)),
+    } };
+}
+
+/// Draws canvas command `k` of `list` into `t`, `scale` physical pixels per logical one;
+/// glyph instances sample `atlas`. Walks every row of the batch: `drawBinned` with a `Bin`
+/// built for this frame's bands walks only the band's own.
+pub fn draw(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas: sw.Image) void {
+    drawBinned(t, list, k, scale, atlas, null);
+}
+
+/// `draw`, with the rows `bin` holds for `t`'s band when it was built for this command and
+/// band; otherwise every row. The pixels are the same either way.
+pub fn drawBinned(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas: sw.Image, bin: ?*const Bin) void {
+    const p = prep(list, k, scale, t.scissor) orelse return;
+    const s = p.c.instances;
+    const red: u5 = @as(u5, @intFromBool(t.fb.format == .bgra8)) * 16;
+    if (bin) |b| if (b.band(list, k, t.scissor)) |rows| {
+        for (rows) |i| instance(t, s, &p.c, p.v, p.area, red, p.opacity, atlas, i);
+        return;
     };
     const pos = s.c.pos;
     const looks = s.c.look;
-    for (c.ranges) |r| {
+    const world = p.world;
+    for (p.c.ranges) |r| {
         const end = @min(r.first +| r.count, s.len);
         var base: usize = @min(r.first, end);
         while (base < end) : (base += 64) {
@@ -63,20 +89,157 @@ pub fn draw(t: sw.Target, list: *const DrawList, k: u32, scale: f32, atlas: sw.I
             const n = @min(64, end - base);
             var hits: u64 = 0;
             for (0..n) |j| {
-                const b = canvas.reach(pos[base + j], looks[base + j], v.origin);
+                const b = canvas.reach(pos[base + j], looks[base + j], p.v.origin);
                 const in = (b[2] >= world[0]) & (b[0] <= world[2]) & (b[3] >= world[1]) & (b[1] <= world[3]);
                 hits |= @as(u64, @intFromBool(in)) << @intCast(j);
             }
             while (hits != 0) : (hits &= hits - 1) {
                 const i = base + @ctz(hits);
-                instance(t, s, &c, v, area, red, node.opacity, atlas, i);
+                instance(t, s, &p.c, p.v, p.area, red, p.opacity, atlas, i);
             }
         }
     }
 }
 
+/// One frame's rows of one canvas command sorted into bands, so each band (thread) walks its
+/// own rows instead of the whole batch. Build it once per frame and box, before the bands draw
+/// (`sw.Setup.draw` does, with `Setup.bins`). Caller-owned columns, carved like the core's:
+///
+///   cull   each row's `canvas.reach` box from world 0 (x0, y0, x1, y1), SoA, rebuilt when
+///          the instances' revision changes, so a pan or zoom reads them without decoding
+///   span   each row's first and last band this frame (`b0 | b1 << 8`; b0 > b1 for none)
+///   rows   the bands' lists one after the other, in draw order; a row on a band edge is in
+///          both. When they do not fit, the bin is unused and every band walks the batch.
+pub const Bin = struct {
+    cull: [4][]i32,
+    span: []u32,
+    rows: []u32,
+    starts: []u32,
+    /// The rows `build` filled `rows` with, or null when unused.
+    list: ?*const DrawList = null,
+    k: u32 = 0,
+    box: [4]u32 = .{ 0, 0, 0, 0 },
+    bands: u32 = 0,
+    /// The batch and revision `cull` holds.
+    shapes: ?*const canvas.Instances = null,
+    revision: u32 = 0,
+
+    pub const max_bands = 64;
+
+    /// For batches of up to `instances` rows (`Instances.cap`) and `rows` list entries (about
+    /// the visible rows plus those on band edges; twice `instances` is always enough for
+    /// rows no taller than a band).
+    pub fn init(carver: *mem.Carver, instances: u32, rows: u32) Bin {
+        const n = simd.rows(instances);
+        return .{
+            .cull = .{ carver.slice(i32, n), carver.slice(i32, n), carver.slice(i32, n), carver.slice(i32, n) },
+            .span = carver.slice(u32, n),
+            .rows = carver.slice(u32, rows),
+            .starts = carver.slice(u32, max_bands + 1),
+        };
+    }
+
+    pub fn requiredBytes(instances: u32, rows: u32) usize {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = init(&counter, instances, rows);
+        return counter.off;
+    }
+
+    /// Sorts canvas command `k`'s visible rows into the `n` bands `box` is drawn in, as
+    /// `sw.tile` and `Setup.draw` split it: band j is rows `box[1] + h * j / n` up to
+    /// `box[1] + h * (j + 1) / n`.
+    pub fn build(b: *Bin, list: *const DrawList, k: u32, scale: f32, box: [4]u32, n_bands: u32) void {
+        b.list = null;
+        const n = std.math.clamp(n_bands, 1, max_bands);
+        const p = prep(list, k, scale, box) orelse return;
+        const s = p.c.instances;
+        std.debug.assert(simd.padded(s.len) <= b.span.len);
+        if (b.shapes != s or b.revision != s.revision) b.refresh(s);
+
+        // Each row's bands, W rows a step: its box from the origin, cut by the area, then its
+        // pixel rows, one more either way, since bands split on whole rows.
+        const o = p.v.origin;
+        const I = @Vector(W, i32);
+        const h: f32 = @floatFromInt(box[3] - box[1]);
+        const per = @as(f32, @floatFromInt(n)) / @max(h, 1);
+        const top: f32 = @floatFromInt(box[1]);
+        const last: F = @splat(@floatFromInt(n - 1));
+        var i: usize = 0;
+        while (i < simd.padded(s.len)) : (i += W) {
+            const x0 = @as(I, b.cull[0][i..][0..W].*) -% @as(I, @splat(o[0]));
+            const y0 = @as(I, b.cull[1][i..][0..W].*) -% @as(I, @splat(o[1]));
+            const x1 = @as(I, b.cull[2][i..][0..W].*) -% @as(I, @splat(o[0]));
+            const y1 = @as(I, b.cull[3][i..][0..W].*) -% @as(I, @splat(o[1]));
+            const w = p.world;
+            const in = (x1 >= @as(I, @splat(w[0]))) & (x0 <= @as(I, @splat(w[2]))) & (y1 >= @as(I, @splat(w[1]))) & (y0 <= @as(I, @splat(w[3])));
+            const py0 = simd.f(p.v.base[1] - p.slop - 1 - top) + @as(F, @floatFromInt(y0)) * simd.f(p.v.scale);
+            const py1 = simd.f(p.v.base[1] + p.slop + 1 - top) + @as(F, @floatFromInt(y1)) * simd.f(p.v.scale);
+            const b0: U = @intFromFloat(@min(@max(@floor(py0 * simd.f(per)), simd.f(0)), last));
+            const b1: U = @intFromFloat(@min(@max(@floor(py1 * simd.f(per)), simd.f(0)), last));
+            b.span[i..][0..W].* = @select(u32, in, b0 | (b1 << @splat(8)), simd.u(1));
+        }
+
+        // Count, then place, walking the ranges in draw order.
+        const starts = b.starts[0 .. n + 1];
+        @memset(starts, 0);
+        for (p.c.ranges) |r| {
+            const end = @min(r.first +| r.count, s.len);
+            for (b.span[@min(r.first, end)..end]) |sp| {
+                for ((sp & 255)..(sp >> 8) + 1) |j| starts[j + 1] += 1;
+            }
+        }
+        for (1..n + 1) |j| starts[j] += starts[j - 1];
+        if (starts[n] > b.rows.len) return;
+        var at: [max_bands]u32 = undefined;
+        @memcpy(at[0..n], starts[0..n]);
+        for (p.c.ranges) |r| {
+            const end = @min(r.first +| r.count, s.len);
+            for (@min(r.first, end)..end) |row| {
+                const sp = b.span[row];
+                for ((sp & 255)..(sp >> 8) + 1) |j| {
+                    b.rows[at[j]] = @intCast(row);
+                    at[j] += 1;
+                }
+            }
+        }
+        b.list = list;
+        b.k = k;
+        b.box = box;
+        b.bands = n;
+    }
+
+    /// Every row's `canvas.reach` box from world 0, and empty boxes in the padding.
+    fn refresh(b: *Bin, s: *const canvas.Instances) void {
+        for (0..s.len) |i| {
+            const r = canvas.reach(s.c.pos[i], s.c.look[i], .{ 0, 0 });
+            inline for (0..4) |j| b.cull[j][i] = r[j];
+        }
+        for (s.len..simd.padded(s.len)) |i| {
+            b.cull[0][i] = std.math.maxInt(i32);
+            b.cull[1][i] = std.math.maxInt(i32);
+            b.cull[2][i] = std.math.minInt(i32);
+            b.cull[3][i] = std.math.minInt(i32);
+        }
+        b.shapes = s;
+        b.revision = s.revision;
+    }
+
+    /// The rows of the band whose rows are `scissor`'s, when this bin was built for command
+    /// `k` of `list` and `scissor` is one of its bands.
+    pub fn band(b: *const Bin, list: *const DrawList, k: u32, scissor: [4]u32) ?[]const u32 {
+        if (b.list != list or b.k != k or scissor[0] != b.box[0] or scissor[2] != b.box[2]) return null;
+        const h = b.box[3] - b.box[1];
+        for (0..b.bands) |j| {
+            const y0 = b.box[1] + h * @as(u32, @intCast(j)) / b.bands;
+            const y1 = b.box[1] + h * @as(u32, @intCast(j + 1)) / b.bands;
+            if (scissor[1] == y0 and scissor[3] == y1) return b.rows[b.starts[j]..b.starts[j + 1]];
+        }
+        return null;
+    }
+};
+
 /// Decodes and shades row `i`.
-inline fn instance(t: sw.Target, s: *const canvas.Instances, c: *const draw_list.CanvasDraw, v: canvas.View, area: [4]u32, red: u5, opacity: f32, atlas: sw.Image, i: usize) void {
+fn instance(t: sw.Target, s: *const canvas.Instances, c: *const draw_list.CanvasDraw, v: canvas.View, area: [4]u32, red: u5, opacity: f32, atlas: sw.Image, i: usize) void {
     const look = s.c.look[i];
     const layer = canvas.layerRow(c.palette, canvas.layerOf(look));
     if (!canvas.shown(look, layer)) return;
@@ -94,13 +257,13 @@ inline fn instance(t: sw.Target, s: *const canvas.Instances, c: *const draw_list
     switch (sh.kind) {
         .polygon => {
             const first = @min(look[1], s.vert_len);
-            rows(.polygon, t.fb, red, box, &sh, ink, .{ .view = v, .verts = s.verts[first..][0..@min(look[2], s.vert_len - first)] });
+            shade(.polygon, t.fb, red, box, &sh, ink, .{ .view = v, .verts = s.verts[first..][0..@min(look[2], s.vert_len - first)] });
         },
         .glyph => if (atlas.alpha8.len != 0)
-            rows(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = true })
+            shade(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = true })
         else
-            rows(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = false }),
-        inline else => |kind| rows(kind, t.fb, red, box, &sh, ink, .{}),
+            shade(.glyph, t.fb, red, box, &sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = false }),
+        inline else => |kind| shade(kind, t.fb, red, box, &sh, ink, .{}),
     }
 }
 
@@ -117,7 +280,7 @@ const Extra = struct {
     alpha8: bool = false,
 };
 
-inline fn rows(comptime kind: canvas.Kind, fb: *sw.Framebuffer, red: u5, box: [4]u32, sh: *const canvas.Shape, ink: Ink, x: Extra) void {
+inline fn shade(comptime kind: canvas.Kind, fb: *sw.Framebuffer, red: u5, box: [4]u32, sh: *const canvas.Shape, ink: Ink, x: Extra) void {
     const stroke: [4]F = .{ simd.f(ink.stroke[0]), simd.f(ink.stroke[1]), simd.f(ink.stroke[2]), simd.f(ink.stroke[3]) };
     // Inside an outline: the fill, or the stroke's colour at alpha 0 when unfilled, so the
     // stroke's inner edge fades out instead of darkening.
@@ -210,7 +373,6 @@ fn clampBox(a: [4]u32, b: [4]u32) [4]u32 {
 }
 
 const testing = std.testing;
-const mem = @import("../../core/mem.zig");
 const Color = @import("../../core/types.zig").Color;
 
 /// Layers of the tests: 0 red 4 px, 1 white fill and blue stroke 2 px, 2 translucent blue
@@ -361,4 +523,31 @@ test "sw canvas: bands drawn separately give the whole frame" {
     try testing.expectEqualSlices(u32, &expect, fb.pixels);
     try testing.expectEqual(Color.white, fb.at(14, 12));
     try testing.expectEqual(Color.rgb(0, 0, 255), fb.at(38, 26));
+
+    // Binned: each band walks its own rows (some on two or three bands), in draw order, with
+    // the same pixels; a band the bin was not built for walks them all.
+    var bin_buf: [Bin.requiredBytes(8, 24)]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &bin_buf };
+    var bin: Bin = .init(&carver, 8, 24);
+    for (0..2) |pass| {
+        bin.build(&sc.list, 0, 1, fb.all(), 3);
+        try testing.expect(bin.band(&sc.list, 0, sw.tile(&fb, 1, 3)) != null);
+        try testing.expectEqual(null, bin.band(&sc.list, 0, sw.tile(&fb, 1, 4)));
+        fb.clear(.black);
+        for (0..3) |b| drawBinned(.{ .fb = &fb, .scissor = sw.tile(&fb, @intCast(b), 3) }, &sc.list, 0, 1, sw.Image.white, &bin);
+        try testing.expectEqualSlices(u32, &expect, fb.pixels);
+        // The second pass pans away: nothing is drawn, from a bin whose cull columns are kept.
+        if (pass == 0) {
+            sc.rows[0].camera.origin = .{ 1_000, 0 };
+            fb.clear(.black);
+            @memcpy(&expect, fb.pixels);
+        }
+    }
+    // A list too short for the rows leaves the bin unused, and the bands walk everything.
+    var small_buf: [Bin.requiredBytes(8, 1)]u8 align(mem.column_align) = undefined;
+    var small_carver: mem.Carver = .{ .buf = &small_buf };
+    var small: Bin = .init(&small_carver, 8, 1);
+    sc.rows[0].camera.origin = .{ 0, 0 };
+    small.build(&sc.list, 0, 1, fb.all(), 3);
+    try testing.expectEqual(null, small.band(&sc.list, 0, sw.tile(&fb, 0, 3)));
 }

@@ -6644,7 +6644,7 @@ Software renderer for the features collected from a comptime UI.
 ### `Setup` (struct)
 What a shell that draws in software keeps, and its frame: clear the framebuffer and draw the whole list into it.
 
-Fields: `gfx`, `pool`
+Fields: `gfx`, `pool`, `bins`
 
 - `fn draw(s: *Setup, fb: *Framebuffer, list: *const DrawList, glyphs: iface.Glyphs, background: Color, scale: f32) void`: Draws `list` over `fb`, which holds the last frame: only the rects of `list.damage` (all of `fb` unless the context tracks damage, `Context.trackDamage`), each cleared and drawn.
 

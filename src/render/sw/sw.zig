@@ -237,6 +237,9 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool, comptime w
         scale: f32 = 1,
         /// The list `prepare` was given, for `drawCanvas`.
         list: if (with_canvas) ?*const DrawList else void = if (with_canvas) null else {},
+        /// This frame's canvas bins (`canvas.Bin`), which `Setup.draw` builds; a canvas
+        /// without one walks its whole batch in every band.
+        bins: if (with_canvas) []const canvas.Bin else void = if (with_canvas) &.{} else {},
 
         /// Nothing to upload: the back end reads the caller's rows in place.
         pub fn prepare(s: *Self, _: void, draw: *const DrawList, glyphs: iface.Glyphs, _: [2]f32, scale: f32) void {
@@ -260,6 +263,7 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool, comptime w
         fn drawCanvasOf(s: *const Self, t: Target, list: anytype, k: u32) void {
             if (comptime !(with_canvas and @hasField(@typeInfo(@TypeOf(list)).pointer.child, "canvases"))) return;
             const atlas = if (use.text) s.images[@backingInt(s.glyphs.texture)] else Image.white;
+            for (s.bins) |*b| if (b.list == list and b.k == k) return canvas.drawBinned(t, list, k, s.scale, atlas, b);
             canvas.draw(t, list, k, s.scale, atlas);
         }
 
@@ -421,6 +425,10 @@ pub const Setup = struct {
     /// Threads to draw with, a band of rows each (`bands`), set by a host that has them; null
     /// draws on the caller's thread alone.
     pool: ?*bands.Pool = null,
+    /// One `canvas.Bin` per canvas command to bin, the host's: each is built once per damage
+    /// rect before the bands draw, so a band walks only its own rows. Empty: every band
+    /// walks every row.
+    bins: []canvas.Bin = &.{},
 
     /// Draws `list` over `fb`, which holds the last frame: only the rects of `list.damage` (all
     /// of `fb` unless the context tracks damage, `Context.trackDamage`), each cleared and drawn.
@@ -432,7 +440,16 @@ pub const Setup = struct {
             const job: Band = .{ .gfx = &s.gfx, .fb = fb, .box = .{ r[0], r[1], r[0] + r[2], r[1] + r[3] }, .list = list, .background = background };
             // One band a thread: every band walks the whole list, so more bands cost more than
             // the balance they buy.
-            if (s.pool) |pool| pool.run(pool.count, &job, Band.draw) else job.draw(0, 1);
+            const n = if (s.pool) |pool| pool.count else 1;
+            var m: usize = 0;
+            for (0..list.cmd_len) |i| {
+                if (m == s.bins.len) break;
+                if (list.cmd.kind[i] != @backingInt(DrawList.Kind.canvas)) continue;
+                s.bins[m].build(list, list.cmd.first[i], scale, job.box, n);
+                m += 1;
+            }
+            s.gfx.bins = s.bins[0..m];
+            if (s.pool) |pool| pool.run(n, &job, Band.draw) else job.draw(0, 1);
         }
     }
 
