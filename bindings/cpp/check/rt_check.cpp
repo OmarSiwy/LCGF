@@ -108,9 +108,9 @@ struct Plot {
     std::array<lcgf::canvas::Range, 1> all{};
 
     static std::unique_ptr<std::byte[]> alloc() {
-        return std::unique_ptr<std::byte[]>(new (std::align_val_t(lcgf::column_align)) std::byte[lcgf::Canvas::Bytes(32, 16, 8)]);
+        return std::unique_ptr<std::byte[]>(new (std::align_val_t(lcgf::column_align)) std::byte[lcgf::Canvas::Bytes(32, 16, 8, true)]);
     }
-    Plot() : mem(alloc()), s({mem.get(), lcgf::Canvas::Bytes(32, 16, 8)}, 32, 16, 8) {
+    Plot() : mem(alloc()), s({mem.get(), lcgf::Canvas::Bytes(32, 16, 8, true)}, 32, 16, 8, true) {
         using namespace lcgf::canvas;
         for (std::uint32_t i = 0; i < 8; ++i) {
             const std::int32_t x = std::int32_t(i * 100);
@@ -141,6 +141,7 @@ struct Plot {
     void build(lcgf::Frame& f, std::uint32_t k) {
         using namespace lcgf;
         if (k % 10 == 9) s.Kill((k / 10) % s.size());
+        s.Mark((k * 5) % s.size(), k % 3 == 0 ? 0 : 0xff0000ffu | (k << 8));
         f.Open(Id::From("plot-root"), {.size = {Size::Fill(), Size::Fill()}});
         f.Canvas(Id::From("plot"), {.size = {Size::Fill(), Size::Fill()}}, s, options(k, all, marks));
         f.Canvas(Id::From("overlay"), {.size = {Size::Px(120), Size::Px(80)}, .floating = 1}, s, options(k, sub, {}));

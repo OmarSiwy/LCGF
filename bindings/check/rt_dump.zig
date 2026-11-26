@@ -153,7 +153,7 @@ const Kit = struct {
 /// through lcgf.h's builders. Values are ones every language computes alike (quarters).
 const Plot = struct {
     const canvas = lcgf.canvas;
-    buf: [canvas.Instances.requiredBytes(32, 16, 8, .{})]u8 align(lcgf.mem.column_align) = undefined,
+    buf: [canvas.Instances.requiredBytes(32, 16, 8, .{ .marks = true })]u8 align(lcgf.mem.column_align) = undefined,
     s: canvas.Instances = undefined,
     all: [1]canvas.Range = undefined,
     const layers = [_]canvas.Layer{
@@ -166,7 +166,7 @@ const Plot = struct {
 
     fn init(p: *Plot) void {
         var carver: lcgf.mem.Carver = .{ .buf = &p.buf };
-        p.s = .init(&carver, 32, 16, 8, .{});
+        p.s = .init(&carver, 32, 16, 8, .{ .marks = true });
         const s = &p.s;
         for (0..8) |i| {
             const x: i32 = @intCast(i * 100);
@@ -197,6 +197,8 @@ const Plot = struct {
 
     fn build(p: *Plot, f: *lcgf.frame.Frame, k: u32) void {
         if (k % 10 == 9) p.s.kill((k / 10) % p.s.len);
+        // A mark that moves and changes colour, off every third frame.
+        p.s.mark((k * 5) % p.s.len, if (k % 3 == 0) 0 else 0xff0000ff | (k << 8));
         const pal = &palettes[k % 2];
         _ = f.open(.from("plot-root"), .{ .size = .{ .fill, .fill } });
         _ = f.canvas(.from("plot"), .{ .size = .{ .fill, .fill } }, &p.s, .{ .camera = camera(k), .palette = pal, .ranges = &p.all, .overrides = &marks });

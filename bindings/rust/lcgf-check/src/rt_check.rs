@@ -54,7 +54,8 @@ const PLOT_SUB: [canvas::Range; 1] = [canvas::Range { first: 1, count: 4 }];
 impl Plot {
     fn new() -> Self {
         use canvas::*;
-        let mut s = Canvas::new(leak(Canvas::bytes(32, 16, 8)), 32, 16, 8).expect("canvas");
+        let mut s =
+            Canvas::new(leak(Canvas::bytes(32, 16, 8, true)), 32, 16, 8, true).expect("canvas");
         for i in 0..8u32 {
             let x = (i * 100) as i32;
             let cap = [Cap::Butt, Cap::Square, Cap::Round][(i % 3) as usize];
@@ -160,6 +161,11 @@ impl Plot {
             let n = self.s.len();
             self.s.kill((k / 10) % n);
         }
+        let n = self.s.len();
+        self.s.mark(
+            (k * 5) % n,
+            if k % 3 == 0 { 0 } else { 0xff0000ff | (k << 8) },
+        );
         // The frame borrows the batch and its ranges until its draw list is dropped.
         let me: &'f Self = self;
         f.open(

@@ -311,8 +311,9 @@ typedef struct {
     size_t overrides_len;
 } lcgf_canvas_options;
 
-size_t lcgf_canvas_bytes(uint32_t rows, uint32_t verts, uint32_t dirty);
-lcgf_canvas *lcgf_canvas_init(void *buf, size_t len, uint32_t rows, uint32_t verts, uint32_t dirty);
+/* `marks` nonzero: a mark colour a row (lcgf_canvas_mark). */
+size_t lcgf_canvas_bytes(uint32_t rows, uint32_t verts, uint32_t dirty, int marks);
+lcgf_canvas *lcgf_canvas_init(void *buf, size_t len, uint32_t rows, uint32_t verts, uint32_t dirty, int marks);
 uint32_t lcgf_canvas_segment(lcgf_canvas *c, int32_t ax, int32_t ay, int32_t bx, int32_t by, const lcgf_canvas_line_style *o);
 lcgf_canvas_range lcgf_canvas_polyline(lcgf_canvas *c, const int32_t (*points)[2], size_t n, const lcgf_canvas_line_style *o);
 uint32_t lcgf_canvas_rect(lcgf_canvas *c, int32_t x0, int32_t y0, int32_t x1, int32_t y1, const lcgf_canvas_box_style *o);
@@ -322,6 +323,8 @@ uint32_t lcgf_canvas_polygon(lcgf_canvas *c, const int32_t (*points)[2], size_t 
 uint32_t lcgf_canvas_glyph(lcgf_canvas *c, int32_t ax, int32_t ay, uint32_t w, uint32_t h, const float uv[4], uint8_t layer, uint8_t turns);
 lcgf_canvas_range lcgf_canvas_glyphs(lcgf_canvas *c, const char *str, size_t len, int32_t x, int32_t y, const lcgf_canvas_text_style *o);
 void lcgf_canvas_kill(lcgf_canvas *c, uint32_t row);
+/* Row `row` drawn in `color` (rgba8) over its layer and any override, 0 for none; needs marks. */
+void lcgf_canvas_mark(lcgf_canvas *c, uint32_t row, uint32_t color);
 void lcgf_canvas_reset(lcgf_canvas *c);
 /* After every renderer that draws the batch has prepared its frame. */
 void lcgf_canvas_clear_dirty(lcgf_canvas *c);

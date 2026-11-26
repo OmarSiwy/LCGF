@@ -205,8 +205,16 @@ impl Options<'_> {
 pub(crate) type Raw = *mut u8;
 
 unsafe extern "C" {
-    fn lcgf_canvas_bytes(rows: u32, verts: u32, dirty: u32) -> usize;
-    fn lcgf_canvas_init(buf: *mut u8, len: usize, rows: u32, verts: u32, dirty: u32) -> Raw;
+    fn lcgf_canvas_bytes(rows: u32, verts: u32, dirty: u32, marks: i32) -> usize;
+    fn lcgf_canvas_init(
+        buf: *mut u8,
+        len: usize,
+        rows: u32,
+        verts: u32,
+        dirty: u32,
+        marks: i32,
+    ) -> Raw;
+    fn lcgf_canvas_mark(c: Raw, row: u32, color: u32);
     fn lcgf_canvas_segment(c: Raw, ax: i32, ay: i32, bx: i32, by: i32, o: *const Line) -> u32;
     fn lcgf_canvas_polyline(c: Raw, pts: *const [i32; 2], n: usize, o: *const Line) -> Range;
     fn lcgf_canvas_rect(c: Raw, x0: i32, y0: i32, x1: i32, y1: i32, o: *const Rect) -> u32;
@@ -246,13 +254,22 @@ pub struct Canvas<'a> {
 
 impl<'a> Canvas<'a> {
     /// Bytes a batch of `rows` rows, `verts` polygon vertices and `dirty` dirty ranges needs,
-    /// aligned to `COLUMN_ALIGN`.
-    pub fn bytes(rows: u32, verts: u32, dirty: u32) -> usize {
-        unsafe { lcgf_canvas_bytes(rows, verts, dirty) }
+    /// with a mark a row when `marks`, aligned to `COLUMN_ALIGN`.
+    pub fn bytes(rows: u32, verts: u32, dirty: u32, marks: bool) -> usize {
+        unsafe { lcgf_canvas_bytes(rows, verts, dirty, marks as i32) }
     }
     /// None when `buf` is too small or not aligned to `COLUMN_ALIGN`.
-    pub fn new(buf: &'a mut [u8], rows: u32, verts: u32, dirty: u32) -> Option<Self> {
-        let c = unsafe { lcgf_canvas_init(buf.as_mut_ptr(), buf.len(), rows, verts, dirty) };
+    pub fn new(buf: &'a mut [u8], rows: u32, verts: u32, dirty: u32, marks: bool) -> Option<Self> {
+        let c = unsafe {
+            lcgf_canvas_init(
+                buf.as_mut_ptr(),
+                buf.len(),
+                rows,
+                verts,
+                dirty,
+                marks as i32,
+            )
+        };
         (!c.is_null()).then_some(Self {
             c,
             _buf: PhantomData,
@@ -301,6 +318,10 @@ impl<'a> Canvas<'a> {
     }
     pub fn kill(&mut self, row: u32) {
         unsafe { lcgf_canvas_kill(self.c, row) }
+    }
+    /// Row `row` in `color` (rgba8) over its layer and any override; 0 for none. Needs `marks`.
+    pub fn mark(&mut self, row: u32, color: u32) {
+        unsafe { lcgf_canvas_mark(self.c, row, color) }
     }
     pub fn reset(&mut self) {
         unsafe { lcgf_canvas_reset(self.c) }

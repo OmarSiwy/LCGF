@@ -59,16 +59,17 @@ fn cap(c: u8) canvas.Cap {
     return @fromBackingInt(@as(u2, @intCast(@min(c, 2))));
 }
 
-fn cBytes(rows: u32, verts: u32, dirty: u32) callconv(.c) usize {
-    return head + Instances.requiredBytes(@max(rows, 1), verts, dirty, .{});
+fn cBytes(rows: u32, verts: u32, dirty: u32, marks: c_int) callconv(.c) usize {
+    return head + Instances.requiredBytes(@max(rows, 1), verts, dirty, .{ .marks = marks != 0 });
 }
 
-/// The batch at the start of `buf`, or null when `buf` is unaligned or too small.
-fn cInit(buf: [*]u8, len: usize, rows: u32, verts: u32, dirty: u32) callconv(.c) ?*Instances {
-    if (@intFromPtr(buf) % mem.column_align != 0 or len < cBytes(rows, verts, dirty)) return null;
+/// The batch at the start of `buf`, or null when `buf` is unaligned or too small; `marks`
+/// nonzero carves a mark a row (`lcgf_canvas_mark`).
+fn cInit(buf: [*]u8, len: usize, rows: u32, verts: u32, dirty: u32, marks: c_int) callconv(.c) ?*Instances {
+    if (@intFromPtr(buf) % mem.column_align != 0 or len < cBytes(rows, verts, dirty, marks)) return null;
     var carver: mem.Carver = .{ .buf = @alignCast(buf[head..len]) };
     const s: *Instances = @ptrCast(@alignCast(buf));
-    s.* = Instances.init(&carver, @max(rows, 1), verts, dirty, .{});
+    s.* = Instances.init(&carver, @max(rows, 1), verts, dirty, .{ .marks = marks != 0 });
     return s;
 }
 
@@ -116,6 +117,12 @@ fn cKill(s: *Instances, i: u32) callconv(.c) void {
     if (i < s.len) s.kill(i);
 }
 
+/// Row `i` drawn in `color` over everything else, 0 for none; nothing for a batch without marks
+/// or a row past its length.
+fn cMark(s: *Instances, i: u32, color: u32) callconv(.c) void {
+    if (s.marks.len != 0 and i < s.len) s.mark(i, color);
+}
+
 fn cReset(s: *Instances) callconv(.c) void {
     s.reset();
 }
@@ -146,6 +153,7 @@ pub const exports = .{
     .{ "lcgf_canvas_glyph", &cGlyph },
     .{ "lcgf_canvas_glyphs", &cGlyphs },
     .{ "lcgf_canvas_kill", &cKill },
+    .{ "lcgf_canvas_mark", &cMark },
     .{ "lcgf_canvas_reset", &cReset },
     .{ "lcgf_canvas_clear_dirty", &cClearDirty },
     .{ "lcgf_canvas_len", &cLen },
@@ -153,11 +161,11 @@ pub const exports = .{
 };
 
 test "canvas: the C builders write the rows the Zig builders do" {
-    const bytes = cBytes(8, 8, 2);
+    const bytes = cBytes(8, 8, 2, 1);
     const a = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(mem.column_align), bytes);
     defer std.testing.allocator.free(a);
-    try std.testing.expectEqual(null, cInit(a.ptr, bytes - 1, 8, 8, 2));
-    const s = cInit(a.ptr, a.len, 8, 8, 2).?;
+    try std.testing.expectEqual(null, cInit(a.ptr, bytes - 1, 8, 8, 2, 1));
+    const s = cInit(a.ptr, a.len, 8, 8, 2, 1).?;
     var buf: [Instances.requiredBytes(8, 8, 2, .{})]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
     var z = Instances.init(&carver, 8, 8, 2, .{});
@@ -177,5 +185,7 @@ test "canvas: the C builders write the rows the Zig builders do" {
     const all = [_]canvas.Range{s.since(0)};
     // The triangle, drawn after the segment, is on top there.
     try std.testing.expectEqual(2, cHit(s, &.{ .layers = &layers, .layers_len = 1, .ranges = &all, .ranges_len = 1 }, 5, 2.5, 0));
+    cMark(s, 1, 0xff00ff00);
+    try std.testing.expectEqual(@as(?u32, 0xff00ff00), canvas.inkOf(s, &.{}, 1));
     try std.testing.expectEqual(std.math.maxInt(u32), cHit(s, &.{ .layers = &layers, .layers_len = 1, .ranges = &all, .ranges_len = 1 }, 500, 500, 0));
 }

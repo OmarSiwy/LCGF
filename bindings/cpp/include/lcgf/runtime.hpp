@@ -399,10 +399,13 @@ struct Options {
 
 class Canvas {
 public:
-    static std::size_t Bytes(std::uint32_t rows, std::uint32_t verts = 0, std::uint32_t dirty = 16) { return lcgf_canvas_bytes(rows, verts, dirty); }
-    /// In `buffer` (`Bytes` long, aligned to column_align); `valid()` is false otherwise.
-    Canvas(std::span<std::byte> buffer, std::uint32_t rows, std::uint32_t verts = 0, std::uint32_t dirty = 16)
-        : c_(lcgf_canvas_init(buffer.data(), buffer.size(), rows, verts, dirty)) {}
+    static std::size_t Bytes(std::uint32_t rows, std::uint32_t verts = 0, std::uint32_t dirty = 16, bool marks = false) {
+        return lcgf_canvas_bytes(rows, verts, dirty, marks);
+    }
+    /// In `buffer` (`Bytes` long, aligned to column_align); `valid()` is false otherwise. With
+    /// `marks`, each row can be given a colour of its own (`Mark`).
+    Canvas(std::span<std::byte> buffer, std::uint32_t rows, std::uint32_t verts = 0, std::uint32_t dirty = 16, bool marks = false)
+        : c_(lcgf_canvas_init(buffer.data(), buffer.size(), rows, verts, dirty, marks)) {}
     bool valid() const { return c_ != nullptr; }
     std::uint32_t size() const { return lcgf_canvas_len(c_); }
     std::uint32_t Segment(canvas::Point a, canvas::Point b, const canvas::Line& o = {}) { return lcgf_canvas_segment(c_, a[0], a[1], b[0], b[1], line(o)); }
@@ -421,6 +424,8 @@ public:
         return lcgf_canvas_glyphs(c_, str.data(), str.size(), at[0], at[1], reinterpret_cast<const lcgf_canvas_text_style*>(&o));
     }
     void Kill(std::uint32_t row) { lcgf_canvas_kill(c_, row); }
+    /// Row `row` in `color` (rgba8) over its layer and any override; 0 for none.
+    void Mark(std::uint32_t row, std::uint32_t color) { lcgf_canvas_mark(c_, row, color); }
     void Reset() { lcgf_canvas_reset(c_); }
     /// Once every renderer that draws it has prepared the frame.
     void ClearDirty() { lcgf_canvas_clear_dirty(c_); }
