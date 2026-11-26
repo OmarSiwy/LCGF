@@ -1047,24 +1047,28 @@ pub const Lowerer = struct {
         node.flex.aspect = 0;
     }
 
-    /// The marker of list item `n` by its inherited `list-style-type`, or "" for none:
-    /// disc, circle, square, or decimal (its place among the item siblings, from the list's
-    /// `start`).
+    /// The marker of list item `n` by its inherited `list-style-type`, or "" for none: a
+    /// bullet (disc, circle, square, disclosure-open, disclosure-closed), a string as written,
+    /// or a counter (`counter_styles`) of the item's place among its siblings from the
+    /// list's `start`, formatted at build time by text_counters.
     fn markerOf(l: *Lowerer, n: u32) []const u8 {
         var i = n;
-        const kw = while (i != none) : (i = l.doc.nodes.items(.parent)[i]) {
-            if (l.k.get(i, .@"list-style-type").decl != none) break l.keyword(i, .@"list-style-type") orelse return "";
-        } else return "";
-        const at = l.declared(i, .@"list-style-type").?;
-        for ([_][2][]const u8{ .{ "disc", "\u{2022} " }, .{ "circle", "\u{25E6} " }, .{ "square", "\u{25AA} " } }) |m| if (css.eq(kw, m[0])) return m[1];
-        if (css.eq(kw, "none")) return "";
-        if (!css.eq(kw, "decimal")) {
-            l.ds.err(at.loc, "list-style-type: {s} is not lowered; use disc, circle, square, decimal or none", .{kw});
+        while (i != none and l.k.get(i, .@"list-style-type").decl == none) i = l.doc.nodes.items(.parent)[i];
+        if (i == none) return "";
+        const v = l.declared(i, .@"list-style-type") orelse return "";
+        const r = l.component(v) orelse return "";
+        if (r[1] - r[0] == 1 and l.c.toks.items(.type)[r[0]] == .string) return l.c.toks.items(.str)[r[0]];
+        const kw = l.keyword(i, .@"list-style-type") orelse return "";
+        for ([_][2][]const u8{ .{ "disc", "\u{2022} " }, .{ "circle", "\u{25E6} " }, .{ "square", "\u{25AA} " }, .{ "disclosure-open", "\u{25BE} " }, .{ "disclosure-closed", "\u{25B8} " }, .{ "none", "" } }) |m| if (css.eq(kw, m[0])) return m[1];
+        const style = for (counter_styles) |cs| {
+            if (css.eq(kw, cs[0])) break cs[1];
+        } else {
+            l.ds.err(v.loc, "list-style-type: {s} is not lowered; use a bullet, a string, none, or decimal, decimal-leading-zero, lower- or upper-alpha, -latin, -roman, or lower-greek", .{kw});
             return "";
-        }
+        };
         const p = l.doc.nodes.items(.parent)[n];
         if (l.doc.nodes.items(.in_template)[n] or (p != none and l.doc.isElement(p, "template"))) {
-            l.ds.err(l.loc(n), "a decimal marker inside a template needs the item's index; use disc or none there", .{});
+            l.ds.err(l.loc(n), "a counter marker inside a template needs the item's index; use a bullet or none there", .{});
             return "";
         }
         if (p != none and l.attr(p, "reversed") != null) l.ds.err(l.attrLoc(p, "reversed"), "a reversed list is not lowered; number it in the markup's order", .{});
@@ -1072,7 +1076,12 @@ pub const Lowerer = struct {
         if (p != none) for (p + 1..n) |k| {
             if (l.doc.nodes.items(.parent)[k] == p and l.doc.isElement(@intCast(k), "li")) ordinal += 1;
         };
-        return ok(std.fmt.allocPrint(l.arena, "{d}. ", .{ordinal}));
+        const counters = lcgf.text_counters;
+        const out = ok(l.arena.alloc(u8, counters.required(ordinal, style) catch 64));
+        return counters.format(ordinal, style, out) catch |e| {
+            l.ds.err(l.loc(n), "list marker {d}: {t}", .{ ordinal, e });
+            return "";
+        };
     }
 
     /// A box with a shadow or an outline: a column in its place takes what places and sizes
@@ -3122,6 +3131,19 @@ pub fn colorExpr(arena: std.mem.Allocator, c: types.Color) []const u8 {
     if (c.a == 255) return std.fmt.allocPrint(arena, ".rgb({d}, {d}, {d})", .{ c.r, c.g, c.b }) catch @panic("out of memory");
     return std.fmt.allocPrint(arena, ".rgba({d}, {d}, {d}, {d})", .{ c.r, c.g, c.b, c.a }) catch @panic("out of memory");
 }
+
+/// The counter styles `list-style-type` names, as text_counters formats them.
+const counter_styles = blk: {
+    const c = lcgf.text_counters;
+    const greek = [_][]const u8{ "\u{3B1}", "\u{3B2}", "\u{3B3}", "\u{3B4}", "\u{3B5}", "\u{3B6}", "\u{3B7}", "\u{3B8}", "\u{3B9}", "\u{3BA}", "\u{3BB}", "\u{3BC}", "\u{3BD}", "\u{3BE}", "\u{3BF}", "\u{3C0}", "\u{3C1}", "\u{3C3}", "\u{3C4}", "\u{3C5}", "\u{3C6}", "\u{3C7}", "\u{3C8}", "\u{3C9}" };
+    break :blk [_]struct { []const u8, c.Style }{
+        .{ "decimal", c.decimal },                                    .{ "decimal-leading-zero", c.decimal_leading_zero },
+        .{ "lower-alpha", c.lower_alpha },                            .{ "lower-latin", c.lower_alpha },
+        .{ "upper-alpha", c.upper_alpha },                            .{ "upper-latin", c.upper_alpha },
+        .{ "lower-roman", c.lower_roman },                            .{ "upper-roman", c.upper_roman },
+        .{ "lower-greek", .{ .system = .{ .alphabetic = &greek } } },
+    };
+};
 
 /// The state pseudo-classes of plan §2.3, resolved at run time (style.States).
 const states = [_][]const u8{ "hover", "active", "focus", "focus-visible", "focus-within", "checked", "indeterminate", "disabled", "enabled", "read-only", "read-write", "required", "optional", "invalid", "valid", "open", "placeholder-shown" };
