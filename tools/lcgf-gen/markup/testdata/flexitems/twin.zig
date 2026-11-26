@@ -1,5 +1,4 @@
-//! flexitems, written by hand: CSS margins as flex item margins. Waits for engine spec F2
-//! (`spec.flexed`, docs/plans/markup-engine-api.md); in the `markup-pending` step until then.
+//! flexitems, written by hand: CSS margins as flex item margins (`spec.flexed`).
 
 const lcgf = @import("lcgf");
 const s = lcgf.spec;

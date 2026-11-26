@@ -66,6 +66,7 @@ const Input = @import("../core/input.zig").Input;
 const DrawList = @import("../draw/draw_list.zig").DrawList;
 const paint = @import("../draw/paint.zig");
 const layout = @import("../layout/layout.zig");
+const Flex = @import("../layout/flex.zig").Flex;
 const Mono = @import("../text/protocol.zig").Mono;
 const Frame = @import("../runtime/frame.zig").Frame;
 const context = @import("../runtime/context.zig");
@@ -357,6 +358,8 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
     const customs = comptime customCapacity(spec);
     const Regions = @import("../comptime/dynamic.zig").Regions(spec);
     const dynamic = Regions.count != 0;
+    // Flex columns and passes only for a page with a `spec.flexed` node.
+    const has_flex = comptime anyFlex(spec);
     return struct {
         const Self = @This();
         pub const Events = E;
@@ -414,6 +417,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             cu: Customs,
             strings: Strings,
             d: DrawList,
+            fx: if (has_flex) Flex else void,
 
             fn carve(carver: *mem.Carver) Tables {
                 return .{
@@ -422,6 +426,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                     .cu = Customs.init(carver, customs),
                     .strings = .{ .buf = carver.slice(u8, string_bytes) },
                     .d = DrawList.init(carver, rows, runs, customs),
+                    .fx = if (has_flex) .{ .c = carver.columns(Flex.Columns, simd.rows(rows)) } else {},
                 };
             }
         };
@@ -552,6 +557,13 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             tb.tx.reset();
             tb.cu.reset();
             tb.strings.reset();
+            if (has_flex) {
+                // Rows move between frames on a dynamic page: every row back to the defaults.
+                for (0..tb.fx.c.aspect.len) |r| tb.fx.set(@intCast(r), &.{});
+                // ponytail: Mono reports no ascent, so text baselines sit at the run's bottom
+                // edge; call baseline.apply here when the font gives one.
+                @memset(tb.fx.c.text_has, 0);
+            }
             // The runtime front end's root (`Context.begin`).
             _ = tb.t.push(0, context.root_id, &.{ .size = .{ .px(in.viewport[0]), .px(in.viewport[1]) }, .clip = true, .role = .group });
             if (dynamic) {
@@ -587,14 +599,28 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             ui.font.measure(tx);
             layout.prepare(t);
             layout.applyText(t, tx, .x);
-            layout.fit(t, .x);
-            layout.resolve(t, .x, in.viewport[0]);
-            layout.textAvail(t, tx);
-            ui.font.wrap(tx);
-            layout.applyText(t, tx, .y);
-            layout.fit(t, .y);
-            layout.resolve(t, .y, in.viewport[1]);
-            layout.place(t);
+            if (has_flex) {
+                // `layout.runFlex`'s sequence.
+                const fx = &tb.fx;
+                layout.fitFlex(t, fx, .x);
+                layout.resolveFlex(t, fx, .x, in.viewport[0]);
+                @import("../layout/wrap.zig").wrap(t, fx);
+                layout.textAvail(t, tx);
+                ui.font.wrap(tx);
+                layout.applyText(t, tx, .y);
+                layout.fitFlex(t, fx, .y);
+                layout.resolveFlex(t, fx, .y, in.viewport[1]);
+                layout.placeFlex(t, fx);
+            } else {
+                layout.fit(t, .x);
+                layout.resolve(t, .x, in.viewport[0]);
+                layout.textAvail(t, tx);
+                ui.font.wrap(tx);
+                layout.applyText(t, tx, .y);
+                layout.fit(t, .y);
+                layout.resolve(t, .y, in.viewport[1]);
+                layout.place(t);
+            }
             if (presentation.directions) |directions| @import("../layout/rtl.zig").mirror(t, directions);
             try layout.finalizeWith(t, presentation.rounding);
             paint.emit(t, tx, &tb.cu, tb.strings.buf[0..tb.strings.len], &tb.d);
@@ -640,6 +666,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 next.* += comptime flatten.count(n);
                 return;
             }
+            // The node's row is the next one pushed, whoever pushes it.
+            const at = ui.tables.t.len;
+            defer if (comptime n.flex) |fs| ui.tables.fx.set(at, &fs);
             if (comptime n.widget) |W_| return W_.push(ui, n, parent, next, in);
             if (comptime n.custom) |data| {
                 const id = Id.hash(n.id orelse @compileError("a custom draw needs an id"));
@@ -791,6 +820,12 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
     };
 }
 
+fn anyFlex(comptime n: Spec) bool {
+    if (n.flex != null) return true;
+    for (n.children) |c| if (anyFlex(c)) return true;
+    return false;
+}
+
 /// Depth-first rows of the nodes in `n`'s subtree that are custom widgets (`Spec.widget`).
 fn customRows(comptime n: Spec) []const u32 {
     comptime {
@@ -861,7 +896,9 @@ pub fn sameDraw(a: *const DrawList, b: *const DrawList) bool {
 }
 
 /// Runs one UI through both front ends, frame by frame, and checks they agree. `App` is the
-/// runtime side: plain data with defaults and `pub fn build(*App, *Frame) void`. `Ui` is the
+/// runtime side: plain data with defaults and `pub fn build(*App, *Frame) void`, and optionally
+/// `pub fn end(*App, *Frame, Mono) context.Output` to end the frame itself (`Frame.endFlex`
+/// over flex columns the App owns); otherwise the harness calls `Frame.end`. `Ui` is the
 /// comptime side, a `ComptimeUi`. The harness owns both and the runtime context's buffer, so
 /// it must not move after `init`; declare it as a `var` at container level (it is too big for
 /// a test's stack) and drive it from replayed input:
@@ -895,7 +932,7 @@ pub fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Lim
         pub fn frame(h: *Self, in: *const Input) error{FrontEndsDiffer}!Pair {
             var f = h.ctx.begin(in);
             h.app.build(&f);
-            const rt = f.end(h.ui.font);
+            const rt = if (@hasDecl(App, "end")) h.app.end(&f, h.ui.font) else f.end(h.ui.font);
             const cp = h.ui.frame(in);
             h.frames += 1;
             const a = rt.tree;
@@ -1478,6 +1515,56 @@ test "dynamic widget pages compact inactive when, list and choice subtrees" {
     try std.testing.expectEqualStrings("itemitemALast", out.draw.strings);
     const last = out.tree.rect(out.tree.find(.from("last")));
     try std.testing.expectEqual(Ui.Events.Widget.last, Ui.Events.at(&h.ui.rects, last.x0 + 1, last.y0 + 1).?);
+}
+
+test "flexed: margins, wrap and align-self lay out the same in both front ends" {
+    const th: Theme = .default;
+    const box: Style = comptime .{ .size = .{ .px(70), .px(20) }, .fill = .rgb(200, 0, 0) };
+    const spec = comptime spec_zig.col(.{}, .{
+        spec_zig.flexed(spec_zig.row(.{ .gap = 4, .size = .{ .px(160), .fit } }, .{
+            spec_zig.flexed(spec_zig.styled(spec_zig.row(.{}, .{}), box), .{ .margin = .{ 6, 2, 6, 2 } }),
+            spec_zig.styled(spec_zig.row(.{}, .{}), box),
+            spec_zig.flexed(spec_zig.styled(spec_zig.row(.{}, .{}), box), .{ .cross = .end }),
+        }), .{ .wrap = true }),
+        spec_zig.flexed(spec_zig.label("A"), .{ .margin = .{ 10, 3, 0, 0 } }),
+    });
+    const Ui = ComptimeUi(struct {}, spec, th);
+    const App = struct {
+        buf: [32 * 1024]u8 align(mem.column_align) = undefined,
+        fx: ?Flex = null,
+        pub fn build(app: *@This(), f: *Frame) void {
+            if (app.fx == null) {
+                var c: mem.Carver = .{ .buf = &app.buf };
+                app.fx = Flex.init(&c, 16);
+            }
+            const fx = &app.fx.?;
+            var b = box;
+            b.dir = .x;
+            _ = f.open(.none, .{});
+            const r = f.open(.none, .{ .dir = .x, .gap = 4, .size = .{ .px(160), .fit } });
+            fx.set(@backingInt(r), &.{ .wrap = true });
+            fx.set(@backingInt(f.leaf(.none, b)), &.{ .margin = .{ 6, 2, 6, 2 } });
+            _ = f.leaf(.none, b);
+            fx.set(@backingInt(f.leaf(.none, b)), &.{ .cross = .end });
+            f.close();
+            fx.set(@backingInt(f.textStyled("A", labelText(&th), .{})), &.{ .margin = .{ 10, 3, 0, 0 } });
+            f.close();
+        }
+        pub fn end(app: *@This(), f: *Frame, font: Mono) context.Output {
+            return f.endFlex(font, &app.fx.?);
+        }
+    };
+    var h: Harness(App, Ui, .{ .nodes = 16, .texts = 4, .strings = 64, .depth = 8 }) = undefined;
+    h.init();
+    const in: Input = .{ .viewport = .{ 320, 180 } };
+    for (0..2) |_| {
+        const out = (try h.frame(&in)).comptime_.tree;
+        // Root, col, row, then the three boxes: the first past its margins, the third wrapped.
+        try std.testing.expectEqual(types.Rect{ .x0 = 6, .y0 = 2, .x1 = 76, .y1 = 22 }, out.rect(3));
+        try std.testing.expectEqual(@as(f32, 86), out.rect(4).x0);
+        try std.testing.expect(out.rect(5).y0 >= 24);
+        try std.testing.expectEqual(@as(f32, 10), out.rect(6).x0);
+    }
 }
 
 test "a widget page virtual list keeps the clipped fractional row" {

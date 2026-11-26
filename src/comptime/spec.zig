@@ -11,6 +11,7 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
 const fmt = @import("../core/fmt.zig");
+const FlexStyle = @import("../layout/flex.zig").Flex.Style;
 const Style = types.Style;
 
 /// What a spec node is. One byte, as the flattened `kind` table stores it.
@@ -30,6 +31,9 @@ pub const Spec = struct {
     text_style: ?types.TextStyle = null,
     /// Layout, paint and semantics, as the runtime front end takes them (`Tree.push`).
     style: Style = .{},
+    /// Flex item and container rules beyond `style` (margins, wrap, align-self, aspect,
+    /// baselines; layout/flex.zig), set with `flexed`. A page with none carves no flex columns.
+    flex: ?FlexStyle = null,
     children: []const Spec = &.{},
     /// A widget that builds this node itself, for widgets the kinds above do not cover: a
     /// namespace with `push` (and optionally `step`), which the widgets' comptime front end
@@ -238,6 +242,14 @@ pub fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec {
     return out;
 }
 
+/// `s` laid out with the flex rules `flex` as well as its style: `flexed(label(.a), .{ .margin
+/// = .{ 6, 2, 6, 2 } })`. Margins are left, top, right, bottom.
+pub fn flexed(comptime s: Spec, comptime flex: FlexStyle) Spec {
+    var out = s;
+    out.flex = flex;
+    return out;
+}
+
 /// `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 pub fn named(comptime s: Spec, comptime name: []const u8) Spec {
     var out = s;
@@ -434,6 +446,15 @@ test "textStyled: sets the label's text style and nothing else" {
         const big = textStyled(plain, .{ .px = 28 });
         std.debug.assert(big.text_style.?.px == 28 and plain.text_style == null);
         std.debug.assert(big.style.role == .heading and std.mem.eql(u8, big.text.?, "Mixer"));
+    }
+}
+
+test "flexed: sets the flex rules and nothing else" {
+    comptime {
+        const plain = label("A");
+        const m = flexed(plain, .{ .margin = .{ 6, 2, 6, 2 }, .wrap = true });
+        std.debug.assert(plain.flex == null and m.flex.?.margin[0] == 6 and m.flex.?.wrap);
+        std.debug.assert(std.mem.eql(u8, m.text.?, "A") and std.meta.eql(m.style, plain.style));
     }
 }
 

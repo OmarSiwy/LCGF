@@ -1028,6 +1028,7 @@ Spec: a UI declared as a compile-time value.
 - `fn slider(comptime id: @EnumLiteral(), comptime bind_or_options: anytype) Spec`: A slider named `id`, showing and setting an f32 field, 0 to 1: `slider(.volume, .volume)`, or with options as `checkbox`'s, `slider(.volume, .{ .name = "Volume" })`.
 - `fn styled(comptime s: Spec, comptime style: Style) Spec`: `s` laid out by `style`: `styled(slider(.volume, .{ .name = "Volume" }), .{ .size = .{ .px(80), .px(10) } })`.
 - `fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec`: Label `s` drawn in `text_style` instead of the page theme's: `textStyled(heading(1, "Mixer"), .{ .px = 28, .color = .rgb(230, 230, 235) })`.
+- `fn flexed(comptime s: Spec, comptime flex: FlexStyle) Spec`: `s` laid out with the flex rules `flex` as well as its style: `flexed(label(.a), .{ .margin = .{ 6, 2, 6, 2 } })`.
 - `fn named(comptime s: Spec, comptime name: []const u8) Spec`: `s` with the accessible name `name`: `named(slider(.volume, .volume), "Volume")`.
 - `fn list(comptime count: @EnumLiteral(), comptime max: comptime_int, comptime style: Style, comptime template: Spec) Spec`: A container (laid out by `style`, `dir` included) of `max` copies of `template`, of which the first `count` are live, `count` being the run-time value of the integer state field bound here: `list(.len, 8, .{ .gap = 2 }, row(...))`.
 - `fn virtualList(comptime count: @EnumLiteral(), comptime scroll: @EnumLiteral(), comptime visible: u32, comptime height: f32, comptime template: Spec) Spec`: A clipped vertical list of `visible` fixed-height items.
@@ -1037,7 +1038,7 @@ Spec: a UI declared as a compile-time value.
 ### `Spec` (struct)
 One node of the declaration.
 
-Fields: `kind`, `id`, `bind`, `text`, `text_style`, `style`, `children`, `widget`, `custom`, `name`, `region`, `format`
+Fields: `kind`, `id`, `bind`, `text`, `text_style`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`
 
 - `fn shows(s: Spec, field: []const u8) bool`: The state fields this node shows: its `bind`, or a formatted label's arguments.
 
@@ -3288,6 +3289,8 @@ Fields: `ctx`, `in`
 - `fn tween(f: *Frame, id: Id, target: anytype, seconds: f32, ease: Ease) values.Of(@TypeOf(target))`: A value that moves to `target` over `seconds` along `ease`, keyed by `id`: when the target changes, a new leg starts from the current value.
 - `fn end(f: *Frame, font: Mono) Output`: Diagonal: measure with `font`, lay out, paint.
 - `fn layoutWith(f: *Frame, font: Mono) void`: Measure and arrange without painting: insert prepared textures or explicit passes, then call finish.
+- `fn endFlex(f: *Frame, font: Mono, fx: *Flex) Output`: `end` with the flex rules (margins, wrap, align-self, aspect, baselines) the caller wrote into `fx` this frame, one row per node: `fx.set(@backingInt(node), &.{ .margin = ...
+- `fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void`: The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree.
 - `fn endRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!Output`: A frame on a caller-selected device grid; no second arrangement or finalization pass.
 - `fn layoutRounded(f: *Frame, font: Mono, options: rounding.Options) error{InvalidScale}!void`
 - `fn arrangeWith(f: *Frame, font: Mono) void`: Measure and place, leaving original fractional positions available for explicit RTL, grid, sticky or custom placement passes.

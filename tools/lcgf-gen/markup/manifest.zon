@@ -138,7 +138,7 @@
         .{ .kind = "value", .name = "end", .applies_to = "align-self", .status = .planned, .diagnostic = "align-self other than stretch is not lowered yet (engine spec F2)", .spec = "F2" },
         .{ .kind = "property", .name = "flex-grow", .status = .mapped, .target = "Style.size[main] = .grow(N)", .fixture = "landmarks" },
         .{ .kind = "property", .name = "flex-shrink", .status = .mapped, .target = "Style.shrink", .fixture = "landmarks" },
-        .{ .kind = "property", .name = "margin", .status = .pending, .target = "spec.flexed(s, .{ .margin }) (Flex.Style.margin flex.zig:119)", .spec = "F2", .fixture = "flexitems" },
+        .{ .kind = "property", .name = "margin", .status = .mapped, .target = "spec.flexed(s, .{ .margin }) (Flex.Style.margin flex.zig:119)", .fixture = "flexitems" },
         .{ .kind = "property", .name = "order", .status = .rejected, .diagnostic = "order changes visual but not focus order; reorder the markup" },
         .{ .kind = "property", .name = "flex-wrap", .status = .planned, .diagnostic = "flex-wrap is not lowered yet (engine spec F2)", .spec = "F2" },
         .{ .kind = "property", .name = "align-content", .status = .planned, .diagnostic = "align-content is not lowered yet (engine spec F2)", .spec = "F2" },
@@ -229,6 +229,6 @@
         .{ .name = "runtime" },
         .{ .name = "tokens", .runtime_vars = "t-" },
         .{ .name = "form", .waits_for = .{"T1"} },
-        .{ .name = "flexitems", .waits_for = .{"F2"} },
+        .{ .name = "flexitems" },
     },
 }

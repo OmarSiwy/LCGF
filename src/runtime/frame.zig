@@ -30,6 +30,7 @@ const Transition = @import("../anim/tweens.zig").Transition;
 const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
 const layout = @import("../layout/layout.zig");
+const Flex = @import("../layout/flex.zig").Flex;
 const rounding = @import("../layout/rounding.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
@@ -368,6 +369,44 @@ pub const Frame = struct {
     pub fn layoutWith(f: *Frame, font: Mono) void {
         f.arrangeWith(font);
         f.finalizeLayout(.{}) catch unreachable;
+    }
+
+    /// `end` with the flex rules (margins, wrap, align-self, aspect, baselines) the caller wrote
+    /// into `fx` this frame, one row per node: `fx.set(@backingInt(node), &.{ .margin = ... })`.
+    /// `fx` is caller-owned (`Flex.init` once, for `Limits.nodes`); every row it laid out goes
+    /// back to the defaults afterwards, so each frame states its own rules. A frame without
+    /// flex rules calls `end` and carves nothing.
+    pub fn endFlex(f: *Frame, font: Mono, fx: *Flex) Output {
+        f.layoutFlex(font, fx);
+        return f.finish();
+    }
+
+    /// The layout half of `endFlex`: `layout.runFlex`'s passes over the whole tree. Subtrees
+    /// `reuse` copied are laid out again, and their flex rows are the defaults unless the
+    /// caller writes them.
+    pub fn layoutFlex(f: *Frame, font: Mono, fx: *Flex) void {
+        const t = f.tree();
+        const tx = f.texts();
+        t.seal(0);
+        std.debug.assert(fx.c.aspect.len >= simd.rows(t.cap));
+        // Nothing kept: the finalize below takes the complete pass too.
+        f.ctx.memos.kept_len = 0;
+        font.measure(tx);
+        // ponytail: Mono reports no ascent, so text baselines sit at the run's bottom edge.
+        @memset(fx.c.text_has, 0);
+        layout.prepare(t);
+        layout.applyText(t, tx, .x);
+        layout.fitFlex(t, fx, .x);
+        layout.resolveFlex(t, fx, .x, f.in.viewport[0]);
+        @import("../layout/wrap.zig").wrap(t, fx);
+        layout.textAvail(t, tx);
+        font.wrap(tx);
+        layout.applyText(t, tx, .y);
+        layout.fitFlex(t, fx, .y);
+        layout.resolveFlex(t, fx, .y, f.in.viewport[1]);
+        layout.placeFlex(t, fx);
+        f.finalizeLayout(.{}) catch unreachable;
+        for (0..t.len) |i| fx.set(@intCast(i), &.{});
     }
 
     /// A frame on a caller-selected device grid; no second arrangement or finalization pass.
