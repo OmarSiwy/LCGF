@@ -339,7 +339,16 @@ pub const ct = struct {
 /// through `Events`, look and behaviour through the functions above. The caller owns the value
 /// and calls `frame` once per frame, as with `Context`. Labels are measured with `Mono`.
 pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme) type {
+    return ComptimeUiTokens(State, spec, th, void);
+}
+
+/// `ComptimeUi` whose rows also read run-time theme tokens (`spec.tokened`) from a
+/// caller-owned `theme_table.ThemeTable(Tokens)` (`ui.tokens`) when they are pushed, so a
+/// changed table lays the page out again on the next frame (`themeChanged`). With `Tokens`
+/// void it is `ComptimeUi`, with no field and no code for tokens.
+pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: Theme, comptime Tokens: type) type {
     const flatten = @import("../comptime/flatten.zig");
+    const Table = if (Tokens == void) void else @import("../theme/table.zig").ThemeTable(Tokens);
     comptime checkBindings(State, spec);
     const E = events.Events(spec);
     const S = signals.Signals(State, spec);
@@ -368,8 +377,28 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
         pub const Springs = @import("../anim/anims.zig").BoundSprings(State);
         /// The theme the page was built with, for widgets that build their own rows.
         pub const theme = th;
+        /// The table `tokens` points at until the caller sets it: the defaults.
+        pub const default_tokens: Table = if (Tokens == void) {} else .{};
+
+        /// Node `n`'s style and text style with its token fields read from the table.
+        fn tokenStyles(ui: *const Self, comptime n: Spec) struct { style: Style, text: TextStyle } {
+            var out: @typeInfo(@TypeOf(tokenStyles)).@"fn".return_type.? = .{ .style = n.style, .text = n.text_style orelse labelText(&th) };
+            spec_zig.applyTokens(n.tokens, &out.style, &out.text, &ui.tokens.values);
+            return out;
+        }
+
+        /// Whether the token table changed since the last frame, which lays the page out with
+        /// the new values.
+        pub fn themeChanged(ui: *const Self) bool {
+            if (Tokens == void) return false;
+            return ui.tokens.changedSince(ui.seen);
+        }
 
         buf: [bytes]u8 align(mem.column_align) = undefined,
+        /// The caller's theme tokens; point it at your table.
+        tokens: if (Tokens == void) void else *const Table = if (Tokens == void) {} else &default_tokens,
+        /// The table's generation the last frame read.
+        seen: if (Tokens == void) void else u32 = if (Tokens == void) {} else 0,
         tables: Tables = undefined,
         signals: S.Runtime = .{},
         springs: Springs = .{},
@@ -586,6 +615,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 }
             }
             var next: u32 = 0;
+            if (comptime Tokens != void) ui.seen = ui.tokens.generation;
             ui.push(spec, 0, &next, in);
             tb.t.seal(0);
 
@@ -684,7 +714,9 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
             next.* += 1;
             switch (n.kind) {
                 .label => {
-                    const i = tb.t.push(parent, .none, &n.style);
+                    const tokened = comptime Tokens != void and n.tokens.len > 0;
+                    const tok = if (comptime tokened) ui.tokenStyles(n) else {};
+                    const i = tb.t.push(parent, .none, if (comptime tokened) &tok.style else &n.style);
                     const span = if (comptime n.format) |f| blk: {
                         const segs = comptime fmt.compile(State, f.text, f.args);
                         var sink: fmt.Sink = .{ .buf = tb.strings.buf[tb.strings.len..] };
@@ -694,7 +726,7 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                         tb.strings.overflow = simd.orB(tb.strings.overflow, sink.cut);
                         break :blk sp;
                     } else tb.strings.add(spec_zig.labelBytes(n, state));
-                    tb.t.c.text[i] = tb.tx.push(i, span, &(n.text_style orelse labelText(&th)));
+                    tb.t.c.text[i] = tb.tx.push(i, span, if (comptime tokened) &tok.text else &(n.text_style orelse labelText(&th)));
                 },
                 .checkbox => {
                     const value: bool = @field(state, n.bind.?);
@@ -717,6 +749,10 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
                 },
                 .row, .col => {
                     var s = n.style;
+                    if (comptime Tokens != void and n.tokens.len > 0) {
+                        var unused: TextStyle = .{};
+                        spec_zig.applyTokens(n.tokens, &s, &unused, &ui.tokens.values);
+                    }
                     if (comptime n.region != null and n.region.?.window != null) {
                         for (Regions.regions, ui.window_selection) |region, sel| {
                             if (region.row == next.* - 1) s.scroll[1] = sel.offset;
@@ -1471,6 +1507,37 @@ test "multiple host draw markers keep their ids, clip and paint order" {
         try std.testing.expectEqual(@as(f32, 40), item.clip[2]);
         try std.testing.expectEqual(@as(f32, @floatFromInt(k * 20)), item.rect[1]);
     }
+}
+
+test "ComptimeUiTokens: rows read the token table when pushed; a change lays out again" {
+    const Tokens = struct { space: f32 = 4, size: f32 = 14, ink: Color = .rgb(1, 2, 3) };
+    const page = comptime spec_zig.col(.{}, .{
+        spec_zig.tokened(spec_zig.col(.{ .pad = @splat(4) }, .{
+            spec_zig.tokened(spec_zig.label("A"), &.{ .{ .target = .text_px, .token = "size" }, .{ .target = .text_color, .token = "ink" } }),
+        }), &.{ .{ .target = .pad_top, .token = "space" }, .{ .target = .pad_left, .token = "space" } }),
+    });
+    const UiT = ComptimeUiTokens(struct {}, page, theme, Tokens);
+    const S = struct {
+        var ui: UiT = .{};
+        var table: @import("../theme/table.zig").ThemeTable(Tokens) = .{};
+    };
+    S.ui.tokens = &S.table;
+    const in: Input = .{};
+    var t = S.ui.frame(&in).tree;
+    // root, page col, tokened col, label
+    try testing.expectEqual(4, t.rect(3).x0 - t.rect(2).x0);
+    const h0 = t.rect(3).y1 - t.rect(3).y0;
+    try testing.expect(!S.ui.themeChanged());
+    S.table.set(.space, 10);
+    S.table.set(.size, 28);
+    try testing.expect(S.ui.themeChanged());
+    t = S.ui.frame(&in).tree;
+    try testing.expect(!S.ui.themeChanged());
+    try testing.expectEqual(10, t.rect(3).x0 - t.rect(2).x0);
+    try testing.expectEqual(10, t.rect(3).y0 - t.rect(2).y0);
+    try testing.expect(t.rect(3).y1 - t.rect(3).y0 > h0);
+    // A page without tokens has no token field.
+    try testing.expectEqual(void, @FieldType(ComptimeUi(struct {}, page, theme), "tokens"));
 }
 
 test "dynamic widget pages compact inactive when, list and choice subtrees" {

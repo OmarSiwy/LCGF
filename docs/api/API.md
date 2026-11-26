@@ -1013,8 +1013,12 @@ Spec: a UI declared as a compile-time value.
 ### Top level
 
 - `Kind = enum(u8) { col, row, label, checkbox, slider }`: What a spec node is.
+- `TokenTarget = enum(u8) { pad_left, pad_top, pad_right, pad_bottom, gap, width, height, min_width, min_height, max_width, max_height, border, radius, fill, bo…`: A style field that a run-time theme token sets (docs/plans/schemify.md §2): a length of the layout or paint style, a colour, or the text style's size or colour.
+- `TokenUse = struct { target: TokenTarget, token: []const u8 }`: Field `target` takes the token named `token`: a field of the page's `Tokens` struct, read from the caller's `theme_table.ThemeTable(Tokens)`.
 - `Format = struct { text: []const u8, args: []const []const u8 }`: A formatted label's text (src/core/fmt.zig's language) and its arguments, state fields.
 - `Landmark = enum { group, article, region, banner, navigation, main, complementary, content_info, form, search }`: Document containers whose role is independent of their layout direction.
+- `fn tokened(comptime s: Spec, comptime uses: []const TokenUse) Spec`: `s` with some style fields read from run-time tokens when its row is pushed: `tokened(col(.{}, .{...}), &.{ .{ .target = .pad_top, .token = "space" } })`.
+- `fn applyTokens(comptime uses: []const TokenUse, style: *Style, text_style: *types.TextStyle, values: anytype) void`: Writes the token values `values` (a `Tokens`) into the fields `uses` names.
 - `fn col(comptime style: Style, comptime children: anytype) Spec`: A vertical container.
 - `fn row(comptime style: Style, comptime children: anytype) Spec`: A horizontal container; as `col`, with `dir` always `.x`.
 - `fn label(comptime caption: anytype) Spec`: A literal caption (`label("Save")`) or a bound string field (`label(.title)`).
@@ -1038,7 +1042,7 @@ Spec: a UI declared as a compile-time value.
 ### `Spec` (struct)
 One node of the declaration.
 
-Fields: `kind`, `id`, `bind`, `text`, `text_style`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`
+Fields: `kind`, `id`, `bind`, `text`, `text_style`, `style`, `flex`, `children`, `widget`, `custom`, `name`, `region`, `format`, `tokens`
 
 - `fn shows(s: Spec, field: []const u8) bool`: The state fields this node shows: its `bind`, or a formatted label's arguments.
 
@@ -3550,6 +3554,7 @@ Widgets (tier 2): the base every widget is built on, and the four reference widg
 - `fn checkbox(f: *Frame, th: *const Theme, id: Id, value: *bool, str: []const u8) Response`
 - `fn slider(f: *Frame, th: *const Theme, id: Id, value: *f32, lo: f32, hi: f32) Response`
 - `fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme) type`: The comptime front end running the reference widgets of `spec`: state in `Signals`, input through `Events`, look and behaviour through the functions above.
+- `fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: Theme, comptime Tokens: type) type`: `ComptimeUi` whose rows also read run-time theme tokens (`spec.tokened`) from a caller-owned `theme_table.ThemeTable(Tokens)` (`ui.tokens`) when they are pushed, so a changed table lays the page out again on the next frame (`themeChanged`).
 - `fn sameDraw(a: *const DrawList, b: *const DrawList) bool`: Whether two draw lists are the same: quad bytes, text runs and commands, in order.
 - `fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Limits) type`: Runs one UI through both front ends, frame by frame, and checks they agree.
 - `fn Semantic(comptime cap: u32) type`: What assistive technology sees of both front ends' current frame in a `Harness`: each tree run through `names`, `states` and `flatten` (a11y/tree.zig), as a bridge would.
@@ -3582,13 +3587,19 @@ The reference widgets as spec nodes.
 ### `ComptimeUi(..)` (generic struct)
 The comptime front end running the reference widgets of `spec`: state in `Signals`, input through `Events`, look and behaviour through the functions above.
 
-Fields: `buf`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `focus_visible`, `frame_settings`, `failure`, `input_mask`, `previous_input_mask`, `build_hit`, `building`, `platform_cursor`, `cursor_set`, `kept`, `built`, `tree_rows`, `window_selection`, `font`
+
+### `ComptimeUiTokens(..)` (generic struct)
+`ComptimeUi` whose rows also read run-time theme tokens (`spec.tokened`) from a caller-owned `theme_table.ThemeTable(Tokens)` (`ui.tokens`) when they are pushed, so a changed table lays the page out again on the next frame (`themeChanged`).
+
+Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rects`, `focus`, `focus_visible`, `frame_settings`, `failure`, `input_mask`, `previous_input_mask`, `build_hit`, `building`, `platform_cursor`, `cursor_set`, `kept`, `built`, `tree_rows`, `window_selection`, `font`
 
 - `Events = E`
 - `Signals = S`
 - `Springs = @import("../anim/anims.zig").BoundSprings(State)`
 - `theme = th`: The theme the page was built with, for widgets that build their own rows.
+- `default_tokens: Table = if (Tokens == void) {} else .{}`: The table `tokens` points at until the caller sets it: the defaults.
 - `Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf, failure: ?anyerror = null, cursor: types.Cursor = .arrow }`
+- `fn themeChanged(ui: *const Self) bool`: Whether the token table changed since the last frame, which lays the page out with the new values.
 - `fn needsAnimationFrame(ui: *const Self) bool`: True while a declared spring moves or its target has changed since the last frame.
 - `fn animated(ui: *const Self, comptime target: S.Field) f32`: The displayed value of a bool/f32 field, interpolated if State declares a spring for it.
 - `fn frame(ui: *Self, in: *const Input) Output`: Steps input against last frame's rects, applies each widget's behaviour to the state, then builds, lays out and paints the frame.

@@ -50,6 +50,9 @@ pub const Spec = struct {
     region: ?Region = null,
     /// A formatted label's format and the fields it shows (`text`); `bind` is null then.
     format: ?Format = null,
+    /// Style fields read from the page's run-time theme tokens when the row is pushed
+    /// (`tokened`); empty for a constant node.
+    tokens: []const TokenUse = &.{},
 
     /// The state fields this node shows: its `bind`, or a formatted label's arguments.
     pub fn shows(s: Spec, field: []const u8) bool {
@@ -58,6 +61,49 @@ pub const Spec = struct {
         return false;
     }
 };
+
+/// A style field that a run-time theme token sets (docs/plans/schemify.md §2): a length of
+/// the layout or paint style, a colour, or the text style's size or colour.
+pub const TokenTarget = enum(u8) { pad_left, pad_top, pad_right, pad_bottom, gap, width, height, min_width, min_height, max_width, max_height, border, radius, fill, border_color, text_px, text_color };
+
+/// Field `target` takes the token named `token`: a field of the page's `Tokens` struct, read
+/// from the caller's `theme_table.ThemeTable(Tokens)`.
+pub const TokenUse = struct { target: TokenTarget, token: []const u8 };
+
+/// `s` with some style fields read from run-time tokens when its row is pushed:
+/// `tokened(col(.{}, .{...}), &.{ .{ .target = .pad_top, .token = "space" } })`.
+pub fn tokened(comptime s: Spec, comptime uses: []const TokenUse) Spec {
+    if (s.widget != null) @compileError("tokened: a widget builds its own rows; only containers and labels read tokens");
+    var out = s;
+    out.tokens = uses;
+    return out;
+}
+
+/// Writes the token values `values` (a `Tokens`) into the fields `uses` names.
+pub inline fn applyTokens(comptime uses: []const TokenUse, style: *Style, text_style: *types.TextStyle, values: anytype) void {
+    inline for (uses) |u| {
+        const v = @field(values, u.token);
+        switch (u.target) {
+            .pad_left => style.pad[0] = v,
+            .pad_top => style.pad[1] = v,
+            .pad_right => style.pad[2] = v,
+            .pad_bottom => style.pad[3] = v,
+            .gap => style.gap = v,
+            .width => style.size[0] = .px(v),
+            .height => style.size[1] = .px(v),
+            .min_width => style.min[0] = v,
+            .min_height => style.min[1] = v,
+            .max_width => style.max[0] = v,
+            .max_height => style.max[1] = v,
+            .border => style.border = v,
+            .radius => style.radius = v,
+            .fill => style.fill = v,
+            .border_color => style.border_color = v,
+            .text_px => text_style.px = v,
+            .text_color => text_style.color = v,
+        }
+    }
+}
 
 /// A formatted label's text (src/core/fmt.zig's language) and its arguments, state fields.
 pub const Format = struct { text: []const u8, args: []const []const u8 };
