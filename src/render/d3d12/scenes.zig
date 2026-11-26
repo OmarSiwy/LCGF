@@ -52,50 +52,71 @@ pub const Player = struct {
     chain: device_mod.Swapchain,
     frames: frame.Frames,
     st: conformance.Storage,
+    /// Whether the device and everything made from it exist: false after a failed `recover`,
+    /// so `deinit` does not release them a second time.
+    live: bool = false,
 
     /// Fills `p` in place (`st` holds the draw list's memory and must not move).
     pub fn init(p: *Player, mode: Mode) !void {
         p.mode = mode;
         p.st = .{};
+        p.live = false;
         if (mode == .present) p.window = try .init(width, height, false);
+        errdefer if (mode == .present) p.window.deinit();
         try p.initGpu();
     }
 
-    /// Everything made from a device, against the window `p` already has.
+    /// Everything made from a device, against the window `p` already has. All or nothing: on
+    /// an error what was made is released and `live` stays false.
     fn initGpu(p: *Player) !void {
+        std.debug.assert(!p.live);
         p.d = try Device.init(.{ .adapter = .warp });
         errdefer p.d.deinit();
         p.once = try host.Once.init(&p.d);
+        errdefer p.once.deinit();
         p.white = try host.sampled(&p.d, &p.once, 1, 1, &.{ 0xff, 0xff, 0xff, 0xff });
+        errdefer com.release(p.white);
         p.atlas = try host.sampled(&p.d, &p.once, 64, 64, &standInAtlas());
+        errdefer com.release(p.atlas);
         p.gfx = try Renderer.init(&p.d, .{ .frames = 2 }, p.white);
+        errdefer p.gfx.deinit();
         p.atlas_handle = p.gfx.addTexture(&p.d, p.atlas);
         const dev: gpu.Device = .wrap(&p.d);
         p.arena = try .init(dev, .{ .bytes = 0, .bind_groups = 4 });
+        errdefer p.arena.deinit();
         p.host_arena = try .init(dev, .{ .bytes = 0, .memory = .host, .bind_groups = 1 });
+        errdefer p.host_arena.deinit();
         p.staging = try .init(dev, &p.host_arena, 64 * 1024);
+        errdefer p.staging.deinit(dev);
         p.gradient = try .init(dev, &p.arena, .{ .format = .rgba8_unorm });
+        errdefer p.gradient.deinit(dev);
         p.target = try host.Target.init(&p.d, width, height);
+        errdefer p.target.deinit();
         p.readback = try host.Readback.init(&p.d, width, height);
+        errdefer p.readback.deinit();
         if (p.mode == .present) {
             p.chain = try .init(&p.d, p.window.hwnd, .{ .width = width, .height = height, .flags = frame.flags });
+            errdefer p.chain.deinit();
             p.frames = try .init(&p.d, &p.chain, 2);
         }
+        p.live = true;
     }
 
     pub fn deinit(p: *Player) void {
-        p.deinitGpu();
+        if (p.live) p.deinitGpu();
         if (p.mode == .present) p.window.deinit();
     }
 
     /// After `error.DeviceLost`: releases everything made from the lost device, in reverse
     /// order, and makes it again on a new device, against the same window.
+    /// If making them fails, `p` holds no device and `recover` may be called again.
     pub fn recover(p: *Player) !void {
-        p.deinitGpu();
+        if (p.live) p.deinitGpu();
         try p.initGpu();
     }
 
     fn deinitGpu(p: *Player) void {
+        p.live = false;
         p.d.waitIdle() catch {};
         if (p.mode == .present) {
             p.frames.deinit();
