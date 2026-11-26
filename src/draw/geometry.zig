@@ -269,6 +269,16 @@ pub fn snap(value: f32, device_scale: f32) f32 {
     return @round(value * device_scale) / device_scale;
 }
 
+test "non-finite and overflowing transforms are not invertible" {
+    const inf = std.math.inf(f32);
+    try std.testing.expect(!invertible(.{ inf, 0, 0, 1, 0, 0 }));
+    try std.testing.expect(!invertible(.{ 1, 0, 0, 1, std.math.nan(f32), 0 }));
+    // A finite but tiny determinant whose inverse overflows.
+    try std.testing.expect(!invertible(.{ 1e-30, 0, 0, 1e-30, 0, 0 }));
+    try std.testing.expect(invertible(.{ 2, 0, 0, 2, -0.0, 5 }));
+    try std.testing.expectEqual(empty, transformRect(.{ 0, 0, 1, 1 }, .{ inf, 0, 0, 1, 0, 0 }));
+}
+
 test "paint bounds follow translated shadows and reject singular transforms" {
     const rect: [4]f32 = .{ 10, 20, 30, 40 };
     const m: [6]f32 = .{ 1, 0, 0, 1, 100, 0 };
