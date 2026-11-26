@@ -212,7 +212,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                 if (cv.batches[b].seen != cv.frame) cv.uploadBatch(up, b);
                 cv.batches[b].seen = cv.frame;
                 const j = cv.draw_len;
-                shader.fill(&uniforms, list, k, scale, .{ @floatFromInt(size[0]), @floatFromInt(size[1]) }, cv.batches[b].row_base, cv.batches[b].vert_base);
+                if (!shader.fill(&uniforms, list, k, scale, .{ @floatFromInt(size[0]), @floatFromInt(size[1]) }, cv.batches[b].row_base, cv.batches[b].vert_base)) continue;
                 cv.write(up, s.uniforms[j], 0, std.mem.asBytes(&uniforms)[0..shader.Uniforms.headBytes(uniforms.layers)]);
                 const marks = @offsetOf(shader.Uniforms, "marks");
                 cv.write(up, s.uniforms[j], marks, std.mem.sliceAsBytes(uniforms.marks[0..uniforms.overrides]));
@@ -228,7 +228,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                 if (d.k == k) break i;
             } else return;
             const node = list.customs[k];
-            const sc = desc.scissor(node.rect, node.clip, cv.scale, cv.size[0], cv.size[1]);
+            const sc = desc.scissor(screenRect(node), node.clip, cv.scale, cv.size[0], cv.size[1]);
             if (sc.width == 0 or sc.height == 0) return;
             const s = &cv.slots[cv.slot];
             const batch = cv.batches[cv.draws[j].batch];
@@ -247,6 +247,23 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                 const first = @min(r.first, end);
                 if (end > first) pass.draw(4, end - first, 0, batch.row_base + first);
             }
+        }
+
+        /// The node's rect on screen, logical pixels: the bounds of its transformed corners.
+        fn screenRect(node: draw_list.CustomDraw) [4]f32 {
+            const a, const b, const c, const d, const tx, const ty = node.xform;
+            const r = node.rect;
+            var lo: @Vector(2, f32) = @splat(std.math.inf(f32));
+            var hi: @Vector(2, f32) = @splat(-std.math.inf(f32));
+            for ([_][2]f32{ .{ r[0], r[1] }, .{ r[2], r[1] }, .{ r[0], r[3] }, .{ r[2], r[3] } }) |p| {
+                const q: @Vector(2, f32) = .{ a * p[0] + c * p[1] + tx, b * p[0] + d * p[1] + ty };
+                lo = @min(lo, q);
+                hi = @max(hi, q);
+            }
+            // A turned node is tested per pixel; a pixel of slack keeps rounding at its bounds
+            // from cutting one the test keeps.
+            const e: f32 = if (std.mem.eql(f32, &node.xform, &.{ 1, 0, 0, 1, 0, 0 })) 0 else 1;
+            return .{ lo[0] - e, lo[1] - e, hi[0] + e, hi[1] + e };
         }
 
         fn write(cv: *C, up: ?*gpu.Upload, b: gpu.Buffer, offset: u64, bytes: []const u8) void {

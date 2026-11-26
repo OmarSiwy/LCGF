@@ -19,6 +19,15 @@ struct Draw {
     uint vert_len;
     uint overrides;
     uint layers;
+    vec4 inv;
+    vec2 inv_t;
+    vec2 fwd_t;
+    vec4 fwd;
+    vec4 radii;
+    vec4 clip_box;
+    float px_scale;
+    float inv_scale;
+    uint rounded;
     uvec4 palette[256];
     uvec4 marks[64];
 };
@@ -104,8 +113,38 @@ uint override_of(uint i, uint colour_1) {
     return _e27;
 }
 
+vec2 screen(vec2 p_1) {
+    float _e4 = _group_0_binding_0_vs.fwd.x;
+    float _e10 = _group_0_binding_0_vs.fwd.z;
+    float _e17 = _group_0_binding_0_vs.fwd_t.x;
+    float _e22 = _group_0_binding_0_vs.fwd.y;
+    float _e28 = _group_0_binding_0_vs.fwd.w;
+    float _e35 = _group_0_binding_0_vs.fwd_t.y;
+    return vec2((((_e4 * p_1.x) + (_e10 * p_1.y)) + _e17), (((_e22 * p_1.x) + (_e28 * p_1.y)) + _e35));
+}
+
+float corner_radius(vec2 p_2, vec2 half_, vec4 radii) {
+    float right = ((p_2.y > 0.0) ? radii.z : radii.y);
+    float left = ((p_2.y > 0.0) ? radii.w : radii.x);
+    return min(((p_2.x > 0.0) ? right : left), min(half_.x, half_.y));
+}
+
 float len2_(float x, float y) {
     return sqrt(((x * x) + (y * y)));
+}
+
+float rounded_box(vec2 p_3, vec2 half_1, float r_1) {
+    vec2 q = ((abs(p_3) - half_1) + vec2(r_1));
+    float _e13 = len2_(max(q.x, 0.0), max(q.y, 0.0));
+    return ((_e13 + min(max(q.x, q.y), 0.0)) - r_1);
+}
+
+float dash_cover(float at, float on, float period) {
+    if ((period == 0.0)) {
+        return 1.0;
+    }
+    float m = (at - (floor((at / period)) * period));
+    return min(max((min(m, (on - m)) + 0.5), 0.0), 1.0);
 }
 
 float box_dist(float qx, float qy) {
@@ -120,11 +159,11 @@ float coverage(float d_1) {
 float rect_dist(float px, float py, Frag in_1) {
     float hx = (abs((in_1.p.z - in_1.p.x)) * 0.5);
     float hy = (abs((in_1.p.w - in_1.p.y)) * 0.5);
-    float r_1 = min(in_1.m0_.y, min(hx, hy));
-    float qx_1 = ((abs((px - ((in_1.p.x + in_1.p.z) * 0.5))) - hx) + r_1);
-    float qy_1 = ((abs((py - ((in_1.p.y + in_1.p.w) * 0.5))) - hy) + r_1);
+    float r_2 = min(in_1.m0_.y, min(hx, hy));
+    float qx_1 = ((abs((px - ((in_1.p.x + in_1.p.z) * 0.5))) - hx) + r_2);
+    float qy_1 = ((abs((py - ((in_1.p.y + in_1.p.w) * 0.5))) - hy) + r_2);
     float _e45 = box_dist(qx_1, qy_1);
-    return (_e45 - r_1);
+    return (_e45 - r_2);
 }
 
 void main() {
@@ -187,8 +226,8 @@ void main() {
     float _e83 = wx(r.pos.z);
     float _e86 = wy(r.pos.w);
     vec4 corner = vec4(_e77, _e80, _e83, _e86);
-    float dash_1 = float(((h >> 10u) & 15u));
-    float half_ = (width * 0.5);
+    float dash = float(((h >> 10u) & 15u));
+    float half_2 = (width * 0.5);
     if (!(((h & 128u) != 0u))) {
         local_2 = (kind == 0u);
     } else {
@@ -204,14 +243,14 @@ void main() {
     p = corner;
     float _e119 = _group_0_binding_0_vs.scale;
     radius = (float(r.look.y) * _e119);
-    grow = (half_ * float(stroked));
+    grow = (half_2 * float(stroked));
     if ((kind == 0u)) {
-        grow = (half_ * 1.4142135);
+        grow = (half_2 * 1.4142135);
         float _e154 = _group_0_binding_0_vs.scale;
         chain = (float(r.look.y) * _e154);
         float _e160 = _group_0_binding_0_vs.px;
-        float on = ((2.0 * dash_1) * _e160);
-        m1_ = vec4(on, (2.0 * on), 1.0, 0.0);
+        float on_1 = ((2.0 * dash) * _e160);
+        m1_ = vec4(on_1, (2.0 * on_1), 1.0, 0.0);
         float dx = (corner.z - corner.x);
         float dy = (corner.w - corner.y);
         float l = sqrt(((dx * dx) + (dy * dy)));
@@ -223,86 +262,97 @@ void main() {
         float rr = (float(uint(r.pos.z)) * _e199);
         float start = float((r.look.z & 65535u));
         float sweep = ((float((r.look.z >> 16u)) / 65535.0) * 6.2831855);
-        float m = (((start / 65536.0) * 6.2831855) + (sweep / 2.0));
+        float m_1 = (((start / 65536.0) * 6.2831855) + (sweep / 2.0));
         radius = rr;
-        m1_ = vec4(0.0, 0.0, cos(m), sin(m));
+        float _e227 = _group_0_binding_0_vs.scale;
+        chain = (float(r.look.y) * _e227);
+        float _e233 = _group_0_binding_0_vs.px;
+        float on_2 = ((2.0 * dash) * _e233);
+        m1_ = vec4(on_2, (2.0 * on_2), cos(m_1), sin(m_1));
+        m3_ = vec4((sweep / 2.0), 0.0, 0.0, 0.0);
         m2_ = vec4(max(sin((sweep / 2.0)), 0.0), cos((sweep / 2.0)), float(((r.look.z >> 16u) == 65535u)), 0.0);
         p = vec4(corner.x, corner.y, 0.0, 0.0);
-        float e = (rr + half_);
+        float e = (rr + half_2);
         box = vec4(((corner.x - e) - 1.0), ((corner.y - e) - 1.0), ((corner.x + e) + 1.0), ((corner.y + e) + 1.0));
     } else {
         if ((kind == 4u)) {
-            float _e275 = _group_0_binding_0_vs.scale;
-            float gw = (float(uint(r.pos.z)) * _e275);
-            float _e283 = _group_0_binding_0_vs.scale;
-            float gh = (float(uint(r.pos.w)) * _e283);
-            uint q = ((h >> 16u) & 3u);
+            float _e294 = _group_0_binding_0_vs.scale;
+            float gw = (float(uint(r.pos.z)) * _e294);
+            float _e302 = _group_0_binding_0_vs.scale;
+            float gh = (float(uint(r.pos.w)) * _e302);
+            uint q_1 = ((h >> 16u) & 3u);
             float c_1[4] = float[4](1.0, 0.0, -1.0, 0.0);
-            m1_ = vec4(0.0, 0.0, c_1[q], c_1[((q + 3u) & 3u)]);
+            m1_ = vec4(0.0, 0.0, c_1[q_1], c_1[((q_1 + 3u) & 3u)]);
             p = vec4(corner.x, corner.y, gw, gh);
             float e_1 = max(gw, gh);
             box = vec4(((corner.x - e_1) - 1.0), ((corner.y - e_1) - 1.0), ((corner.x + e_1) + 1.0), ((corner.y + e_1) + 1.0));
-            float _e326 = unorm16_(r.look.y);
-            float _e331 = unorm16_((r.look.y >> 16u));
-            out_.uv = vec2(_e326, _e331);
-            float _e336 = unorm16_(r.look.z);
-            float _e345 = unorm16_((r.look.z >> 16u));
-            m3_ = vec4(((_e336 - _e326) / max(gw, 1e-6)), ((_e345 - _e331) / max(gh, 1e-6)), 0.0, 0.0);
+            float _e345 = unorm16_(r.look.y);
+            float _e350 = unorm16_((r.look.y >> 16u));
+            out_.uv = vec2(_e345, _e350);
+            float _e355 = unorm16_(r.look.z);
+            float _e364 = unorm16_((r.look.z >> 16u));
+            m3_ = vec4(((_e355 - _e345) / max(gw, 1e-6)), ((_e364 - _e350) / max(gh, 1e-6)), 0.0, 0.0);
         } else {
-            float _e356 = grow;
-            float _e363 = grow;
-            float _e370 = grow;
-            float _e377 = grow;
-            box = vec4(((min(corner.x, corner.z) - _e356) - 1.0), ((min(corner.y, corner.w) - _e363) - 1.0), ((max(corner.x, corner.z) + _e370) + 1.0), ((max(corner.y, corner.w) + _e377) + 1.0));
+            float _e375 = grow;
+            float _e382 = grow;
+            float _e389 = grow;
+            float _e396 = grow;
+            box = vec4(((min(corner.x, corner.z) - _e375) - 1.0), ((min(corner.y, corner.w) - _e382) - 1.0), ((max(corner.x, corner.z) + _e389) + 1.0), ((max(corner.y, corner.w) + _e396) + 1.0));
         }
     }
-    uint _e385 = _group_0_binding_0_vs.row_base;
-    uint _e388 = override_of((r.row - _e385), row.x);
-    uint _e392 = _group_0_binding_0_vs.row_base;
-    uint _e395 = override_of((r.row - _e392), row.y);
+    uint _e404 = _group_0_binding_0_vs.row_base;
+    uint _e407 = override_of((r.row - _e404), row.x);
+    uint _e411 = _group_0_binding_0_vs.row_base;
+    uint _e414 = override_of((r.row - _e411), row.y);
     if (((h & 64u) != 0u)) {
         local_4 = ((row.w & 1u) != 0u);
     } else {
         local_4 = false;
     }
     bool filled = local_4;
-    vec4 _e410 = rgba(_e388);
-    out_.stroke = _e410;
-    vec4 _e413 = out_.stroke;
-    vec4 _e417 = rgba(_e395);
-    out_.base = (filled ? _e417 : vec4(_e413.xyz, 0.0));
-    vec4 _e420 = p;
-    out_.p = _e420;
-    float _e422 = radius;
-    float _e426 = chain;
-    out_.m0_ = vec4(half_, _e422, float((cap == 1u)), _e426);
-    vec4 _e429 = m1_;
-    out_.m1_ = _e429;
-    float _e432 = m2_.x;
-    float _e434 = m2_.y;
-    float _e437 = m2_.z;
-    out_.m2_ = vec4(_e432, _e434, ((kind == 2u) ? _e437 : float(stroked)), (half_ * float(stroked)));
-    vec4 _e445 = m3_;
-    out_.m3_ = _e445;
+    vec4 _e429 = rgba(_e407);
+    out_.stroke = _e429;
+    vec4 _e432 = out_.stroke;
+    vec4 _e436 = rgba(_e414);
+    out_.base = (filled ? _e436 : vec4(_e432.xyz, 0.0));
+    vec4 _e439 = p;
+    out_.p = _e439;
+    float _e441 = radius;
+    float _e445 = chain;
+    out_.m0_ = vec4(half_2, _e441, float((cap == 1u)), _e445);
+    vec4 _e448 = m1_;
+    out_.m1_ = _e448;
+    float _e451 = m2_.x;
+    float _e453 = m2_.y;
+    float _e456 = m2_.z;
+    out_.m2_ = vec4(_e451, _e453, ((kind == 2u) ? _e456 : float(stroked)), (half_2 * float(stroked)));
+    vec4 _e464 = m3_;
+    out_.m3_ = _e464;
     out_.k = uvec4(kind, uint((cap == 2u)), r.look.y, r.look.z);
-    vec4 _e455 = box;
-    vec2 lo = clamp(floor(_e455.xy), vec2(0.0), vec2(16777216.0));
-    vec4 _e463 = box;
-    vec2 hi = clamp(ceil(_e463.zw), vec2(0.0), vec2(16777216.0));
-    vec2 at = mix(lo, hi, bvec2(((vi & 1u) != 0u), ((vi & 2u) != 0u)));
-    vec2 _e484 = _group_0_binding_0_vs.size;
-    out_.position = vec4((((at / _e484) * vec2(2.0, -2.0)) + vec2(-1.0, 1.0)), 0.0, 1.0);
-    Frag _e497 = out_;
-    gl_Position = _e497.position;
-    _vs2fs_location0 = _e497.p;
-    _vs2fs_location1 = _e497.m0_;
-    _vs2fs_location2 = _e497.m1_;
-    _vs2fs_location3 = _e497.m2_;
-    _vs2fs_location4 = _e497.m3_;
-    _vs2fs_location5 = _e497.stroke;
-    _vs2fs_location6 = _e497.base;
-    _vs2fs_location7 = _e497.k;
-    _vs2fs_location8 = _e497.uv;
+    vec4 _e474 = box;
+    vec2 _e476 = screen(_e474.xy);
+    vec4 _e477 = box;
+    vec2 _e479 = screen(_e477.zy);
+    vec4 _e480 = box;
+    vec2 _e482 = screen(_e480.xw);
+    vec4 _e483 = box;
+    vec2 _e485 = screen(_e483.zw);
+    vec2 lo = clamp(floor(min(min(_e476, _e479), min(_e482, _e485))), vec2(0.0), vec2(16777216.0));
+    vec2 hi = clamp(ceil(max(max(_e476, _e479), max(_e482, _e485))), vec2(0.0), vec2(16777216.0));
+    vec2 at_1 = mix(lo, hi, bvec2(((vi & 1u) != 0u), ((vi & 2u) != 0u)));
+    vec2 _e517 = _group_0_binding_0_vs.size;
+    out_.position = vec4((((at_1 / _e517) * vec2(2.0, -2.0)) + vec2(-1.0, 1.0)), 0.0, 1.0);
+    Frag _e530 = out_;
+    gl_Position = _e530.position;
+    _vs2fs_location0 = _e530.p;
+    _vs2fs_location1 = _e530.m0_;
+    _vs2fs_location2 = _e530.m1_;
+    _vs2fs_location3 = _e530.m2_;
+    _vs2fs_location4 = _e530.m3_;
+    _vs2fs_location5 = _e530.stroke;
+    _vs2fs_location6 = _e530.base;
+    _vs2fs_location7 = _e530.k;
+    _vs2fs_location8 = _e530.uv;
     gl_Position.yz = vec2(-gl_Position.y, gl_Position.z * 2.0 - gl_Position.w);
     return;
 }

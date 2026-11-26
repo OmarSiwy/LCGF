@@ -3023,10 +3023,19 @@ The canvas batch (lcgf.canvas): every kind and cap, fills, strokes, dashes acros
 - `fn w(x: i32, y: i32) [2]i32`: World point at logical (x, y) from the camera's origin.
 - `fn build(s: *canvas.Instances) [2]canvas.Range`
 
+### `canvas_scene.inset` (struct)
+A second canvas node over the first, under its parents' turn of 0.3 rad about its centre and a clip with rounded corners: the whole batch again, panned to the rects and arcs.
+
+- `node = [4]f32{ 540, 360, 760, 560 }`
+- `clip = [4]f32{ 550, 370, 750, 550 }`
+- `radii = [4]f32{ 30, 10, 40, 0 }`
+- `xform = [6]f32{ ca, sa, -sa, ca, cx - (ca * cx - sa * cy), cy - (sa * cx + ca * cy) }`
+- `camera: canvas.Camera = .{ .origin = .{ far + 380 * 20, -far + 20 * 20 }, .scale = 0.05, .zoom = 2 }`
+
 ### `CanvasStorage` (struct)
 The canvas scene as a draw list of one canvas command, in caller-owned memory.
 
-Fields: `list_buf`, `shape_buf`, `draw`, `shapes`, `ranges`, `overrides`, `rows`
+Fields: `list_buf`, `shape_buf`, `draw`, `shapes`, `ranges`, `inset_ranges`, `overrides`, `rows`
 
 - `fn load(st: *CanvasStorage) void`: Builds the scene; `st` must not move afterwards.
 
@@ -3071,12 +3080,12 @@ The canvas shader (canvas.wgsl) and the uniforms it reads, for every GPU back en
 - `verts_width = 2048`: Texels a row of `wgsl_es`'s vertex texture.
 - `max_overrides = 64`: Overrides one draw applies; past these, the first ones are dropped.
 - `max_layers = 256`
-- `fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, target: [2]f32, row_base: u32, vert_base: u32) void`: Fills the head, palette and overrides of canvas command `k` of `list` at `scale` physical pixels per logical one, on a `target` of physical pixels; the batch starts at `row_base` and `vert_base` in the GPU buffers.
+- `fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, target: [2]f32, row_base: u32, vert_base: u32) bool`: Fills the head, palette and overrides of canvas command `k` of `list` at `scale` physical pixels per logical one, on a `target` of physical pixels; the batch starts at `row_base` and `vert_base` in the GPU buffers.
 
 ### `Uniforms` (struct)
 canvas.wgsl's `Draw`.
 
-Fields: `view`, `rect`, `clip`, `size`, `opacity`, `row_base`, `vert_base`, `vert_len`, `overrides`, `layers`, `palette`, `marks`
+Fields: `view`, `rect`, `clip`, `size`, `opacity`, `row_base`, `vert_base`, `vert_len`, `overrides`, `layers`, `inv`, `inv_t`, `fwd_t`, `fwd`, `radii`, `clip_box`, `px_scale`, `inv_scale`, `rounded`, `_pad`, `palette`, `marks`
 
 - `fn headBytes(layers: u32) usize`: Bytes of the head and the first `layers` palette rows: what `marks` does not cover.
 

@@ -35,6 +35,20 @@ struct Draw {
     vert_len: u32,
     overrides: u32,
     layers: u32,
+    // The node's transform (sw canvas.zig `Space`): `inv` and `inv_t` take a pixel centre to
+    // the node's own physical space, where `rect`, the instances and their distances are;
+    // `fwd` and `fwd_t` take that space to the screen. Identity for most nodes.
+    inv: vec4f,
+    inv_t: vec2f,
+    fwd_t: vec2f,
+    fwd: vec4f,
+    // The clip's corner radii (tl, tr, br, bl), its centre and half size, logical pixels;
+    // `rounded` when a radius is above 0.
+    radii: vec4f,
+    clip_box: vec4f,
+    px_scale: f32,
+    inv_scale: f32,
+    rounded: u32,
     // stroke, fill, width (f32 bits), flags.
     palette: array<vec4u, 256>,
     // first, count, colour, 0.
@@ -146,7 +160,10 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
         let sweep = f32(r.look.z >> 16u) / 65535.0 * tau;
         let m = start / 65536.0 * tau + sweep / 2.0;
         radius = rr;
-        m1 = vec4f(0.0, 0.0, cos(m), sin(m));
+        chain = f32(r.look.y) * u.scale;
+        let on = 2.0 * dash * u.px;
+        m1 = vec4f(on, 2.0 * on, cos(m), sin(m));
+        m3 = vec4f(sweep / 2.0, 0.0, 0.0, 0.0);
         m2 = vec4f(max(sin(sweep / 2.0), 0.0), cos(sweep / 2.0), f32((r.look.z >> 16u) == 0xffffu), 0.0);
         p = vec4f(corner.x, corner.y, 0.0, 0.0);
         let e = rr + half;
@@ -183,11 +200,42 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
     out.k = vec4u(kind, u32(cap == 2u), r.look.y, r.look.z);
     // Whole pixels, as sw's `pixels` rounds the box: the strip covers exactly the pixels sw
     // shades, and the clip below cuts them to the node.
-    let lo = clamp(floor(box.xy), vec2f(0.0), vec2f(16777216.0));
-    let hi = clamp(ceil(box.zw), vec2f(0.0), vec2f(16777216.0));
+    // On screen: the bounds of the box's four corners under the node's transform (the box
+    // itself for an untransformed node, exactly).
+    let c0 = screen(box.xy);
+    let c1 = screen(box.zy);
+    let c2 = screen(box.xw);
+    let c3 = screen(box.zw);
+    let lo = clamp(floor(min(min(c0, c1), min(c2, c3))), vec2f(0.0), vec2f(16777216.0));
+    let hi = clamp(ceil(max(max(c0, c1), max(c2, c3))), vec2f(0.0), vec2f(16777216.0));
     let at = select(lo, hi, vec2<bool>((vi & 1u) != 0u, (vi & 2u) != 0u));
     out.position = vec4f(at / u.size * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
     return out;
+}
+
+fn screen(p: vec2f) -> vec2f {
+    return vec2f(u.fwd.x * p.x + u.fwd.z * p.y + u.fwd_t.x, u.fwd.y * p.x + u.fwd.w * p.y + u.fwd_t.y);
+}
+
+// quad.wgsl's clip corners: the radius of the quadrant p is in, capped by the half size.
+fn corner_radius(p: vec2f, half: vec2f, radii: vec4f) -> f32 {
+    let right = select(radii.y, radii.z, p.y > 0.0);
+    let left = select(radii.x, radii.w, p.y > 0.0);
+    return min(select(left, right, p.x > 0.0), min(half.x, half.y));
+}
+
+fn rounded_box(p: vec2f, half: vec2f, r: f32) -> f32 {
+    let q = abs(p) - half + vec2f(r);
+    return len2(max(q.x, 0.0), max(q.y, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// How much of a dash is on at chain distance `at` (canvas.zig `dashCover`).
+fn dash_cover(at: f32, on: f32, period: f32) -> f32 {
+    if (period == 0.0) {
+        return 1.0;
+    }
+    let m = at - floor(at / period) * period;
+    return min(max(min(m, on - m) + 0.5, 0.0), 1.0);
 }
 
 fn len2(x: f32, y: f32) -> f32 {
@@ -248,10 +296,19 @@ fn polygon_dist(px: f32, py: f32, first: u32, count: u32) -> f32 {
 
 @fragment
 fn fs(in: Frag) -> @location(0) vec4f {
-    let px = in.position.x;
-    let py = in.position.y;
+    let sx = in.position.x;
+    let sy = in.position.y;
+    // The pixel in the node's own space; the node's rect is tested there, the clip on screen.
+    let px = u.inv.x * sx + u.inv.z * sy + u.inv_t.x;
+    let py = u.inv.y * sx + u.inv.w * sy + u.inv_t.y;
     let inside = px >= u.rect.x && px < u.rect.z && py >= u.rect.y && py < u.rect.w &&
-                 px >= u.clip.x && px <= u.clip.z && py >= u.clip.y && py <= u.clip.w;
+                 sx >= u.clip.x && sx <= u.clip.z && sy >= u.clip.y && sy <= u.clip.w;
+    var keep = f32(inside);
+    if (u.rounded != 0u) {
+        let l = vec2f(sx * u.inv_scale - u.clip_box.x, sy * u.inv_scale - u.clip_box.y);
+        let corner = rounded_box(l, u.clip_box.zw, corner_radius(l, u.clip_box.zw, u.radii)) * u.px_scale;
+        keep *= min(max(0.5 - corner, 0.0), 1.0);
+    }
     let half = in.m0.x;
     let square = in.m0.z;
     let hw = in.m2.w;
@@ -271,14 +328,7 @@ fn fs(in: Frag) -> @location(0) vec4f {
         let capsule = len2(max(along - h, 0.0), across) - half;
         let flat_end = box_dist(along - h - half * square, across - half);
         let d = select(flat_end, capsule, round);
-        var dash = 1.0;
-        let period = in.m1.y;
-        if (period != 0.0) {
-            let at = t + in.m0.w;
-            let m = at - floor(at / period) * period;
-            dash = min(max(min(m, in.m1.x - m) + 0.5, 0.0), 1.0);
-        }
-        alpha = coverage(d) * dash;
+        alpha = coverage(d) * dash_cover(t + in.m0.w, in.m1.x, in.m1.y);
     } else if (kind == 2u) {
         let lx = px - in.p.x;
         let ly = py - in.p.y;
@@ -294,7 +344,9 @@ fn fs(in: Frag) -> @location(0) vec4f {
         let past = select(x * ca - y * sa, -1.0e30, in.m2.z != 0.0);
         let disc = len2(x - sa * radius, y - ca * radius) - half;
         let flat_end = max(ring, past - half * square);
-        alpha = coverage(select(flat_end, select(ring, disc, past > 0.0), round));
+        // The dash along the centre line (canvas.zig `arcAlong`): the angle from the middle.
+        let along = (atan2(ly * mc - lx * ms, y) + in.m3.x) * radius + in.m0.w;
+        alpha = coverage(select(flat_end, select(ring, disc, past > 0.0), round)) * dash_cover(along, in.m1.x, in.m1.y);
     } else if (kind == 1u || kind == 3u) {
         var d = 0.0;
         if (kind == 1u) {
@@ -322,6 +374,6 @@ fn fs(in: Frag) -> @location(0) vec4f {
         colour = in.stroke * textureLoad(atlas, vec2u(tx, ty), 0);
         alpha = select(0.0, 1.0, hit);
     }
-    let a = clamp(colour.a * (alpha * u.opacity), 0.0, 1.0) * f32(inside);
+    let a = clamp(colour.a * (alpha * keep * u.opacity), 0.0, 1.0);
     return vec4f(clamp(colour.rgb, vec3f(0.0), vec3f(1.0)) * a, a);
 }

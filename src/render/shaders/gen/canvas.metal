@@ -30,6 +30,16 @@ struct Draw {
     uint vert_len;
     uint overrides;
     uint layers;
+    metal::float4 inv;
+    metal::float2 inv_t;
+    metal::float2 fwd_t;
+    metal::float4 fwd;
+    metal::float4 radii;
+    metal::float4 clip_box;
+    float px_scale;
+    float inv_scale;
+    uint rounded;
+    char _pad24[4];
     type_6 palette;
     type_7 marks;
 };
@@ -124,11 +134,56 @@ uint override_of(
     return _e27;
 }
 
+metal::float2 screen(
+    metal::float2 p_1,
+    constant Draw& u
+) {
+    float _e4 = u.fwd.x;
+    float _e10 = u.fwd.z;
+    float _e17 = u.fwd_t.x;
+    float _e22 = u.fwd.y;
+    float _e28 = u.fwd.w;
+    float _e35 = u.fwd_t.y;
+    return metal::float2(((_e4 * p_1.x) + (_e10 * p_1.y)) + _e17, ((_e22 * p_1.x) + (_e28 * p_1.y)) + _e35);
+}
+
+float corner_radius(
+    metal::float2 p_2,
+    metal::float2 half_,
+    metal::float4 radii
+) {
+    float right = (p_2.y > 0.0) ? radii.z : radii.y;
+    float left = (p_2.y > 0.0) ? radii.w : radii.x;
+    return metal::min((p_2.x > 0.0) ? right : left, metal::min(half_.x, half_.y));
+}
+
 float len2_(
     float x,
     float y
 ) {
     return metal::sqrt((x * x) + (y * y));
+}
+
+float rounded_box(
+    metal::float2 p_3,
+    metal::float2 half_1,
+    float r_1
+) {
+    metal::float2 q = (metal::abs(p_3) - half_1) + metal::float2(r_1);
+    float _e13 = len2_(metal::max(q.x, 0.0), metal::max(q.y, 0.0));
+    return (_e13 + metal::min(metal::max(q.x, q.y), 0.0)) - r_1;
+}
+
+float dash_cover(
+    float at,
+    float on,
+    float period
+) {
+    if (period == 0.0) {
+        return 1.0;
+    }
+    float m = at - (metal::floor(at / period) * period);
+    return metal::min(metal::max(metal::min(m, on - m) + 0.5, 0.0), 1.0);
 }
 
 float box_dist(
@@ -152,11 +207,11 @@ float rect_dist(
 ) {
     float hx = metal::abs(in_1.p.z - in_1.p.x) * 0.5;
     float hy = metal::abs(in_1.p.w - in_1.p.y) * 0.5;
-    float r_1 = metal::min(in_1.m0_.y, metal::min(hx, hy));
-    float qx_1 = (metal::abs(px - ((in_1.p.x + in_1.p.z) * 0.5)) - hx) + r_1;
-    float qy_1 = (metal::abs(py - ((in_1.p.y + in_1.p.w) * 0.5)) - hy) + r_1;
+    float r_2 = metal::min(in_1.m0_.y, metal::min(hx, hy));
+    float qx_1 = (metal::abs(px - ((in_1.p.x + in_1.p.z) * 0.5)) - hx) + r_2;
+    float qy_1 = (metal::abs(py - ((in_1.p.y + in_1.p.w) * 0.5)) - hy) + r_2;
     float _e45 = box_dist(qx_1, qy_1);
-    return _e45 - r_1;
+    return _e45 - r_2;
 }
 
 metal::int2 vert(
@@ -233,7 +288,7 @@ float polygon_dist(
             float dy = oy - (ey * t);
             float _e76 = best;
             best = metal::min(_e76, (dx * dx) + (dy * dy));
-            float left = (ex * oy) - (ey * ox);
+            float left_1 = (ex * oy) - (ey * ox);
             float _e84 = ay;
             if (_e84 <= py_1) {
                 local_16 = _e48 > py_1;
@@ -242,7 +297,7 @@ float polygon_dist(
             }
             bool _e90 = local_16;
             if (_e90) {
-                local_17 = left > 0.0;
+                local_17 = left_1 > 0.0;
             } else {
                 local_17 = false;
             }
@@ -255,7 +310,7 @@ float polygon_dist(
             }
             bool _e103 = local_18;
             if (_e103) {
-                local_19 = left < 0.0;
+                local_19 = left_1 < 0.0;
             } else {
                 local_19 = false;
             }
@@ -342,8 +397,8 @@ vertex vsOutput vs(
     float _e83 = wx(r.pos.z, u);
     float _e86 = wy(r.pos.w, u);
     metal::float4 corner = metal::float4(_e77, _e80, _e83, _e86);
-    float dash_1 = static_cast<float>((h >> 10u) & 15u);
-    float half_ = width * 0.5;
+    float dash = static_cast<float>((h >> 10u) & 15u);
+    float half_2 = width * 0.5;
     if (!(((h & 128u) != 0u))) {
         local_2 = kind == 0u;
     } else {
@@ -359,14 +414,14 @@ vertex vsOutput vs(
     p = corner;
     float _e119 = u.scale;
     radius = static_cast<float>(r.look.y) * _e119;
-    grow = half_ * static_cast<float>(stroked);
+    grow = half_2 * static_cast<float>(stroked);
     if (kind == 0u) {
-        grow = half_ * 1.4142135;
+        grow = half_2 * 1.4142135;
         float _e154 = u.scale;
         chain = static_cast<float>(r.look.y) * _e154;
         float _e160 = u.px;
-        float on = (2.0 * dash_1) * _e160;
-        m1_ = metal::float4(on, 2.0 * on, 1.0, 0.0);
+        float on_1 = (2.0 * dash) * _e160;
+        m1_ = metal::float4(on_1, 2.0 * on_1, 1.0, 0.0);
         float dx_1 = corner.z - corner.x;
         float dy_1 = corner.w - corner.y;
         float l = metal::sqrt((dx_1 * dx_1) + (dy_1 * dy_1));
@@ -378,77 +433,88 @@ vertex vsOutput vs(
         float rr = static_cast<float>(as_type<uint>(r.pos.z)) * _e199;
         float start = static_cast<float>(r.look.z & 65535u);
         float sweep = (static_cast<float>(r.look.z >> 16u) / 65535.0) * 6.2831855;
-        float m = ((start / 65536.0) * 6.2831855) + (sweep / 2.0);
+        float m_1 = ((start / 65536.0) * 6.2831855) + (sweep / 2.0);
         radius = rr;
-        m1_ = metal::float4(0.0, 0.0, metal::cos(m), metal::sin(m));
+        float _e227 = u.scale;
+        chain = static_cast<float>(r.look.y) * _e227;
+        float _e233 = u.px;
+        float on_2 = (2.0 * dash) * _e233;
+        m1_ = metal::float4(on_2, 2.0 * on_2, metal::cos(m_1), metal::sin(m_1));
+        m3_ = metal::float4(sweep / 2.0, 0.0, 0.0, 0.0);
         m2_ = metal::float4(metal::max(metal::sin(sweep / 2.0), 0.0), metal::cos(sweep / 2.0), static_cast<float>((r.look.z >> 16u) == 65535u), 0.0);
         p = metal::float4(corner.x, corner.y, 0.0, 0.0);
-        float e = rr + half_;
+        float e = rr + half_2;
         box = metal::float4((corner.x - e) - 1.0, (corner.y - e) - 1.0, (corner.x + e) + 1.0, (corner.y + e) + 1.0);
     } else {
         if (kind == 4u) {
-            float _e275 = u.scale;
-            float gw = static_cast<float>(as_type<uint>(r.pos.z)) * _e275;
-            float _e283 = u.scale;
-            float gh = static_cast<float>(as_type<uint>(r.pos.w)) * _e283;
-            uint q = (h >> 16u) & 3u;
+            float _e294 = u.scale;
+            float gw = static_cast<float>(as_type<uint>(r.pos.z)) * _e294;
+            float _e302 = u.scale;
+            float gh = static_cast<float>(as_type<uint>(r.pos.w)) * _e302;
+            uint q_1 = (h >> 16u) & 3u;
             type_12 c_1 = type_12 {{1.0, 0.0, -1.0, 0.0}};
-            m1_ = metal::float4(0.0, 0.0, c_1.inner[q], c_1.inner[(q + 3u) & 3u]);
+            m1_ = metal::float4(0.0, 0.0, c_1.inner[q_1], c_1.inner[(q_1 + 3u) & 3u]);
             p = metal::float4(corner.x, corner.y, gw, gh);
             float e_1 = metal::max(gw, gh);
             box = metal::float4((corner.x - e_1) - 1.0, (corner.y - e_1) - 1.0, (corner.x + e_1) + 1.0, (corner.y + e_1) + 1.0);
-            float _e326 = unorm16_(r.look.y);
-            float _e331 = unorm16_(r.look.y >> 16u);
-            out.uv = metal::float2(_e326, _e331);
-            float _e336 = unorm16_(r.look.z);
-            float _e345 = unorm16_(r.look.z >> 16u);
-            m3_ = metal::float4((_e336 - _e326) / metal::max(gw, 0.000001), (_e345 - _e331) / metal::max(gh, 0.000001), 0.0, 0.0);
+            float _e345 = unorm16_(r.look.y);
+            float _e350 = unorm16_(r.look.y >> 16u);
+            out.uv = metal::float2(_e345, _e350);
+            float _e355 = unorm16_(r.look.z);
+            float _e364 = unorm16_(r.look.z >> 16u);
+            m3_ = metal::float4((_e355 - _e345) / metal::max(gw, 0.000001), (_e364 - _e350) / metal::max(gh, 0.000001), 0.0, 0.0);
         } else {
-            float _e356 = grow;
-            float _e363 = grow;
-            float _e370 = grow;
-            float _e377 = grow;
-            box = metal::float4((metal::min(corner.x, corner.z) - _e356) - 1.0, (metal::min(corner.y, corner.w) - _e363) - 1.0, (metal::max(corner.x, corner.z) + _e370) + 1.0, (metal::max(corner.y, corner.w) + _e377) + 1.0);
+            float _e375 = grow;
+            float _e382 = grow;
+            float _e389 = grow;
+            float _e396 = grow;
+            box = metal::float4((metal::min(corner.x, corner.z) - _e375) - 1.0, (metal::min(corner.y, corner.w) - _e382) - 1.0, (metal::max(corner.x, corner.z) + _e389) + 1.0, (metal::max(corner.y, corner.w) + _e396) + 1.0);
         }
     }
-    uint _e385 = u.row_base;
-    uint _e388 = override_of(r.row - _e385, row.x, u);
-    uint _e392 = u.row_base;
-    uint _e395 = override_of(r.row - _e392, row.y, u);
+    uint _e404 = u.row_base;
+    uint _e407 = override_of(r.row - _e404, row.x, u);
+    uint _e411 = u.row_base;
+    uint _e414 = override_of(r.row - _e411, row.y, u);
     if ((h & 64u) != 0u) {
         local_4 = (row.w & 1u) != 0u;
     } else {
         local_4 = false;
     }
     bool filled = local_4;
-    metal::float4 _e410 = rgba(_e388);
-    out.stroke = _e410;
-    metal::float4 _e413 = out.stroke;
-    metal::float4 _e417 = rgba(_e395);
-    out.base = filled ? _e417 : metal::float4(_e413.xyz, 0.0);
-    metal::float4 _e420 = p;
-    out.p = _e420;
-    float _e422 = radius;
-    float _e426 = chain;
-    out.m0_ = metal::float4(half_, _e422, static_cast<float>(cap == 1u), _e426);
-    metal::float4 _e429 = m1_;
-    out.m1_ = _e429;
-    float _e432 = m2_.x;
-    float _e434 = m2_.y;
-    float _e437 = m2_.z;
-    out.m2_ = metal::float4(_e432, _e434, (kind == 2u) ? _e437 : static_cast<float>(stroked), half_ * static_cast<float>(stroked));
-    metal::float4 _e445 = m3_;
-    out.m3_ = _e445;
+    metal::float4 _e429 = rgba(_e407);
+    out.stroke = _e429;
+    metal::float4 _e432 = out.stroke;
+    metal::float4 _e436 = rgba(_e414);
+    out.base = filled ? _e436 : metal::float4(_e432.xyz, 0.0);
+    metal::float4 _e439 = p;
+    out.p = _e439;
+    float _e441 = radius;
+    float _e445 = chain;
+    out.m0_ = metal::float4(half_2, _e441, static_cast<float>(cap == 1u), _e445);
+    metal::float4 _e448 = m1_;
+    out.m1_ = _e448;
+    float _e451 = m2_.x;
+    float _e453 = m2_.y;
+    float _e456 = m2_.z;
+    out.m2_ = metal::float4(_e451, _e453, (kind == 2u) ? _e456 : static_cast<float>(stroked), half_2 * static_cast<float>(stroked));
+    metal::float4 _e464 = m3_;
+    out.m3_ = _e464;
     out.k = metal::uint4(kind, static_cast<uint>(cap == 2u), r.look.y, r.look.z);
-    metal::float4 _e455 = box;
-    metal::float2 lo = metal::clamp(metal::floor(_e455.xy), metal::float2(0.0), metal::float2(16777216.0));
-    metal::float4 _e463 = box;
-    metal::float2 hi = metal::clamp(metal::ceil(_e463.zw), metal::float2(0.0), metal::float2(16777216.0));
-    metal::float2 at = metal::select(lo, hi, metal::bool2((vi & 1u) != 0u, (vi & 2u) != 0u));
-    metal::float2 _e484 = u.size;
-    out.position = metal::float4(((at / _e484) * metal::float2(2.0, -2.0)) + metal::float2(-1.0, 1.0), 0.0, 1.0);
-    Frag _e497 = out;
-    const auto _tmp_1 = _e497;
+    metal::float4 _e474 = box;
+    metal::float2 _e476 = screen(_e474.xy, u);
+    metal::float4 _e477 = box;
+    metal::float2 _e479 = screen(_e477.zy, u);
+    metal::float4 _e480 = box;
+    metal::float2 _e482 = screen(_e480.xw, u);
+    metal::float4 _e483 = box;
+    metal::float2 _e485 = screen(_e483.zw, u);
+    metal::float2 lo = metal::clamp(metal::floor(metal::min(metal::min(_e476, _e479), metal::min(_e482, _e485))), metal::float2(0.0), metal::float2(16777216.0));
+    metal::float2 hi = metal::clamp(metal::ceil(metal::max(metal::max(_e476, _e479), metal::max(_e482, _e485))), metal::float2(0.0), metal::float2(16777216.0));
+    metal::float2 at_1 = metal::select(lo, hi, metal::bool2((vi & 1u) != 0u, (vi & 2u) != 0u));
+    metal::float2 _e517 = u.size;
+    out.position = metal::float4(((at_1 / _e517) * metal::float2(2.0, -2.0)) + metal::float2(-1.0, 1.0), 0.0, 1.0);
+    Frag _e530 = out;
+    const auto _tmp_1 = _e530;
     return vsOutput { _tmp_1.position, _tmp_1.p, _tmp_1.m0_, _tmp_1.m1_, _tmp_1.m2_, _tmp_1.m3_, _tmp_1.stroke, _tmp_1.base, _tmp_1.k, _tmp_1.uv };
 }
 
@@ -458,7 +524,7 @@ uint naga_f2u32(float value) {
 
 
 struct fsInput {
-    metal::float4 p_1 [[user(loc0), flat]];
+    metal::float4 p_4 [[user(loc0), flat]];
     metal::float4 m0_ [[user(loc1), flat]];
     metal::float4 m1_1 [[user(loc2), flat]];
     metal::float4 m2_1 [[user(loc3), flat]];
@@ -479,7 +545,7 @@ fragment fsOutput fs(
 , device type_14 const& verts [[user(fake0)]]
 , constant _mslBufferSizes& _buffer_sizes [[user(fake0)]]
 ) {
-    const Frag in = { position, varyings_1.p_1, varyings_1.m0_, varyings_1.m1_1, varyings_1.m2_1, varyings_1.m3_1, varyings_1.stroke, varyings_1.base, varyings_1.k, varyings_1.uv };
+    const Frag in = { position, varyings_1.p_4, varyings_1.m0_, varyings_1.m1_1, varyings_1.m2_1, varyings_1.m3_1, varyings_1.stroke, varyings_1.base, varyings_1.k, varyings_1.uv };
     bool local_5 = {};
     bool local_6 = {};
     bool local_7 = {};
@@ -487,67 +553,93 @@ fragment fsOutput fs(
     bool local_9 = {};
     bool local_10 = {};
     bool local_11 = {};
+    float keep = {};
     metal::float4 colour = {};
     float alpha = 0.0;
-    float dash = 1.0;
     bool local_12 = {};
     float d = 0.0;
     bool local_13 = {};
     bool local_14 = {};
     bool local_15 = {};
-    float px_2 = in.position.x;
-    float py_2 = in.position.y;
-    float _e8 = u.rect.x;
-    if (px_2 >= _e8) {
-        float _e15 = u.rect.z;
-        local_5 = px_2 < _e15;
+    float sx = in.position.x;
+    float sy = in.position.y;
+    float _e8 = u.inv.x;
+    float _e13 = u.inv.z;
+    float _e19 = u.inv_t.x;
+    float px_2 = ((_e8 * sx) + (_e13 * sy)) + _e19;
+    float _e24 = u.inv.y;
+    float _e29 = u.inv.w;
+    float _e35 = u.inv_t.y;
+    float py_2 = ((_e24 * sx) + (_e29 * sy)) + _e35;
+    float _e40 = u.rect.x;
+    if (px_2 >= _e40) {
+        float _e47 = u.rect.z;
+        local_5 = px_2 < _e47;
     } else {
         local_5 = false;
     }
-    bool _e18 = local_5;
-    if (_e18) {
-        float _e24 = u.rect.y;
-        local_6 = py_2 >= _e24;
+    bool _e50 = local_5;
+    if (_e50) {
+        float _e56 = u.rect.y;
+        local_6 = py_2 >= _e56;
     } else {
         local_6 = false;
     }
-    bool _e27 = local_6;
-    if (_e27) {
-        float _e33 = u.rect.w;
-        local_7 = py_2 < _e33;
+    bool _e59 = local_6;
+    if (_e59) {
+        float _e65 = u.rect.w;
+        local_7 = py_2 < _e65;
     } else {
         local_7 = false;
     }
-    bool _e36 = local_7;
-    if (_e36) {
-        float _e42 = u.clip.x;
-        local_8 = px_2 >= _e42;
+    bool _e68 = local_7;
+    if (_e68) {
+        float _e74 = u.clip.x;
+        local_8 = sx >= _e74;
     } else {
         local_8 = false;
     }
-    bool _e45 = local_8;
-    if (_e45) {
-        float _e51 = u.clip.z;
-        local_9 = px_2 <= _e51;
+    bool _e77 = local_8;
+    if (_e77) {
+        float _e83 = u.clip.z;
+        local_9 = sx <= _e83;
     } else {
         local_9 = false;
     }
-    bool _e54 = local_9;
-    if (_e54) {
-        float _e60 = u.clip.y;
-        local_10 = py_2 >= _e60;
+    bool _e86 = local_9;
+    if (_e86) {
+        float _e92 = u.clip.y;
+        local_10 = sy >= _e92;
     } else {
         local_10 = false;
     }
-    bool _e63 = local_10;
-    if (_e63) {
-        float _e69 = u.clip.w;
-        local_11 = py_2 <= _e69;
+    bool _e95 = local_10;
+    if (_e95) {
+        float _e101 = u.clip.w;
+        local_11 = sy <= _e101;
     } else {
         local_11 = false;
     }
     bool inside = local_11;
-    float half_1 = in.m0_.x;
+    keep = static_cast<float>(inside);
+    uint _e109 = u.rounded;
+    if (_e109 != 0u) {
+        float _e114 = u.inv_scale;
+        float _e119 = u.clip_box.x;
+        float _e123 = u.inv_scale;
+        float _e128 = u.clip_box.y;
+        metal::float2 l_1 = metal::float2((sx * _e114) - _e119, (sy * _e123) - _e128);
+        metal::float4 _e133 = u.clip_box;
+        metal::float4 _e137 = u.clip_box;
+        metal::float4 _e141 = u.radii;
+        float _e142 = corner_radius(l_1, _e137.zw, _e141);
+        float _e143 = rounded_box(l_1, _e133.zw, _e142);
+        float _e146 = u.px_scale;
+        float corner_1 = _e143 * _e146;
+        float _e148 = keep;
+        keep = _e148 * metal::min(metal::max(0.5 - corner_1, 0.0), 1.0);
+    }
+    float half_3 = in.m0_.x;
     float square = in.m0_.z;
     float hw = in.m2_.w;
     colour = in.stroke;
@@ -562,19 +654,13 @@ fragment fsOutput fs(
         float t_1 = (ox_1 * ux) + (oy_1 * uy);
         float along = metal::abs(t_1 - h_1);
         float across = metal::abs((oy_1 * ux) - (ox_1 * uy));
-        float _e115 = len2_(metal::max(along - h_1, 0.0), across);
-        float capsule = _e115 - half_1;
-        float _e121 = box_dist((along - h_1) - (half_1 * square), across - half_1);
-        float d_3 = round ? capsule : _e121;
-        float period = in.m1_.y;
-        if (period != 0.0) {
-            float at_1 = t_1 + in.m0_.w;
-            float m_1 = at_1 - (metal::floor(at_1 / period) * period);
-            dash = metal::min(metal::max(metal::min(m_1, in.m1_.x - m_1) + 0.5, 0.0), 1.0);
-        }
-        float _e146 = coverage(d_3);
-        float _e147 = dash;
-        alpha = _e146 * _e147;
+        float _e198 = len2_(metal::max(along - h_1, 0.0), across);
+        float capsule = _e198 - half_3;
+        float _e204 = box_dist((along - h_1) - (half_3 * square), across - half_3);
+        float d_3 = round ? capsule : _e204;
+        float _e206 = coverage(d_3);
+        float _e214 = dash_cover(t_1 + in.m0_.w, in.m1_.x, in.m1_.y);
+        alpha = _e206 * _e214;
     } else {
         if (kind_1 == 2u) {
             float lx = px_2 - in.p.x;
@@ -586,36 +672,38 @@ fragment fsOutput fs(
             float sa = in.m2_.x;
             float ca = in.m2_.y;
             float radius_1 = in.m0_.y;
-            float _e174 = len2_(x_1, y_1);
-            float ring = metal::abs(_e174 - radius_1) - half_1;
+            float _e241 = len2_(x_1, y_1);
+            float ring = metal::abs(_e241 - radius_1) - half_3;
             float past = (in.m2_.z != 0.0) ? -1000000000000000000000000000000.0 : ((x_1 * ca) - (y_1 * sa));
-            float _e191 = len2_(x_1 - (sa * radius_1), y_1 - (ca * radius_1));
-            float disc = _e191 - half_1;
-            float flat_end = metal::max(ring, past - (half_1 * square));
-            float _e200 = coverage(round ? ((past > 0.0) ? disc : ring) : flat_end);
-            alpha = _e200;
+            float _e258 = len2_(x_1 - (sa * radius_1), y_1 - (ca * radius_1));
+            float disc = _e258 - half_3;
+            float flat_end = metal::max(ring, past - (half_3 * square));
+            float along_1 = ((metal::atan2((ly * mc) - (lx * ms), y_1) + in.m3_.x) * radius_1) + in.m0_.w;
+            float _e278 = coverage(round ? ((past > 0.0) ? disc : ring) : flat_end);
+            float _e283 = dash_cover(along_1, in.m1_.x, in.m1_.y);
+            alpha = _e278 * _e283;
         } else {
             if (!((kind_1 == 1u))) {
                 local_12 = kind_1 == 3u;
             } else {
                 local_12 = true;
             }
-            bool _e209 = local_12;
-            if (_e209) {
+            bool _e293 = local_12;
+            if (_e293) {
                 if (kind_1 == 1u) {
-                    float _e214 = rect_dist(px_2, py_2, in);
-                    d = _e214;
+                    float _e298 = rect_dist(px_2, py_2, in);
+                    d = _e298;
                 } else {
-                    float _e219 = polygon_dist(px_2, py_2, in.k.z, in.k.w, u, verts, _buffer_sizes);
-                    d = _e219;
+                    float _e303 = polygon_dist(px_2, py_2, in.k.z, in.k.w, u, verts, _buffer_sizes);
+                    d = _e303;
                 }
-                float _e220 = d;
-                float _e222 = coverage(_e220 - hw);
-                float _e223 = d;
-                float _e225 = coverage(_e223 + hw);
-                float on_1 = (1.0 - _e225) * in.m2_.z;
-                colour = in.base + ((in.stroke - in.base) * on_1);
-                alpha = _e222;
+                float _e304 = d;
+                float _e306 = coverage(_e304 - hw);
+                float _e307 = d;
+                float _e309 = coverage(_e307 + hw);
+                float on_3 = (1.0 - _e309) * in.m2_.z;
+                colour = in.base + ((in.stroke - in.base) * on_3);
+                alpha = _e306;
             } else {
                 float dx_2 = px_2 - in.p.x;
                 float dy_2 = py_2 - in.p.y;
@@ -628,14 +716,14 @@ fragment fsOutput fs(
                 } else {
                     local_13 = false;
                 }
-                bool _e261 = local_13;
-                if (_e261) {
+                bool _e345 = local_13;
+                if (_e345) {
                     local_14 = ly_1 >= 0.0;
                 } else {
                     local_14 = false;
                 }
-                bool _e267 = local_14;
-                if (_e267) {
+                bool _e351 = local_14;
+                if (_e351) {
                     local_15 = ly_1 < in.p.w;
                 } else {
                     local_15 = false;
@@ -646,16 +734,17 @@ fragment fsOutput fs(
                 float tv = in.uv.y + (ly_1 * in.m3_.y);
                 uint tx = naga_f2u32(metal::min(metal::max(metal::floor(tu * n_1.x), 0.0), n_1.x - 1.0));
                 uint ty = naga_f2u32(metal::min(metal::max(metal::floor(tv * n_1.y), 0.0), n_1.y - 1.0));
-                metal::float4 _e314 = atlas.read(metal::uint2(metal::uint2(tx, ty)), 0);
-                colour = in.stroke * _e314;
+                metal::float4 _e398 = atlas.read(metal::uint2(metal::uint2(tx, ty)), 0);
+                colour = in.stroke * _e398;
                 alpha = hit ? 1.0 : 0.0;
             }
         }
     }
-    float _e320 = colour.w;
-    float _e321 = alpha;
-    float _e324 = u.opacity;
-    float a = metal::clamp(_e320 * (_e321 * _e324), 0.0, 1.0) * static_cast<float>(inside);
-    metal::float4 _e332 = colour;
-    return fsOutput { metal::float4(metal::clamp(_e332.xyz, metal::float3(0.0), metal::float3(1.0)) * a, a) };
+    float _e404 = colour.w;
+    float _e405 = alpha;
+    float _e406 = keep;
+    float _e410 = u.opacity;
+    float a = metal::clamp(_e404 * ((_e405 * _e406) * _e410), 0.0, 1.0);
+    metal::float4 _e416 = colour;
+    return fsOutput { metal::float4(metal::clamp(_e416.xyz, metal::float3(0.0), metal::float3(1.0)) * a, a) };
 }

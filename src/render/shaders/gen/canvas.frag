@@ -19,6 +19,15 @@ struct Draw {
     uint vert_len;
     uint overrides;
     uint layers;
+    vec4 inv;
+    vec2 inv_t;
+    vec2 fwd_t;
+    vec4 fwd;
+    vec4 radii;
+    vec4 clip_box;
+    float px_scale;
+    float inv_scale;
+    uint rounded;
     uvec4 palette[256];
     uvec4 marks[64];
 };
@@ -106,8 +115,38 @@ uint override_of(uint i, uint colour_1) {
     return _e27;
 }
 
+vec2 screen(vec2 p_1) {
+    float _e4 = _group_0_binding_0_fs.fwd.x;
+    float _e10 = _group_0_binding_0_fs.fwd.z;
+    float _e17 = _group_0_binding_0_fs.fwd_t.x;
+    float _e22 = _group_0_binding_0_fs.fwd.y;
+    float _e28 = _group_0_binding_0_fs.fwd.w;
+    float _e35 = _group_0_binding_0_fs.fwd_t.y;
+    return vec2((((_e4 * p_1.x) + (_e10 * p_1.y)) + _e17), (((_e22 * p_1.x) + (_e28 * p_1.y)) + _e35));
+}
+
+float corner_radius(vec2 p_2, vec2 half_, vec4 radii) {
+    float right = ((p_2.y > 0.0) ? radii.z : radii.y);
+    float left = ((p_2.y > 0.0) ? radii.w : radii.x);
+    return min(((p_2.x > 0.0) ? right : left), min(half_.x, half_.y));
+}
+
 float len2_(float x, float y) {
     return sqrt(((x * x) + (y * y)));
+}
+
+float rounded_box(vec2 p_3, vec2 half_1, float r_1) {
+    vec2 q = ((abs(p_3) - half_1) + vec2(r_1));
+    float _e13 = len2_(max(q.x, 0.0), max(q.y, 0.0));
+    return ((_e13 + min(max(q.x, q.y), 0.0)) - r_1);
+}
+
+float dash_cover(float at, float on, float period) {
+    if ((period == 0.0)) {
+        return 1.0;
+    }
+    float m = (at - (floor((at / period)) * period));
+    return min(max((min(m, (on - m)) + 0.5), 0.0), 1.0);
 }
 
 float box_dist(float qx, float qy) {
@@ -122,11 +161,11 @@ float coverage(float d_1) {
 float rect_dist(float px, float py, Frag in_1) {
     float hx = (abs((in_1.p.z - in_1.p.x)) * 0.5);
     float hy = (abs((in_1.p.w - in_1.p.y)) * 0.5);
-    float r_1 = min(in_1.m0_.y, min(hx, hy));
-    float qx_1 = ((abs((px - ((in_1.p.x + in_1.p.z) * 0.5))) - hx) + r_1);
-    float qy_1 = ((abs((py - ((in_1.p.y + in_1.p.w) * 0.5))) - hy) + r_1);
+    float r_2 = min(in_1.m0_.y, min(hx, hy));
+    float qx_1 = ((abs((px - ((in_1.p.x + in_1.p.z) * 0.5))) - hx) + r_2);
+    float qy_1 = ((abs((py - ((in_1.p.y + in_1.p.w) * 0.5))) - hy) + r_2);
     float _e45 = box_dist(qx_1, qy_1);
-    return (_e45 - r_1);
+    return (_e45 - r_2);
 }
 
 ivec2 vert(uint i_1) {
@@ -192,7 +231,7 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
             float dy = (oy - (ey * t));
             float _e76 = best;
             best = min(_e76, ((dx * dx) + (dy * dy)));
-            float left = ((ex * oy) - (ey * ox));
+            float left_1 = ((ex * oy) - (ey * ox));
             float _e84 = ay;
             if ((_e84 <= py_1)) {
                 local_16 = (_e48 > py_1);
@@ -201,7 +240,7 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
             }
             bool _e90 = local_16;
             if (_e90) {
-                local_17 = (left > 0.0);
+                local_17 = (left_1 > 0.0);
             } else {
                 local_17 = false;
             }
@@ -214,7 +253,7 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
             }
             bool _e103 = local_18;
             if (_e103) {
-                local_19 = (left < 0.0);
+                local_19 = (left_1 < 0.0);
             } else {
                 local_19 = false;
             }
@@ -240,67 +279,93 @@ void main() {
     bool local_9 = false;
     bool local_10 = false;
     bool local_11 = false;
+    float keep = 0.0;
     vec4 colour = vec4(0.0);
     float alpha = 0.0;
-    float dash = 1.0;
     bool local_12 = false;
     float d = 0.0;
     bool local_13 = false;
     bool local_14 = false;
     bool local_15 = false;
-    float px_2 = in_.position.x;
-    float py_2 = in_.position.y;
-    float _e8 = _group_0_binding_0_fs.rect.x;
-    if ((px_2 >= _e8)) {
-        float _e15 = _group_0_binding_0_fs.rect.z;
-        local_5 = (px_2 < _e15);
+    float sx = in_.position.x;
+    float sy = in_.position.y;
+    float _e8 = _group_0_binding_0_fs.inv.x;
+    float _e13 = _group_0_binding_0_fs.inv.z;
+    float _e19 = _group_0_binding_0_fs.inv_t.x;
+    float px_2 = (((_e8 * sx) + (_e13 * sy)) + _e19);
+    float _e24 = _group_0_binding_0_fs.inv.y;
+    float _e29 = _group_0_binding_0_fs.inv.w;
+    float _e35 = _group_0_binding_0_fs.inv_t.y;
+    float py_2 = (((_e24 * sx) + (_e29 * sy)) + _e35);
+    float _e40 = _group_0_binding_0_fs.rect.x;
+    if ((px_2 >= _e40)) {
+        float _e47 = _group_0_binding_0_fs.rect.z;
+        local_5 = (px_2 < _e47);
     } else {
         local_5 = false;
     }
-    bool _e18 = local_5;
-    if (_e18) {
-        float _e24 = _group_0_binding_0_fs.rect.y;
-        local_6 = (py_2 >= _e24);
+    bool _e50 = local_5;
+    if (_e50) {
+        float _e56 = _group_0_binding_0_fs.rect.y;
+        local_6 = (py_2 >= _e56);
     } else {
         local_6 = false;
     }
-    bool _e27 = local_6;
-    if (_e27) {
-        float _e33 = _group_0_binding_0_fs.rect.w;
-        local_7 = (py_2 < _e33);
+    bool _e59 = local_6;
+    if (_e59) {
+        float _e65 = _group_0_binding_0_fs.rect.w;
+        local_7 = (py_2 < _e65);
     } else {
         local_7 = false;
     }
-    bool _e36 = local_7;
-    if (_e36) {
-        float _e42 = _group_0_binding_0_fs.clip.x;
-        local_8 = (px_2 >= _e42);
+    bool _e68 = local_7;
+    if (_e68) {
+        float _e74 = _group_0_binding_0_fs.clip.x;
+        local_8 = (sx >= _e74);
     } else {
         local_8 = false;
     }
-    bool _e45 = local_8;
-    if (_e45) {
-        float _e51 = _group_0_binding_0_fs.clip.z;
-        local_9 = (px_2 <= _e51);
+    bool _e77 = local_8;
+    if (_e77) {
+        float _e83 = _group_0_binding_0_fs.clip.z;
+        local_9 = (sx <= _e83);
     } else {
         local_9 = false;
     }
-    bool _e54 = local_9;
-    if (_e54) {
-        float _e60 = _group_0_binding_0_fs.clip.y;
-        local_10 = (py_2 >= _e60);
+    bool _e86 = local_9;
+    if (_e86) {
+        float _e92 = _group_0_binding_0_fs.clip.y;
+        local_10 = (sy >= _e92);
     } else {
         local_10 = false;
     }
-    bool _e63 = local_10;
-    if (_e63) {
-        float _e69 = _group_0_binding_0_fs.clip.w;
-        local_11 = (py_2 <= _e69);
+    bool _e95 = local_10;
+    if (_e95) {
+        float _e101 = _group_0_binding_0_fs.clip.w;
+        local_11 = (sy <= _e101);
     } else {
         local_11 = false;
     }
     bool inside = local_11;
-    float half_ = in_.m0_.x;
+    keep = float(inside);
+    uint _e109 = _group_0_binding_0_fs.rounded;
+    if ((_e109 != 0u)) {
+        float _e114 = _group_0_binding_0_fs.inv_scale;
+        float _e119 = _group_0_binding_0_fs.clip_box.x;
+        float _e123 = _group_0_binding_0_fs.inv_scale;
+        float _e128 = _group_0_binding_0_fs.clip_box.y;
+        vec2 l = vec2(((sx * _e114) - _e119), ((sy * _e123) - _e128));
+        vec4 _e133 = _group_0_binding_0_fs.clip_box;
+        vec4 _e137 = _group_0_binding_0_fs.clip_box;
+        vec4 _e141 = _group_0_binding_0_fs.radii;
+        float _e142 = corner_radius(l, _e137.zw, _e141);
+        float _e143 = rounded_box(l, _e133.zw, _e142);
+        float _e146 = _group_0_binding_0_fs.px_scale;
+        float corner = (_e143 * _e146);
+        float _e148 = keep;
+        keep = (_e148 * min(max((0.5 - corner), 0.0), 1.0));
+    }
+    float half_2 = in_.m0_.x;
     float square = in_.m0_.z;
     float hw = in_.m2_.w;
     colour = in_.stroke;
@@ -315,19 +380,13 @@ void main() {
         float t_1 = ((ox_1 * ux) + (oy_1 * uy));
         float along = abs((t_1 - h));
         float across = abs(((oy_1 * ux) - (ox_1 * uy)));
-        float _e115 = len2_(max((along - h), 0.0), across);
-        float capsule = (_e115 - half_);
-        float _e121 = box_dist(((along - h) - (half_ * square)), (across - half_));
-        float d_3 = (round_ ? capsule : _e121);
-        float period = in_.m1_.y;
-        if ((period != 0.0)) {
-            float at = (t_1 + in_.m0_.w);
-            float m = (at - (floor((at / period)) * period));
-            dash = min(max((min(m, (in_.m1_.x - m)) + 0.5), 0.0), 1.0);
-        }
-        float _e146 = coverage(d_3);
-        float _e147 = dash;
-        alpha = (_e146 * _e147);
+        float _e198 = len2_(max((along - h), 0.0), across);
+        float capsule = (_e198 - half_2);
+        float _e204 = box_dist(((along - h) - (half_2 * square)), (across - half_2));
+        float d_3 = (round_ ? capsule : _e204);
+        float _e206 = coverage(d_3);
+        float _e214 = dash_cover((t_1 + in_.m0_.w), in_.m1_.x, in_.m1_.y);
+        alpha = (_e206 * _e214);
     } else {
         if ((kind == 2u)) {
             float lx = (px_2 - in_.p.x);
@@ -339,36 +398,38 @@ void main() {
             float sa = in_.m2_.x;
             float ca = in_.m2_.y;
             float radius_1 = in_.m0_.y;
-            float _e174 = len2_(x_2, y_2);
-            float ring = (abs((_e174 - radius_1)) - half_);
+            float _e241 = len2_(x_2, y_2);
+            float ring = (abs((_e241 - radius_1)) - half_2);
             float past = ((in_.m2_.z != 0.0) ? -1e30 : ((x_2 * ca) - (y_2 * sa)));
-            float _e191 = len2_((x_2 - (sa * radius_1)), (y_2 - (ca * radius_1)));
-            float disc = (_e191 - half_);
-            float flat_end = max(ring, (past - (half_ * square)));
-            float _e200 = coverage((round_ ? ((past > 0.0) ? disc : ring) : flat_end));
-            alpha = _e200;
+            float _e258 = len2_((x_2 - (sa * radius_1)), (y_2 - (ca * radius_1)));
+            float disc = (_e258 - half_2);
+            float flat_end = max(ring, (past - (half_2 * square)));
+            float along_1 = (((atan(((ly * mc) - (lx * ms)), y_2) + in_.m3_.x) * radius_1) + in_.m0_.w);
+            float _e278 = coverage((round_ ? ((past > 0.0) ? disc : ring) : flat_end));
+            float _e283 = dash_cover(along_1, in_.m1_.x, in_.m1_.y);
+            alpha = (_e278 * _e283);
         } else {
             if (!((kind == 1u))) {
                 local_12 = (kind == 3u);
             } else {
                 local_12 = true;
             }
-            bool _e209 = local_12;
-            if (_e209) {
+            bool _e293 = local_12;
+            if (_e293) {
                 if ((kind == 1u)) {
-                    float _e214 = rect_dist(px_2, py_2, in_);
-                    d = _e214;
+                    float _e298 = rect_dist(px_2, py_2, in_);
+                    d = _e298;
                 } else {
-                    float _e219 = polygon_dist(px_2, py_2, in_.k.z, in_.k.w);
-                    d = _e219;
+                    float _e303 = polygon_dist(px_2, py_2, in_.k.z, in_.k.w);
+                    d = _e303;
                 }
-                float _e220 = d;
-                float _e222 = coverage((_e220 - hw));
-                float _e223 = d;
-                float _e225 = coverage((_e223 + hw));
-                float on = ((1.0 - _e225) * in_.m2_.z);
-                colour = (in_.base + ((in_.stroke - in_.base) * on));
-                alpha = _e222;
+                float _e304 = d;
+                float _e306 = coverage((_e304 - hw));
+                float _e307 = d;
+                float _e309 = coverage((_e307 + hw));
+                float on_1 = ((1.0 - _e309) * in_.m2_.z);
+                colour = (in_.base + ((in_.stroke - in_.base) * on_1));
+                alpha = _e306;
             } else {
                 float dx_1 = (px_2 - in_.p.x);
                 float dy_1 = (py_2 - in_.p.y);
@@ -381,14 +442,14 @@ void main() {
                 } else {
                     local_13 = false;
                 }
-                bool _e261 = local_13;
-                if (_e261) {
+                bool _e345 = local_13;
+                if (_e345) {
                     local_14 = (ly_1 >= 0.0);
                 } else {
                     local_14 = false;
                 }
-                bool _e267 = local_14;
-                if (_e267) {
+                bool _e351 = local_14;
+                if (_e351) {
                     local_15 = (ly_1 < in_.p.w);
                 } else {
                     local_15 = false;
@@ -399,18 +460,19 @@ void main() {
                 float tv = (in_.uv.y + (ly_1 * in_.m3_.y));
                 uint tx = uint(min(max(floor((tu * n_1.x)), 0.0), (n_1.x - 1.0)));
                 uint ty = uint(min(max(floor((tv * n_1.y)), 0.0), (n_1.y - 1.0)));
-                vec4 _e314 = texelFetch(_group_1_binding_0_fs, ivec2(uvec2(tx, ty)), 0);
-                colour = (in_.stroke * _e314);
+                vec4 _e398 = texelFetch(_group_1_binding_0_fs, ivec2(uvec2(tx, ty)), 0);
+                colour = (in_.stroke * _e398);
                 alpha = (hit ? 1.0 : 0.0);
             }
         }
     }
-    float _e320 = colour.w;
-    float _e321 = alpha;
-    float _e324 = _group_0_binding_0_fs.opacity;
-    float a = (clamp((_e320 * (_e321 * _e324)), 0.0, 1.0) * float(inside));
-    vec4 _e332 = colour;
-    _fs2p_location0 = vec4((clamp(_e332.xyz, vec3(0.0), vec3(1.0)) * a), a);
+    float _e404 = colour.w;
+    float _e405 = alpha;
+    float _e406 = keep;
+    float _e410 = _group_0_binding_0_fs.opacity;
+    float a = clamp((_e404 * ((_e405 * _e406) * _e410)), 0.0, 1.0);
+    vec4 _e416 = colour;
+    _fs2p_location0 = vec4((clamp(_e416.xyz, vec3(0.0), vec3(1.0)) * a), a);
     return;
 }
 

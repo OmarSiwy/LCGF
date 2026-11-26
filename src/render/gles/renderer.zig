@@ -321,7 +321,7 @@ test "renderer: a canvas re-sends only appended rows, and appended vertices by t
     defer testing.allocator.destroy(st);
     st.load();
     const s = &st.shapes;
-    const uniforms = lcgf.canvas_shader.Uniforms.headBytes(sc.palette.layers.len) + 16;
+    const uniforms = 2 * lcgf.canvas_shader.Uniforms.headBytes(sc.palette.layers.len) + 16;
     const row_bytes = lcgf.canvas_shader.verts_width * 4;
     r.prepare({}, &st.draw, .{}, sc.viewport, 1);
     s.clearDirty();

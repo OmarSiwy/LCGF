@@ -138,19 +138,23 @@ pub fn main(init: std.process.Init) !void {
 fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const u8, fb: *sw.Framebuffer, clear: Color, atlas: sw.Image) !void {
     const canvas = lcgf.canvas;
     const DrawList = lcgf.draw_list.DrawList;
-    var node: [9]f32 = undefined;
-    var cam: canvas.Camera = .{};
+    // One command per `canvas` line; the `camera`, `range` and `override` lines after it are its.
+    const Cmd = struct { node: [19]f32 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0 }, cam: canvas.Camera = .{}, ranges: std.ArrayList(canvas.Range) = .empty, overrides: std.ArrayList(canvas.Override) = .empty };
+    var cmd_list: std.ArrayList(Cmd) = .empty;
     var pal: canvas.Palette = .{ .layers = &.{} };
     var layers: std.ArrayList(canvas.Layer) = .empty;
-    var ranges: std.ArrayList(canvas.Range) = .empty;
-    var overrides: std.ArrayList(canvas.Override) = .empty;
     var lines = std.mem.tokenizeScalar(u8, cmds, '\n');
     while (lines.next()) |line| {
         var f = std.mem.tokenizeScalar(u8, line, ' ');
         const key = f.next().?;
         if (std.mem.eql(u8, key, "canvas")) {
-            for (&node) |*x| x.* = try std.fmt.parseFloat(f32, f.next().?);
+            try cmd_list.append(gpa, .{});
+            const c = &cmd_list.items[cmd_list.items.len - 1];
+            // rect, clip, opacity, then optionally the transform and the clip's radii.
+            var i: usize = 0;
+            while (f.next()) |x| : (i += 1) c.node[i] = try std.fmt.parseFloat(f32, x);
         } else if (std.mem.eql(u8, key, "camera")) {
+            const cam = &cmd_list.items[cmd_list.items.len - 1].cam;
             cam.origin = .{ try std.fmt.parseInt(i64, f.next().?, 10), try std.fmt.parseInt(i64, f.next().?, 10) };
             cam.scale = try std.fmt.parseFloat(f32, f.next().?);
             cam.offset = .{ try std.fmt.parseFloat(f32, f.next().?), try std.fmt.parseFloat(f32, f.next().?) };
@@ -165,14 +169,15 @@ fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const
                 .flags = try std.fmt.parseInt(u32, f.next().?, 10),
             });
         } else if (std.mem.eql(u8, key, "range")) {
-            try ranges.append(gpa, .{ .first = try std.fmt.parseInt(u32, f.next().?, 10), .count = try std.fmt.parseInt(u32, f.next().?, 10) });
+            try cmd_list.items[cmd_list.items.len - 1].ranges.append(gpa, .{ .first = try std.fmt.parseInt(u32, f.next().?, 10), .count = try std.fmt.parseInt(u32, f.next().?, 10) });
         } else if (std.mem.eql(u8, key, "override")) {
             const first = try std.fmt.parseInt(u32, f.next().?, 10);
             const count = try std.fmt.parseInt(u32, f.next().?, 10);
-            try overrides.append(gpa, .{ .range = .{ .first = first, .count = count }, .color = try std.fmt.parseInt(u32, f.next().?, 10) });
+            try cmd_list.items[cmd_list.items.len - 1].overrides.append(gpa, .{ .range = .{ .first = first, .count = count }, .color = try std.fmt.parseInt(u32, f.next().?, 10) });
         }
     }
     pal.layers = layers.items;
+    const nc: u32 = @intCast(cmd_list.items.len);
 
     const rows = try dir.readFileAlloc(io, "canvas.bin", gpa, .limited(1 << 26));
     const verts = try dir.readFileAlloc(io, "verts.bin", gpa, .limited(1 << 26));
@@ -190,21 +195,22 @@ fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const
     s.len = n;
     s.vert_len = nv;
 
-    const bytes = comptime blk: {
-        var counter: lcgf.mem.Carver = .{ .buf = null };
-        _ = DrawList.init(&counter, 1, 1, 1);
-        break :blk counter.off;
-    };
-    var list_carver: lcgf.mem.Carver = .{ .buf = try gpa.alignedAlloc(u8, A, bytes) };
-    var list = DrawList.init(&list_carver, 1, 1, 1);
-    var canvases = [1]lcgf.draw_list.CanvasDraw{.{ .instances = &s, .camera = cam, .ranges = ranges.items, .palette = &pal, .overrides = overrides.items }};
-    list.canvases = &canvases;
-    list.customs[0] = .{ .rect = node[0..4].*, .clip = node[4..8].*, .data = 0, .id = 0, .node = 0, .opacity = node[8] };
-    list.custom_len = 1;
-    list.cmd.kind[0] = @backingInt(DrawList.Kind.canvas);
-    list.cmd.first[0] = 0;
-    list.cmd.count[0] = 1;
-    list.cmd_len = 1;
+    var counter: lcgf.mem.Carver = .{ .buf = null };
+    _ = DrawList.init(&counter, 1, 1, nc);
+    var list_carver: lcgf.mem.Carver = .{ .buf = try gpa.alignedAlloc(u8, A, counter.off) };
+    var list = DrawList.init(&list_carver, 1, 1, nc);
+    const canvases = try gpa.alloc(lcgf.draw_list.CanvasDraw, nc);
+    for (cmd_list.items, 0..) |c, k| {
+        const nd = c.node;
+        canvases[k] = .{ .instances = &s, .camera = c.cam, .ranges = c.ranges.items, .palette = &pal, .overrides = c.overrides.items };
+        list.customs[k] = .{ .rect = nd[0..4].*, .clip = nd[4..8].*, .data = 0, .id = 0, .node = @intCast(k), .opacity = nd[8], .xform = nd[9..15].*, .clip_radii = nd[15..19].* };
+        list.cmd.kind[k] = @backingInt(DrawList.Kind.canvas);
+        list.cmd.first[k] = @intCast(k);
+        list.cmd.count[k] = 1;
+    }
+    list.canvases = canvases;
+    list.custom_len = nc;
+    list.cmd_len = nc;
 
     var pool: sw.bands.Pool = undefined;
     try pool.init(io, 3);

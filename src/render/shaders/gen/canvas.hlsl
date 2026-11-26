@@ -14,6 +14,16 @@ struct Draw {
     uint vert_len;
     uint overrides;
     uint layers;
+    float4 inv;
+    float2 inv_t;
+    float2 fwd_t;
+    float4 fwd;
+    float4 radii;
+    float4 clip_box;
+    float px_scale;
+    float inv_scale;
+    uint rounded;
+    int _pad24_0;
     uint4 palette[256];
     uint4 marks[64];
 };
@@ -42,7 +52,7 @@ Texture2D<float4> atlas : register(t0, space1);
 ByteAddressBuffer verts : register(t1);
 
 struct VertexOutput_vs {
-    nointerpolation float4 p_1 : LOC0;
+    nointerpolation float4 p_4 : LOC0;
     nointerpolation float4 m0_ : LOC1;
     nointerpolation float4 m1_1 : LOC2;
     nointerpolation float4 m2_1 : LOC3;
@@ -55,7 +65,7 @@ struct VertexOutput_vs {
 };
 
 struct FragmentInput_fs {
-    nointerpolation float4 p_2 : LOC0;
+    nointerpolation float4 p_5 : LOC0;
     nointerpolation float4 m0_1 : LOC1;
     nointerpolation float4 m1_2 : LOC2;
     nointerpolation float4 m2_2 : LOC3;
@@ -126,9 +136,43 @@ uint override_of(uint i, uint colour_1)
     return _e27;
 }
 
+float2 screen(float2 p_1)
+{
+    float _e4 = u.fwd.x;
+    float _e10 = u.fwd.z;
+    float _e17 = u.fwd_t.x;
+    float _e22 = u.fwd.y;
+    float _e28 = u.fwd.w;
+    float _e35 = u.fwd_t.y;
+    return float2((((_e4 * p_1.x) + (_e10 * p_1.y)) + _e17), (((_e22 * p_1.x) + (_e28 * p_1.y)) + _e35));
+}
+
+float corner_radius(float2 p_2, float2 half_, float4 radii)
+{
+    float right = ((p_2.y > 0.0) ? radii.z : radii.y);
+    float left = ((p_2.y > 0.0) ? radii.w : radii.x);
+    return min(((p_2.x > 0.0) ? right : left), min(half_.x, half_.y));
+}
+
 float len2_(float x, float y)
 {
     return sqrt(((x * x) + (y * y)));
+}
+
+float rounded_box(float2 p_3, float2 half_1, float r_1)
+{
+    float2 q = ((abs(p_3) - half_1) + (r_1).xx);
+    const float _e13 = len2_(max(q.x, 0.0), max(q.y, 0.0));
+    return ((_e13 + min(max(q.x, q.y), 0.0)) - r_1);
+}
+
+float dash_cover(float at, float on, float period)
+{
+    if ((period == 0.0)) {
+        return 1.0;
+    }
+    float m = (at - (floor((at / period)) * period));
+    return min(max((min(m, (on - m)) + 0.5), 0.0), 1.0);
 }
 
 float box_dist(float qx, float qy)
@@ -146,11 +190,11 @@ float rect_dist(float px, float py, Frag in_1)
 {
     float hx = (abs((in_1.p.z - in_1.p.x)) * 0.5);
     float hy = (abs((in_1.p.w - in_1.p.y)) * 0.5);
-    float r_1 = min(in_1.m0_.y, min(hx, hy));
-    float qx_1 = ((abs((px - ((in_1.p.x + in_1.p.z) * 0.5))) - hx) + r_1);
-    float qy_1 = ((abs((py - ((in_1.p.y + in_1.p.w) * 0.5))) - hy) + r_1);
+    float r_2 = min(in_1.m0_.y, min(hx, hy));
+    float qx_1 = ((abs((px - ((in_1.p.x + in_1.p.z) * 0.5))) - hx) + r_2);
+    float qy_1 = ((abs((py - ((in_1.p.y + in_1.p.w) * 0.5))) - hy) + r_2);
     const float _e45 = box_dist(qx_1, qy_1);
-    return (_e45 - r_1);
+    return (_e45 - r_2);
 }
 
 int2 vert(uint i_1)
@@ -218,7 +262,7 @@ float polygon_dist(float px_1, float py_1, uint first, uint count)
             float dy = (oy - (ey * t));
             float _e76 = best;
             best = min(_e76, ((dx * dx) + (dy * dy)));
-            float left = ((ex * oy) - (ey * ox));
+            float left_1 = ((ex * oy) - (ey * ox));
             float _e84 = ay;
             if ((_e84 <= py_1)) {
                 local_16 = (_e48 > py_1);
@@ -227,7 +271,7 @@ float polygon_dist(float px_1, float py_1, uint first, uint count)
             }
             bool _e90 = local_16;
             if (_e90) {
-                local_17 = (left > 0.0);
+                local_17 = (left_1 > 0.0);
             } else {
                 local_17 = false;
             }
@@ -240,7 +284,7 @@ float polygon_dist(float px_1, float py_1, uint first, uint count)
             }
             bool _e103 = local_18;
             if (_e103) {
-                local_19 = (left < 0.0);
+                local_19 = (left_1 < 0.0);
             } else {
                 local_19 = false;
             }
@@ -314,8 +358,8 @@ VertexOutput_vs vs(uint vi : SV_VertexID, Row r)
     const float _e83 = wx(r.pos.z);
     const float _e86 = wy(r.pos.w);
     float4 corner = float4(_e77, _e80, _e83, _e86);
-    float dash_1 = float(((h >> 10u) & 15u));
-    float half_ = (width * 0.5);
+    float dash = float(((h >> 10u) & 15u));
+    float half_2 = (width * 0.5);
     if (!(((h & 128u) != 0u))) {
         local_2 = (kind == 0u);
     } else {
@@ -331,14 +375,14 @@ VertexOutput_vs vs(uint vi : SV_VertexID, Row r)
     p = corner;
     float _e119 = u.scale;
     radius = (float(r.look.y) * _e119);
-    grow = (half_ * float(stroked));
+    grow = (half_2 * float(stroked));
     if ((kind == 0u)) {
-        grow = (half_ * 1.4142135);
+        grow = (half_2 * 1.4142135);
         float _e154 = u.scale;
         chain = (float(r.look.y) * _e154);
         float _e160 = u.px;
-        float on = ((2.0 * dash_1) * _e160);
-        m1_ = float4(on, (2.0 * on), 1.0, 0.0);
+        float on_1 = ((2.0 * dash) * _e160);
+        m1_ = float4(on_1, (2.0 * on_1), 1.0, 0.0);
         float dx_1 = (corner.z - corner.x);
         float dy_1 = (corner.w - corner.y);
         float l = sqrt(((dx_1 * dx_1) + (dy_1 * dy_1)));
@@ -350,77 +394,88 @@ VertexOutput_vs vs(uint vi : SV_VertexID, Row r)
         float rr = (float(asuint(r.pos.z)) * _e199);
         float start = float((r.look.z & 65535u));
         float sweep = ((float((r.look.z >> 16u)) / 65535.0) * 6.2831855);
-        float m = (((start / 65536.0) * 6.2831855) + (sweep / 2.0));
+        float m_1 = (((start / 65536.0) * 6.2831855) + (sweep / 2.0));
         radius = rr;
-        m1_ = float4(0.0, 0.0, cos(m), sin(m));
+        float _e227 = u.scale;
+        chain = (float(r.look.y) * _e227);
+        float _e233 = u.px;
+        float on_2 = ((2.0 * dash) * _e233);
+        m1_ = float4(on_2, (2.0 * on_2), cos(m_1), sin(m_1));
+        m3_ = float4((sweep / 2.0), 0.0, 0.0, 0.0);
         m2_ = float4(max(sin((sweep / 2.0)), 0.0), cos((sweep / 2.0)), float(((r.look.z >> 16u) == 65535u)), 0.0);
         p = float4(corner.x, corner.y, 0.0, 0.0);
-        float e = (rr + half_);
+        float e = (rr + half_2);
         box = float4(((corner.x - e) - 1.0), ((corner.y - e) - 1.0), ((corner.x + e) + 1.0), ((corner.y + e) + 1.0));
     } else {
         if ((kind == 4u)) {
-            float _e275 = u.scale;
-            float gw = (float(asuint(r.pos.z)) * _e275);
-            float _e283 = u.scale;
-            float gh = (float(asuint(r.pos.w)) * _e283);
-            uint q = ((h >> 16u) & 3u);
+            float _e294 = u.scale;
+            float gw = (float(asuint(r.pos.z)) * _e294);
+            float _e302 = u.scale;
+            float gh = (float(asuint(r.pos.w)) * _e302);
+            uint q_1 = ((h >> 16u) & 3u);
             float c_1[4] = Constructarray4_float_(1.0, 0.0, -1.0, 0.0);
-            m1_ = float4(0.0, 0.0, c_1[min(uint(q), 3u)], c_1[min(uint(((q + 3u) & 3u)), 3u)]);
+            m1_ = float4(0.0, 0.0, c_1[min(uint(q_1), 3u)], c_1[min(uint(((q_1 + 3u) & 3u)), 3u)]);
             p = float4(corner.x, corner.y, gw, gh);
             float e_1 = max(gw, gh);
             box = float4(((corner.x - e_1) - 1.0), ((corner.y - e_1) - 1.0), ((corner.x + e_1) + 1.0), ((corner.y + e_1) + 1.0));
-            const float _e326 = unorm16_(r.look.y);
-            const float _e331 = unorm16_((r.look.y >> 16u));
-            out_.uv = float2(_e326, _e331);
-            const float _e336 = unorm16_(r.look.z);
-            const float _e345 = unorm16_((r.look.z >> 16u));
-            m3_ = float4(((_e336 - _e326) / max(gw, 1e-6)), ((_e345 - _e331) / max(gh, 1e-6)), 0.0, 0.0);
+            const float _e345 = unorm16_(r.look.y);
+            const float _e350 = unorm16_((r.look.y >> 16u));
+            out_.uv = float2(_e345, _e350);
+            const float _e355 = unorm16_(r.look.z);
+            const float _e364 = unorm16_((r.look.z >> 16u));
+            m3_ = float4(((_e355 - _e345) / max(gw, 1e-6)), ((_e364 - _e350) / max(gh, 1e-6)), 0.0, 0.0);
         } else {
-            float _e356 = grow;
-            float _e363 = grow;
-            float _e370 = grow;
-            float _e377 = grow;
-            box = float4(((min(corner.x, corner.z) - _e356) - 1.0), ((min(corner.y, corner.w) - _e363) - 1.0), ((max(corner.x, corner.z) + _e370) + 1.0), ((max(corner.y, corner.w) + _e377) + 1.0));
+            float _e375 = grow;
+            float _e382 = grow;
+            float _e389 = grow;
+            float _e396 = grow;
+            box = float4(((min(corner.x, corner.z) - _e375) - 1.0), ((min(corner.y, corner.w) - _e382) - 1.0), ((max(corner.x, corner.z) + _e389) + 1.0), ((max(corner.y, corner.w) + _e396) + 1.0));
         }
     }
-    uint _e385 = u.row_base;
-    const uint _e388 = override_of((r.row - _e385), row.x);
-    uint _e392 = u.row_base;
-    const uint _e395 = override_of((r.row - _e392), row.y);
+    uint _e404 = u.row_base;
+    const uint _e407 = override_of((r.row - _e404), row.x);
+    uint _e411 = u.row_base;
+    const uint _e414 = override_of((r.row - _e411), row.y);
     if (((h & 64u) != 0u)) {
         local_4 = ((row.w & 1u) != 0u);
     } else {
         local_4 = false;
     }
     bool filled = local_4;
-    const float4 _e410 = rgba(_e388);
-    out_.stroke = _e410;
-    float4 _e413 = out_.stroke;
-    const float4 _e417 = rgba(_e395);
-    out_.base = (filled ? _e417 : float4(_e413.xyz, 0.0));
-    float4 _e420 = p;
-    out_.p = _e420;
-    float _e422 = radius;
-    float _e426 = chain;
-    out_.m0_ = float4(half_, _e422, float((cap == 1u)), _e426);
-    float4 _e429 = m1_;
-    out_.m1_ = _e429;
-    float _e432 = m2_.x;
-    float _e434 = m2_.y;
-    float _e437 = m2_.z;
-    out_.m2_ = float4(_e432, _e434, ((kind == 2u) ? _e437 : float(stroked)), (half_ * float(stroked)));
-    float4 _e445 = m3_;
-    out_.m3_ = _e445;
+    const float4 _e429 = rgba(_e407);
+    out_.stroke = _e429;
+    float4 _e432 = out_.stroke;
+    const float4 _e436 = rgba(_e414);
+    out_.base = (filled ? _e436 : float4(_e432.xyz, 0.0));
+    float4 _e439 = p;
+    out_.p = _e439;
+    float _e441 = radius;
+    float _e445 = chain;
+    out_.m0_ = float4(half_2, _e441, float((cap == 1u)), _e445);
+    float4 _e448 = m1_;
+    out_.m1_ = _e448;
+    float _e451 = m2_.x;
+    float _e453 = m2_.y;
+    float _e456 = m2_.z;
+    out_.m2_ = float4(_e451, _e453, ((kind == 2u) ? _e456 : float(stroked)), (half_2 * float(stroked)));
+    float4 _e464 = m3_;
+    out_.m3_ = _e464;
     out_.k = uint4(kind, uint((cap == 2u)), r.look.y, r.look.z);
-    float4 _e455 = box;
-    float2 lo = clamp(floor(_e455.xy), (0.0).xx, (16777216.0).xx);
-    float4 _e463 = box;
-    float2 hi = clamp(ceil(_e463.zw), (0.0).xx, (16777216.0).xx);
-    float2 at = (bool2(((vi & 1u) != 0u), ((vi & 2u) != 0u)) ? hi : lo);
-    float2 _e484 = u.size;
-    out_.position = float4((((at / _e484) * float2(2.0, -2.0)) + float2(-1.0, 1.0)), 0.0, 1.0);
-    Frag _e497 = out_;
-    const Frag frag_2 = _e497;
+    float4 _e474 = box;
+    const float2 _e476 = screen(_e474.xy);
+    float4 _e477 = box;
+    const float2 _e479 = screen(_e477.zy);
+    float4 _e480 = box;
+    const float2 _e482 = screen(_e480.xw);
+    float4 _e483 = box;
+    const float2 _e485 = screen(_e483.zw);
+    float2 lo = clamp(floor(min(min(_e476, _e479), min(_e482, _e485))), (0.0).xx, (16777216.0).xx);
+    float2 hi = clamp(ceil(max(max(_e476, _e479), max(_e482, _e485))), (0.0).xx, (16777216.0).xx);
+    float2 at_1 = (bool2(((vi & 1u) != 0u), ((vi & 2u) != 0u)) ? hi : lo);
+    float2 _e517 = u.size;
+    out_.position = float4((((at_1 / _e517) * float2(2.0, -2.0)) + float2(-1.0, 1.0)), 0.0, 1.0);
+    Frag _e530 = out_;
+    const Frag frag_2 = _e530;
     const VertexOutput_vs frag_2_ = { frag_2.p, frag_2.m0_, frag_2.m1_, frag_2.m2_, frag_2.m3_, frag_2.stroke, frag_2.base, frag_2.k, frag_2.uv, frag_2.position };
     return frag_2_;
 }
@@ -438,7 +493,7 @@ uint2 NagaDimensions2D(Texture2D<float4> tex)
 
 float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
 {
-    Frag in_ = { fragmentinput_fs.position_1, fragmentinput_fs.p_2, fragmentinput_fs.m0_1, fragmentinput_fs.m1_2, fragmentinput_fs.m2_2, fragmentinput_fs.m3_2, fragmentinput_fs.stroke_1, fragmentinput_fs.base_1, fragmentinput_fs.k_1, fragmentinput_fs.uv_1 };
+    Frag in_ = { fragmentinput_fs.position_1, fragmentinput_fs.p_5, fragmentinput_fs.m0_1, fragmentinput_fs.m1_2, fragmentinput_fs.m2_2, fragmentinput_fs.m3_2, fragmentinput_fs.stroke_1, fragmentinput_fs.base_1, fragmentinput_fs.k_1, fragmentinput_fs.uv_1 };
     bool local_5 = (bool)0;
     bool local_6 = (bool)0;
     bool local_7 = (bool)0;
@@ -446,68 +501,94 @@ float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
     bool local_9 = (bool)0;
     bool local_10 = (bool)0;
     bool local_11 = (bool)0;
+    float keep = (float)0;
     float4 colour = (float4)0;
     float alpha = 0.0;
-    float dash = 1.0;
     bool local_12 = (bool)0;
     float d = 0.0;
     bool local_13 = (bool)0;
     bool local_14 = (bool)0;
     bool local_15 = (bool)0;
 
-    float px_2 = in_.position.x;
-    float py_2 = in_.position.y;
-    float _e8 = u.rect.x;
-    if ((px_2 >= _e8)) {
-        float _e15 = u.rect.z;
-        local_5 = (px_2 < _e15);
+    float sx = in_.position.x;
+    float sy = in_.position.y;
+    float _e8 = u.inv.x;
+    float _e13 = u.inv.z;
+    float _e19 = u.inv_t.x;
+    float px_2 = (((_e8 * sx) + (_e13 * sy)) + _e19);
+    float _e24 = u.inv.y;
+    float _e29 = u.inv.w;
+    float _e35 = u.inv_t.y;
+    float py_2 = (((_e24 * sx) + (_e29 * sy)) + _e35);
+    float _e40 = u.rect.x;
+    if ((px_2 >= _e40)) {
+        float _e47 = u.rect.z;
+        local_5 = (px_2 < _e47);
     } else {
         local_5 = false;
     }
-    bool _e18 = local_5;
-    if (_e18) {
-        float _e24 = u.rect.y;
-        local_6 = (py_2 >= _e24);
+    bool _e50 = local_5;
+    if (_e50) {
+        float _e56 = u.rect.y;
+        local_6 = (py_2 >= _e56);
     } else {
         local_6 = false;
     }
-    bool _e27 = local_6;
-    if (_e27) {
-        float _e33 = u.rect.w;
-        local_7 = (py_2 < _e33);
+    bool _e59 = local_6;
+    if (_e59) {
+        float _e65 = u.rect.w;
+        local_7 = (py_2 < _e65);
     } else {
         local_7 = false;
     }
-    bool _e36 = local_7;
-    if (_e36) {
-        float _e42 = u.clip_.x;
-        local_8 = (px_2 >= _e42);
+    bool _e68 = local_7;
+    if (_e68) {
+        float _e74 = u.clip_.x;
+        local_8 = (sx >= _e74);
     } else {
         local_8 = false;
     }
-    bool _e45 = local_8;
-    if (_e45) {
-        float _e51 = u.clip_.z;
-        local_9 = (px_2 <= _e51);
+    bool _e77 = local_8;
+    if (_e77) {
+        float _e83 = u.clip_.z;
+        local_9 = (sx <= _e83);
     } else {
         local_9 = false;
     }
-    bool _e54 = local_9;
-    if (_e54) {
-        float _e60 = u.clip_.y;
-        local_10 = (py_2 >= _e60);
+    bool _e86 = local_9;
+    if (_e86) {
+        float _e92 = u.clip_.y;
+        local_10 = (sy >= _e92);
     } else {
         local_10 = false;
     }
-    bool _e63 = local_10;
-    if (_e63) {
-        float _e69 = u.clip_.w;
-        local_11 = (py_2 <= _e69);
+    bool _e95 = local_10;
+    if (_e95) {
+        float _e101 = u.clip_.w;
+        local_11 = (sy <= _e101);
     } else {
         local_11 = false;
     }
     bool inside = local_11;
-    float half_1 = in_.m0_.x;
+    keep = float(inside);
+    uint _e109 = u.rounded;
+    if ((_e109 != 0u)) {
+        float _e114 = u.inv_scale;
+        float _e119 = u.clip_box.x;
+        float _e123 = u.inv_scale;
+        float _e128 = u.clip_box.y;
+        float2 l_1 = float2(((sx * _e114) - _e119), ((sy * _e123) - _e128));
+        float4 _e133 = u.clip_box;
+        float4 _e137 = u.clip_box;
+        float4 _e141 = u.radii;
+        const float _e142 = corner_radius(l_1, _e137.zw, _e141);
+        const float _e143 = rounded_box(l_1, _e133.zw, _e142);
+        float _e146 = u.px_scale;
+        float corner_1 = (_e143 * _e146);
+        float _e148 = keep;
+        keep = (_e148 * min(max((0.5 - corner_1), 0.0), 1.0));
+    }
+    float half_3 = in_.m0_.x;
     float square = in_.m0_.z;
     float hw = in_.m2_.w;
     colour = in_.stroke;
@@ -522,19 +603,13 @@ float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
         float t_1 = ((ox_1 * ux) + (oy_1 * uy));
         float along = abs((t_1 - h_1));
         float across = abs(((oy_1 * ux) - (ox_1 * uy)));
-        const float _e115 = len2_(max((along - h_1), 0.0), across);
-        float capsule = (_e115 - half_1);
-        const float _e121 = box_dist(((along - h_1) - (half_1 * square)), (across - half_1));
-        float d_3 = (round_ ? capsule : _e121);
-        float period = in_.m1_.y;
-        if ((period != 0.0)) {
-            float at_1 = (t_1 + in_.m0_.w);
-            float m_1 = (at_1 - (floor((at_1 / period)) * period));
-            dash = min(max((min(m_1, (in_.m1_.x - m_1)) + 0.5), 0.0), 1.0);
-        }
-        const float _e146 = coverage(d_3);
-        float _e147 = dash;
-        alpha = (_e146 * _e147);
+        const float _e198 = len2_(max((along - h_1), 0.0), across);
+        float capsule = (_e198 - half_3);
+        const float _e204 = box_dist(((along - h_1) - (half_3 * square)), (across - half_3));
+        float d_3 = (round_ ? capsule : _e204);
+        const float _e206 = coverage(d_3);
+        const float _e214 = dash_cover((t_1 + in_.m0_.w), in_.m1_.x, in_.m1_.y);
+        alpha = (_e206 * _e214);
     } else {
         if ((kind_1 == 2u)) {
             float lx = (px_2 - in_.p.x);
@@ -546,36 +621,38 @@ float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
             float sa = in_.m2_.x;
             float ca = in_.m2_.y;
             float radius_1 = in_.m0_.y;
-            const float _e174 = len2_(x_1, y_1);
-            float ring = (abs((_e174 - radius_1)) - half_1);
+            const float _e241 = len2_(x_1, y_1);
+            float ring = (abs((_e241 - radius_1)) - half_3);
             float past = ((in_.m2_.z != 0.0) ? -1e30 : ((x_1 * ca) - (y_1 * sa)));
-            const float _e191 = len2_((x_1 - (sa * radius_1)), (y_1 - (ca * radius_1)));
-            float disc = (_e191 - half_1);
-            float flat_end = max(ring, (past - (half_1 * square)));
-            const float _e200 = coverage((round_ ? ((past > 0.0) ? disc : ring) : flat_end));
-            alpha = _e200;
+            const float _e258 = len2_((x_1 - (sa * radius_1)), (y_1 - (ca * radius_1)));
+            float disc = (_e258 - half_3);
+            float flat_end = max(ring, (past - (half_3 * square)));
+            float along_1 = (((atan2(((ly * mc) - (lx * ms)), y_1) + in_.m3_.x) * radius_1) + in_.m0_.w);
+            const float _e278 = coverage((round_ ? ((past > 0.0) ? disc : ring) : flat_end));
+            const float _e283 = dash_cover(along_1, in_.m1_.x, in_.m1_.y);
+            alpha = (_e278 * _e283);
         } else {
             if (!((kind_1 == 1u))) {
                 local_12 = (kind_1 == 3u);
             } else {
                 local_12 = true;
             }
-            bool _e209 = local_12;
-            if (_e209) {
+            bool _e293 = local_12;
+            if (_e293) {
                 if ((kind_1 == 1u)) {
-                    const float _e214 = rect_dist(px_2, py_2, in_);
-                    d = _e214;
+                    const float _e298 = rect_dist(px_2, py_2, in_);
+                    d = _e298;
                 } else {
-                    const float _e219 = polygon_dist(px_2, py_2, in_.k.z, in_.k.w);
-                    d = _e219;
+                    const float _e303 = polygon_dist(px_2, py_2, in_.k.z, in_.k.w);
+                    d = _e303;
                 }
-                float _e220 = d;
-                const float _e222 = coverage((_e220 - hw));
-                float _e223 = d;
-                const float _e225 = coverage((_e223 + hw));
-                float on_1 = ((1.0 - _e225) * in_.m2_.z);
-                colour = (in_.base + ((in_.stroke - in_.base) * on_1));
-                alpha = _e222;
+                float _e304 = d;
+                const float _e306 = coverage((_e304 - hw));
+                float _e307 = d;
+                const float _e309 = coverage((_e307 + hw));
+                float on_3 = ((1.0 - _e309) * in_.m2_.z);
+                colour = (in_.base + ((in_.stroke - in_.base) * on_3));
+                alpha = _e306;
             } else {
                 float dx_2 = (px_2 - in_.p.x);
                 float dy_2 = (py_2 - in_.p.y);
@@ -588,14 +665,14 @@ float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
                 } else {
                     local_13 = false;
                 }
-                bool _e261 = local_13;
-                if (_e261) {
+                bool _e345 = local_13;
+                if (_e345) {
                     local_14 = (ly_1 >= 0.0);
                 } else {
                     local_14 = false;
                 }
-                bool _e267 = local_14;
-                if (_e267) {
+                bool _e351 = local_14;
+                if (_e351) {
                     local_15 = (ly_1 < in_.p.w);
                 } else {
                     local_15 = false;
@@ -606,16 +683,17 @@ float4 fs(FragmentInput_fs fragmentinput_fs) : SV_Target0
                 float tv = (in_.uv.y + (ly_1 * in_.m3_.y));
                 uint tx = naga_f2u32(min(max(floor((tu * n_1.x)), 0.0), (n_1.x - 1.0)));
                 uint ty = naga_f2u32(min(max(floor((tv * n_1.y)), 0.0), (n_1.y - 1.0)));
-                float4 _e314 = atlas.Load(int3(uint2(tx, ty), int(0)));
-                colour = (in_.stroke * _e314);
+                float4 _e398 = atlas.Load(int3(uint2(tx, ty), int(0)));
+                colour = (in_.stroke * _e398);
                 alpha = (hit ? 1.0 : 0.0);
             }
         }
     }
-    float _e320 = colour.w;
-    float _e321 = alpha;
-    float _e324 = u.opacity;
-    float a = (clamp((_e320 * (_e321 * _e324)), 0.0, 1.0) * float(inside));
-    float4 _e332 = colour;
-    return float4((clamp(_e332.xyz, (0.0).xxx, (1.0).xxx) * a), a);
+    float _e404 = colour.w;
+    float _e405 = alpha;
+    float _e406 = keep;
+    float _e410 = u.opacity;
+    float a = clamp((_e404 * ((_e405 * _e406) * _e410)), 0.0, 1.0);
+    float4 _e416 = colour;
+    return float4((clamp(_e416.xyz, (0.0).xxx, (1.0).xxx) * a), a);
 }

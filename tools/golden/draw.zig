@@ -211,23 +211,24 @@ const scenes = .{
 };
 
 var buf: [Scene.bytes]u8 align(lcgf.mem.column_align) = undefined;
-var canvas_buf: [lcgf.canvas.Instances.requiredBytes(lcgf.render_conformance.canvas_scene.rows, lcgf.render_conformance.canvas_scene.verts, 4)]u8 align(lcgf.mem.column_align) = undefined;
+var canvas_storage: lcgf.render_conformance.CanvasStorage = undefined;
 
-/// Writes the canvas scene: canvas.bin (pos then look, 32 bytes a row, interleaved), verts.bin,
-/// canvas.wgsl (the GPU back ends' canvas shader), quad.wgsl and its layout (gpu.py needs them),
-/// and in cmds.txt the node (`canvas` rect clip opacity), the camera (origin as two i64s,
-/// scale, offset, zoom), the palette (`palette` zoom_scale, then a `layer` stroke fill width
-/// flags line per layer, colours as rgba8 u32), the ranges and the overrides.
+/// Writes the canvas scene (conformance.CanvasStorage): canvas.bin (pos then look, 32 bytes a
+/// row, interleaved), verts.bin, canvas.wgsl (the GPU back ends' canvas shader), quad.wgsl and
+/// its layout (gpu.py needs them), and in cmds.txt the palette (`palette` zoom_scale, then a
+/// `layer` stroke fill width flags line per layer, colours as rgba8 u32), then per canvas
+/// command its node (`canvas` rect clip opacity xform radii), camera (origin as two i64s,
+/// scale, offset, zoom), ranges and overrides.
 fn canvasScene(io: std.Io, out_path: []const u8) !void {
     const sc = lcgf.render_conformance.canvas_scene;
-    var carver: lcgf.mem.Carver = .{ .buf = &canvas_buf };
-    var s = lcgf.canvas.Instances.init(&carver, sc.rows, sc.verts, 4);
-    const ranges = sc.build(&s);
+    const st = &canvas_storage;
+    st.load();
+    const s = &st.shapes;
     if (s.overflow) return error.SceneOverflow;
     const cwd = std.Io.Dir.cwd();
     var dir = try cwd.createDirPathOpen(io, out_path, .{});
     defer dir.close(io);
-    var rows: [256][8]u32 = undefined;
+    var rows: [sc.rows][8]u32 = undefined;
     for (0..s.len) |i| rows[i] = @as([4]u32, @bitCast(s.c.pos[i])) ++ s.c.look[i];
     try dir.writeFile(io, .{ .sub_path = "canvas.bin", .data = std.mem.sliceAsBytes(rows[0..s.len]) });
     try dir.writeFile(io, .{ .sub_path = "verts.bin", .data = std.mem.sliceAsBytes(s.verts[0..@max(s.vert_len, 1)]) });
@@ -240,13 +241,20 @@ fn canvasScene(io: std.Io, out_path: []const u8) !void {
     var t = std.Io.Writer.fixed(&text);
     try t.print("stride {d}\n", .{gfx.stride});
     for (gfx.attrs) |a| try t.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
-    try t.print("canvas {d} {d} {d} {d} {d} {d} {d} {d} 1\n", .{ sc.node[0], sc.node[1], sc.node[2], sc.node[3], sc.clip[0], sc.clip[1], sc.clip[2], sc.clip[3] });
-    const c = sc.camera;
-    try t.print("camera {d} {d} {d} {d} {d} {d}\n", .{ c.origin[0], c.origin[1], c.scale, c.offset[0], c.offset[1], c.zoom });
     try t.print("palette {d}\n", .{@intFromBool(sc.palette.zoom_scale)});
     for (sc.palette.layers) |l| try t.print("layer {d} {d} {d} {d}\n", .{ l.stroke, l.fill, l.width, l.flags });
-    for (ranges) |r| try t.print("range {d} {d}\n", .{ r.first, r.count });
-    try t.print("override {d} {d} {d}\n", .{ ranges[1].first, ranges[1].count, @as(u32, @bitCast(sc.tint)) });
+    for (0..st.draw.cmd_len) |i| {
+        const k = st.draw.command(@intCast(i)).canvas;
+        const n = st.draw.customs[k];
+        const c = st.draw.canvases[k];
+        try t.print("canvas", .{});
+        for (n.rect ++ n.clip ++ [1]f32{n.opacity} ++ n.xform ++ n.clip_radii) |x| try t.print(" {d}", .{x});
+        try t.print("\n", .{});
+        const cam = c.camera;
+        try t.print("camera {d} {d} {d} {d} {d} {d}\n", .{ cam.origin[0], cam.origin[1], cam.scale, cam.offset[0], cam.offset[1], cam.zoom });
+        for (c.ranges) |r| try t.print("range {d} {d}\n", .{ r.first, r.count });
+        for (c.overrides) |o| try t.print("override {d} {d} {d}\n", .{ o.range.first, o.range.count, o.color });
+    }
     try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = t.buffered() });
 }
 

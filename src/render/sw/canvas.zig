@@ -6,9 +6,9 @@
 //! Per instance: one decode (`canvas.Shape.of`), one test of its pixel box against the
 //! target's scissor and the node, and one branch on its kind, which picks the loop compiled
 //! for it. Per pixel there is no branch. The node clips like a quad's clip, by pixel centre
-//! (its rect half open, its clip closed); rounded clip corners and a transformed node are not
-//! applied, here or in canvas.wgsl (ponytail: add both together when a canvas sits in a
-//! transformed or rounded parent).
+//! (its rect half open, its clip closed). Under a transformed parent each pixel is taken into
+//! the node's own space first, and a clip's rounded corners are a coverage (`Space`), as
+//! canvas.wgsl does too.
 //! Output is premultiplied "over", in 8 bits per channel through `sw.overColor`.
 
 const std = @import("std");

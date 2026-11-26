@@ -512,8 +512,8 @@ test "renderer: a canvas uploads its rows once, then only dirty rows; each ring 
     st.load();
     const s = &st.shapes;
     const cv = &r.canvas.?;
-    // Each draw writes its head, its six palette rows and its one override.
-    const uniforms = lcgf.canvas_shader.Uniforms.headBytes(sc.palette.layers.len) + 16;
+    // Each of the two draws writes its head and its six palette rows, the first its override.
+    const uniforms = 2 * lcgf.canvas_shader.Uniforms.headBytes(sc.palette.layers.len) + 16;
     // A new batch: every row and vertex, into each slot on its first frame.
     for (0..2) |slot| {
         r.prepare(@intCast(slot), &st.draw, .{}, sc.viewport, 1);

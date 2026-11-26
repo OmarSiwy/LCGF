@@ -220,6 +220,8 @@ pub const canvas_scene = struct {
         for (caps, 0..) |c, k| _ = s.arc(w(@intCast(420 + 90 * k), 250), 35 * 20, .{ .layer = 1, .weight = 3, .start = 0.4, .sweep = 4.2, .cap = c });
         _ = s.arc(w(690, 250), 30 * 20, .{ .layer = 2, .weight = 2, .start = 0, .sweep = -2.5, .cap = .round });
         _ = s.arc(w(690, 250), 12 * 20, .{ .layer = 0, .weight = 2 });
+        // A dashed arc, round caps continuing the pattern.
+        _ = s.arc(w(705, 195), 16 * 20, .{ .layer = 0, .weight = 2, .start = 0.2, .sweep = 5.5, .cap = .round, .dash = 2 });
         // Polygons: a pin triangle, a concave arrow stroked, a self-crossing star (nonzero).
         _ = s.polygon(&.{ w(40, 420), w(110, 450), w(40, 480) }, .{ .layer = 2 });
         _ = s.polygon(&.{ w(140, 400), w(260, 400), w(260, 430), w(200, 430), w(230, 500), w(170, 500), w(170, 430), w(140, 430) }, .{ .layer = 1, .stroke = true, .weight = 2 });
@@ -242,6 +244,21 @@ pub const canvas_scene = struct {
         return .{ .{ .first = 0, .count = selection_first }, s.since(selection_first) };
     }
 
+    /// A second canvas node over the first, under its parents' turn of 0.3 rad about its centre
+    /// and a clip with rounded corners: the whole batch again, panned to the rects and arcs.
+    pub const inset = struct {
+        pub const node = [4]f32{ 540, 360, 760, 560 };
+        pub const clip = [4]f32{ 550, 370, 750, 550 };
+        pub const radii = [4]f32{ 30, 10, 40, 0 };
+        const turn: f32 = 0.3;
+        const cx: f32 = 650;
+        const cy: f32 = 460;
+        const ca = @cos(turn);
+        const sa = @sin(turn);
+        pub const xform = [6]f32{ ca, sa, -sa, ca, cx - (ca * cx - sa * cy), cy - (sa * cx + ca * cy) };
+        pub const camera: canvas.Camera = .{ .origin = .{ far + 380 * 20, -far + 20 * 20 }, .scale = 0.05, .zoom = 2 };
+    };
+
     pub const viewport = [2]f32{ 800, 600 };
     /// What the golden is drawn over (sw-play's 0d0d0f).
     pub const clear = Color.rgb(13, 13, 15);
@@ -258,12 +275,13 @@ pub const CanvasStorage = struct {
     draw: DrawList = undefined,
     shapes: canvas.Instances = undefined,
     ranges: [2]canvas.Range = undefined,
+    inset_ranges: [1]canvas.Range = undefined,
     overrides: [1]canvas.Override = undefined,
-    rows: [1]draw_list.CanvasDraw = undefined,
+    rows: [2]draw_list.CanvasDraw = undefined,
 
     const list_bytes = blk: {
         var counter: mem.Carver = .{ .buf = null };
-        _ = DrawList.init(&counter, 1, 1, 1);
+        _ = DrawList.init(&counter, 1, 1, 2);
         break :blk counter.off;
     };
 
@@ -271,19 +289,26 @@ pub const CanvasStorage = struct {
     pub fn load(st: *CanvasStorage) void {
         const sc = canvas_scene;
         var a: mem.Carver = .{ .buf = &st.list_buf };
-        st.draw = DrawList.init(&a, 1, 1, 1);
+        st.draw = DrawList.init(&a, 1, 1, 2);
         var b: mem.Carver = .{ .buf = &st.shape_buf };
         st.shapes = canvas.Instances.init(&b, sc.rows, sc.verts, 4);
         st.ranges = sc.build(&st.shapes);
         st.overrides = .{.{ .range = st.ranges[1], .color = @bitCast(sc.tint) }};
-        st.rows = .{.{ .instances = &st.shapes, .camera = sc.camera, .ranges = &st.ranges, .palette = &sc.palette, .overrides = &st.overrides }};
+        st.inset_ranges = .{st.ranges[0]};
+        st.rows = .{
+            .{ .instances = &st.shapes, .camera = sc.camera, .ranges = &st.ranges, .palette = &sc.palette, .overrides = &st.overrides },
+            .{ .instances = &st.shapes, .camera = sc.inset.camera, .ranges = &st.inset_ranges, .palette = &sc.palette },
+        };
         st.draw.customs[0] = .{ .rect = sc.node, .clip = sc.clip, .data = 0, .id = 0, .node = 0 };
-        st.draw.custom_len = 1;
+        st.draw.customs[1] = .{ .rect = sc.inset.node, .clip = sc.inset.clip, .data = 0, .id = 0, .node = 1, .xform = sc.inset.xform, .clip_radii = sc.inset.radii };
+        st.draw.custom_len = 2;
         st.draw.canvases = &st.rows;
-        st.draw.cmd.kind[0] = @backingInt(DrawList.Kind.canvas);
-        st.draw.cmd.first[0] = 0;
-        st.draw.cmd.count[0] = 1;
-        st.draw.cmd_len = 1;
+        for (0..2) |k| {
+            st.draw.cmd.kind[k] = @backingInt(DrawList.Kind.canvas);
+            st.draw.cmd.first[k] = @intCast(k);
+            st.draw.cmd.count[k] = 1;
+        }
+        st.draw.cmd_len = 2;
     }
 };
 
