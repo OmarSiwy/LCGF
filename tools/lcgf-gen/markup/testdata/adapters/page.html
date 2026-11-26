@@ -10,6 +10,7 @@
     textarea:invalid { border-color: #c85050; }
     input[type=number]:invalid { border-color: #c85050; }
     select:hover { background-color: #5078c8; }
+    summary:hover { background-color: #c85050; }
   </style>
 </head>
 <body>
@@ -21,5 +22,6 @@
   <textarea id="notes" bind:value="notes" rows="2" placeholder="Notes" required></textarea>
   <input type="number" id="qty" bind:value="qty" min="0" max="10">
   <select id="shape" bind:value="shape" on:change="reshaped"><option>Circle</option><option>Square</option></select>
+  <details id="more" bind:open="more"><summary>More</summary><p>Hidden text</p></details>
 </body>
 </html>

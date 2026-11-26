@@ -979,7 +979,7 @@ pub const Lowerer = struct {
     /// that matches it, in cascade order. A static declaration that wins over a state one
     /// (higher specificity) drops it, as in CSS.
     fn recipeOf(l: *Lowerer, n: u32, reported: *std.AutoHashMapUnmanaged(u32, void)) void {
-        const x = l.ir_of[n];
+        const x = l.recipeNode(n);
         const nodes = l.page.nodes.slice();
         const kind = if (x != none) nodes.items(.kind)[x] else .container;
         const is_box = kind == .container;
@@ -1000,7 +1000,7 @@ pub const Lowerer = struct {
         };
         if (!fits) {
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a select, a text, search or number field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a select, a <summary>, a text, search or number field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
             };
             return;
         }
@@ -1087,15 +1087,25 @@ pub const Lowerer = struct {
             .button, .link, .toggle, .checkbox, .radio, .@"switch", .container, .slider => true,
             .textfield, .search => !l.page.nodes.items(.secure)[x],
             .textarea, .number, .select => true,
+            // A <details>'s state CSS is its <summary>'s, the section's header.
+            .section => l.doc.isElement(n, "summary"),
             else => false,
         };
     }
 
+    /// The IR node document node `n`'s recipe rules go on: its own, or a `<summary>`'s
+    /// `<details>` section.
+    fn recipeNode(l: *const Lowerer, n: u32) u32 {
+        if (l.ir_of[n] != none or !l.doc.isElement(n, "summary")) return l.ir_of[n];
+        const p = l.doc.nodes.items(.parent)[n];
+        return if (p != none and l.doc.isElement(p, "details")) l.ir_of[p] else none;
+    }
+
     /// Recipe widgets whose builders take no Fade or Clock: a transition or animation on them
     /// stays an error.
-    // ponytail: add Fade/Clock to the radio, search, text area and select builders when asked.
+    // ponytail: add Fade/Clock to the radio, search, text area, select and section builders when asked.
     fn composite(_: *const Lowerer, kind: ir.Kind) bool {
-        return kind == .radio or kind == .search or kind == .textarea or kind == .select;
+        return kind == .radio or kind == .search or kind == .textarea or kind == .select or kind == .section;
     }
 
     /// The first `<input type=radio>` of document node `n`'s group when `n` is a later one.
@@ -1134,6 +1144,17 @@ pub const Lowerer = struct {
             }
             l.page.nodes.items(.id)[x] = if (l.attr(n, "id")) |id| (if (l.identifier(id, l.valueLoc(n, "id"))) id else "box") else ok(std.fmt.allocPrint(l.arena, "box_{d}", .{x}));
             return .{};
+        }
+        // A part's static CSS (`<summary>`, `<option>`, `::backdrop`) goes through the theme
+        // widget's Face, which a recipe widget does not take.
+        if (node.part != .none) {
+            l.ds.err(l.loc(n), "a <{s}> with state CSS cannot also restyle its {s} yet", .{ l.tag(n), switch (node.part) {
+                .header => "<summary>",
+                .option => "<option>s",
+                .backdrop => "::backdrop",
+                .none => unreachable,
+            } });
+            return null;
         }
         // What the widget's own look does not say, as declarations; anything else is an error.
         var st = node.style;

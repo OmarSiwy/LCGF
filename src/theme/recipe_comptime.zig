@@ -23,6 +23,7 @@ const search_zig = @import("../widgets/search.zig");
 const textarea_zig = @import("../widgets/textarea.zig");
 const number_zig = @import("../widgets/number.zig");
 const select_zig = @import("../widgets/select.zig");
+const accordion_zig = @import("../widgets/accordion.zig");
 const a11y = @import("../a11y/tree.zig");
 const simd = @import("../core/simd.zig");
 const edit = @import("../text/edit/edit.zig");
@@ -629,6 +630,69 @@ fn SelectFace(comptime name: [:0]const u8, comptime field: []const u8, comptime 
             _ = outline.append(t, b, @fromBackingInt(b), controls.outlineOptions(W.resolvePart(ui, Parts.focus, child), config.focus_offset));
             t.seal(b);
             next.* += comptime @import("../comptime/flatten.zig").count(n);
+        }
+    };
+}
+
+/// An accordion section, as `controls.details`: the header `id` in the recipe's look
+/// (`model.disclosure`) titled by `title` (a string field or a literal), the panel holding
+/// `children` while the bool field `expanded` is set.
+pub fn details(comptime th: base.Theme, comptime id: @EnumLiteral(), comptime expanded: @EnumLiteral(), comptime title: anytype, comptime config: Config, comptime children: anytype) Spec {
+    if (children.len == 0) @compileError("accordion section '" ++ @tagName(id) ++ "' has an empty panel");
+    const label_node: Spec = if (isLiteral(title)) .{ .kind = .label, .text = title } else .{ .kind = .label, .bind = @tagName(title) };
+    const head: Spec = .{ .kind = .row, .id = @tagName(id), .children = &.{ .{ .kind = .col }, label_node, .{ .kind = .col } } };
+    var s = spec_zig.col(accordion_zig.sectionStyle(&th), .{ head, spec_zig.col(.{}, children) });
+    s.widget = Section(th, @tagName(id), @tagName(expanded), captionName(title), isLiteral(title), config);
+    return s;
+}
+
+fn Section(comptime th: base.Theme, comptime name: [:0]const u8, comptime expanded: []const u8, comptime title: []const u8, comptime literal: bool, comptime config: Config) type {
+    comptime var stocked = config;
+    if (stocked.recipe == null) stocked.recipe = model.disclosure;
+    const W = Widget(.button, name, "", title, .{}, stocked, literal);
+    return struct {
+        pub fn bindError(comptime State: type, comptime field: []const u8) ?[]const u8 {
+            _ = field;
+            if (base.fieldError(State, "accordion section", expanded, bool)) |err| return err;
+            return W.bindError(State, "");
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            _ = row;
+            const Ui = @TypeOf(ui.*);
+            const me = @field(Ui.Events.Widget, name);
+            const states = W.state(ui);
+            if (states.disabled or states.read_only) return;
+            const clicked = if (event) |e| std.meta.activeTag(e) == me else false;
+            ui.signals.set(comptime Ui.field(expanded), accordion_zig.expand(@field(ui.signals.state, expanded), clicked, ui.focus == me, in));
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const Ui = @TypeOf(ui.*);
+            const t = &ui.tables.t;
+            const open_: bool = @field(ui.signals.state, expanded);
+            var response = ui.response(next.* + 1, in);
+            response.focused = ui.focus == @field(Ui.Events.Widget, name);
+            var use = W.useFor(ui, in, response);
+            use.states.expanded = open_;
+            var root = W.resolvePart(ui, Parts.root, use);
+            var child = use;
+            child.parent = &root;
+            child.local = &.{};
+            const sec = t.push(parent, .none, &n.style);
+            root.box.value = simd.b2f(open_);
+            const head = t.push(sec, .hash(name), &root.box);
+            ui.setCursor(t.cursor(head) orelse .pointer, response.hovered);
+            _ = t.push(head, .none, &W.resolvePart(ui, Parts.indicator, child).box);
+            pushText(ui, head, W.caption(ui), W.resolvePart(ui, Parts.label, child));
+            _ = outline.append(t, head, @fromBackingInt(head), controls.outlineOptions(W.resolvePart(ui, Parts.focus, child), config.focus_offset));
+            t.seal(head);
+            next.* += 6; // the section, the header, its mark, caption and outline, the panel
+            const panel = t.push(sec, .none, &accordion_zig.panelStyle(&th, open_));
+            t.c.role[panel] = accordion_zig.region;
+            inline for (n.children[1].children) |c| ui.push(c, panel, next, in);
+            t.seal(panel);
+            t.seal(sec);
         }
     };
 }

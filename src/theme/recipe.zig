@@ -17,6 +17,7 @@ const link_zig = @import("../widgets/link.zig");
 const radio_zig = @import("../widgets/radio.zig");
 const search_zig = @import("../widgets/search.zig");
 const select_zig = @import("../widgets/select.zig");
+const accordion_zig = @import("../widgets/accordion.zig");
 pub const Parts = style.Parts;
 pub const Id = types.Id;
 pub const States = style.States;
@@ -223,6 +224,24 @@ pub const button: Recipe = .{
 pub const select: Recipe = .{
     .parts = &.{ .{ .id = Parts.root, .base = .{ .box = select_zig.buttonStyle(&.default, .{}) } }, label_part, icon_part, focus_part },
     .rules = &button_rules,
+};
+
+/// An accordion section's header (`<summary>`): the button's look in a row with a mark that
+/// takes the accent while the section is open (`States.expanded`), as `accordion.headerStyle`.
+pub const disclosure_rules = button_rules ++ [_]Rule{
+    .{ .part = Parts.root, .declarations = &.{style.token(.gap, Names.space[2])} },
+    .{ .part = Parts.indicator, .declarations = &.{style.token(.fill, Names.control)} },
+    .{ .part = Parts.indicator, .require = .{ .expanded = true }, .declarations = &.{style.token(.fill, Names.accent)}, .source = .from("disclosure.open") },
+};
+pub const disclosure: Recipe = .{
+    .parts = &.{
+        .{ .id = Parts.root, .base = .{ .box = accordion_zig.headerStyle(&.default) } },
+        .{ .id = Parts.indicator, .base = .{ .box = accordion_zig.indicatorStyle(&.default, false) } },
+        label_part,
+        icon_part,
+        focus_part,
+    },
+    .rules = &disclosure_rules,
 };
 
 /// A pressed toggle button (`States.toggled`) takes the accent, and the held colour while held,

@@ -452,9 +452,13 @@ pub const Emit = struct {
             .separator => e.print("{s}.ct.separator(theme, .{s})", .{ e.use("separator"), if (n.level == 1) "vertical" else "horizontal" }),
             .spacer => e.print("{s}.ct.spacer(.{s})", .{ e.use("spacer"), if (n.dir == .x) "x" else "y" }),
             .section => {
-                const faced_ = restyle or n.part == .header;
-                e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("accordion"), if (faced_) "sectionFace" else "section", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
+                const faced_ = n.recipe.len == 0 and (restyle or n.part == .header);
+                if (n.recipe.len > 0)
+                    e.print("recipes.ct.details(theme, .{f}, .{f}, ", .{ std.zig.fmtId(n.id), std.zig.fmtId(n.bind) })
+                else
+                    e.print("{s}.ct.{s}(theme, .{f}, .{f}, ", .{ e.use("accordion"), if (faced_) "sectionFace" else "section", std.zig.fmtId(n.id), std.zig.fmtId(n.bind) });
                 e.caption(n.text_kind, n.text);
+                if (n.recipe.len > 0) e.print(", {s}", .{e.config(n, false)});
                 if (faced_) {
                     e.write(", ");
                     e.fields(n.style, types.Style{}, &.{}, n.params_expr);
@@ -814,6 +818,7 @@ pub const Emit = struct {
                 .textarea => "editor",
                 .number => "input",
                 .select => "select",
+                .section => "disclosure",
                 else => "switch_control",
             };
             const rules = switch (n.kind) {
@@ -1132,6 +1137,13 @@ pub const Emit = struct {
                 return "f.close();";
             },
             .section => {
+                if (n.recipe.len > 0) {
+                    _ = e.use("accordion"); // for accordion.close
+                    e.print("_ = recipes.details(f, &theme, {s}, {s}, ", .{ e.rtId(n.id, list_depth), e.ref(n.bind) });
+                    e.rtCaption(n.text_kind, n.text);
+                    e.print(", {s}) catch unreachable;", .{e.config(n, true)});
+                    return "accordion.close(f);";
+                }
                 const faced_ = e.rtFace(n).len > 0 or n.part == .header;
                 e.print("_ = {s}.{s}(f, &theme, {s}, {s}, ", .{ e.use("accordion"), if (faced_) "openFace" else "open", e.rtId(n.id, list_depth), e.ref(n.bind) });
                 e.rtCaption(n.text_kind, n.text);

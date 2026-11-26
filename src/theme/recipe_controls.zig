@@ -18,6 +18,7 @@ const link_zig = @import("../widgets/link.zig");
 const search_zig = @import("../widgets/search.zig");
 const number_zig = @import("../widgets/number.zig");
 const select_zig = @import("../widgets/select.zig");
+const accordion_zig = @import("../widgets/accordion.zig");
 const menu_zig = @import("../widgets/menu.zig");
 const popover_zig = @import("../widgets/popover.zig");
 const a11y_tree = @import("../a11y/tree.zig");
@@ -448,6 +449,33 @@ pub fn select(f: *Frame, comptime name: []const u8, comptime def: menu_zig.Def, 
     control.response = response;
     end(f, &control);
     expose(options.semantics, control.node, states);
+    return response;
+}
+
+/// Starts an accordion section (`<details>`) whose header `id` is in the recipe's look
+/// (`model.disclosure`), showing its panel while `expanded.*` is set; the panel and the section
+/// are `accordion.open`'s in theme `th`. Build the panel's children, then `accordion.close`.
+pub fn details(f: *Frame, th: *const base.Theme, id: types.Id, expanded: *bool, title: []const u8, options: Options) style.Error!types.Response {
+    try checkSemantics(f, options);
+    const recipe = options.recipe orelse model.disclosure;
+    const response = try policyResponse(f, id, recipe, options, options.states);
+    if (!options.states.disabled and !options.states.read_only) expanded.* = accordion_zig.expand(expanded.*, response.clicked, response.focused, f.in);
+    var states = statesFor(options.states, response, visibleFocus(f, options));
+    states.expanded = expanded.*;
+    var control = try resolvedControl(f, recipe, options, states);
+    const indicator = try control.part(Parts.indicator, null);
+    _ = f.open(.none, accordion_zig.sectionStyle(th));
+    control.root.box.value = simd.b2f(expanded.*);
+    control.node = f.open(id, control.root.box);
+    _ = f.interact(control.node, if (states.disabled) .{} else .button);
+    f.setCursor(f.tree().cursor(control.node.ix()) orelse .pointer, response.hovered);
+    _ = f.leaf(.none, indicator.box);
+    _ = label(f, &control, title);
+    control.response = response;
+    end(f, &control);
+    expose(options.semantics, control.node, states);
+    const panel = f.open(.none, accordion_zig.panelStyle(th, expanded.*));
+    f.tree().c.role[panel.ix()] = accordion_zig.region;
     return response;
 }
 

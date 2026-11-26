@@ -31,6 +31,7 @@ pub const link = controls.link;
 pub const search = controls.search;
 pub const toggle = controls.toggle;
 pub const select = controls.select;
+pub const details = controls.details;
 pub const checkbox = controls.checkbox;
 pub const switchControl = controls.switchControl;
 pub const slider = controls.slider;
