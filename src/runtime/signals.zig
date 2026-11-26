@@ -83,7 +83,8 @@ pub const Signals = struct {
         var h: u64 = 0xcbf2_9ce4_8422_2325;
         for (deps) |dep| {
             const i = @backingInt(dep);
-            const v = if (dep == .unset) 0 else s.version[i];
+            // `unset` reads as version 0: a clamped load, masked, with no jump on the dep.
+            const v = s.version[@min(i, s.version.len - 1)] & (0 -% @as(u32, @intFromBool(dep != .unset)));
             h = (h ^ ((@as(u64, i) << 32) | v)) *% 0x0000_0100_0000_01b3;
         }
         return h;
