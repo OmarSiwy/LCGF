@@ -1,0 +1,12 @@
+<!doctype html>
+<style>
+  .list { width: 300px; height: 100px; }
+  #go:hover { background-color: red; }
+  #fast { transition: background-color 1s; }
+  #name:focus { border-color: red; }
+</style>
+<body>
+<template lcgf-each="n" lcgf-max="3"><button id="go" on:click="go">Go</button></template>
+<template lcgf-each="t in ts" class="list"><div><button id="fast" on:click="fast">Fast</button><input type="text" id="name" value="{t.name}"></div></template>
+<template lcgf-each="u in us" class="list" lcgf-max="0"><span>{u.name}</span></template>
+</body>

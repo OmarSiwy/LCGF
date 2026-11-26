@@ -1,0 +1,12 @@
+copies.html:11:54: error: lcgf-max takes a count from 1 to 4096
+<template lcgf-each="u in us" class="list" lcgf-max="0"><span>{u.name}</span></template>
+                                                     ^
+copies.html:4:3: error: state CSS on <button> is not lowered inside lcgf-each="n" lcgf-max="N", whose copies share one widget; use lcgf-each="x in xs", whose copies keep their own state
+  #go:hover { background-color: red; }
+  ^
+copies.html:6:3: error: state CSS on <input> is not lowered inside lcgf-each="x in xs": there it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch or a range
+  #name:focus { border-color: red; }
+  ^
+copies.html:5:11: error: a transition inside lcgf-each="x in xs" needs lcgf-max="N" on its template: the most copies that keep their own state
+  #fast { transition: background-color 1s; }
+          ^

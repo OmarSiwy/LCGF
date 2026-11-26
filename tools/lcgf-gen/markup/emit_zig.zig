@@ -726,7 +726,7 @@ pub const Emit = struct {
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
             e.write(", .transition = ");
             e.structure(n.live.transition, .{});
-            if (runtime) e.print(", .fade = &ui.signals.state.{f}", .{std.zig.fmtId(e.fadeName(n))}) else e.print(", .fade_field = \"{s}\"", .{e.fadeName(n)});
+            if (runtime) e.print(", .fade = {s}", .{e.copyRef(e.fadeName(n))}) else e.print(", .fade_field = \"{s}\"", .{e.fadeName(n)});
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
         }
         if (n.live.animation.tracks.len > 0) {
@@ -745,10 +745,20 @@ pub const Emit = struct {
                 e.write(" } }");
             }
             e.write(" } }");
-            if (runtime) e.print(", .clock = &ui.signals.state.{f}", .{std.zig.fmtId(e.clockName(n))}) else e.print(", .clock_field = \"{s}\"", .{e.clockName(n)});
+            if (runtime) e.print(", .clock = {s}", .{e.copyRef(e.clockName(n))}) else e.print(", .clock_field = \"{s}\"", .{e.clockName(n)});
             std.mem.swap(std.ArrayList(u8), &validation, &e.out);
         }
         return std.fmt.allocPrint(e.arena, ".{{ .recipe = {s}{s}{s}{s} }}", .{ e.recipeName(n), if (n.kind == .container) "" else ", .tokens = recipe_tokens", if (n.live.disabled) ", .states = .{ .disabled = true }" else "", validation.items }) catch unreachable;
+    }
+
+    /// `&ui.signals.state.<name>`, or inside an lcgf-each region this copy's entry of it, null
+    /// past the copies it holds (those restyle instantly).
+    fn copyRef(e: *Emit, name: []const u8) []const u8 {
+        const copies = for (e.page.fields.items) |f| {
+            if (std.mem.eql(u8, f.name, name)) break f.cap;
+        } else 0;
+        if (copies == 0) return std.fmt.allocPrint(e.arena, "&ui.signals.state.{f}", .{std.zig.fmtId(name)}) catch unreachable;
+        return std.fmt.allocPrint(e.arena, "if (copy0 < {d}) &ui.signals.state.{f}[copy0] else null", .{ copies, std.zig.fmtId(name) }) catch unreachable;
     }
 
     fn clockName(e: *Emit, n: ir.Node) []const u8 {
@@ -1012,6 +1022,9 @@ pub const Emit = struct {
                     e.print("    {f}: enum {{", .{std.zig.fmtId(f.name)});
                     for (f.cases, 0..) |c, k| e.print("{s} {f}", .{ if (k == 0) "" else ",", std.zig.fmtId(c) });
                     e.print(" }} = .{f}, // {s}\n", .{ std.zig.fmtId(f.cases[0]), e.where(f.loc) });
+                } else if (f.cap > 0) {
+                    // One per lcgf-each copy, by item index.
+                    e.print("    {f}: [{d}]{s} = @splat({s}), // {s}\n", .{ std.zig.fmtId(f.name), f.cap, fieldType(f.type), defaultOf(f), e.where(f.loc) });
                 } else e.print("    {f}: {s} = {s}, // {s}\n", .{ std.zig.fmtId(f.name), fieldType(f.type), defaultOf(f), e.where(f.loc) });
             }
             e.write("};\n\n");
@@ -1222,13 +1235,15 @@ pub const Emit = struct {
                 } else if (n.kind == .@"switch") "@\"switch\"" else m;
                 const item = e.eachOf(i) != none;
                 if (n.recipe.len > 0) {
+                    if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
                     e.print("_ = recipes.{s}(f, {s}, {s}, ", .{ switch (n.kind) {
                         .checkbox => "checkbox",
                         .toggle => "toggle",
                         else => "switchControl",
-                    }, e.rtId(n.id, list_depth), e.ref(n.bind) });
+                    }, e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind) });
                     e.rtCaption(n.text_kind, n.text);
                     e.print(", {s}) catch unreachable;", .{e.config(n, true)});
+                    if (item) e.itemChange(n);
                     return "";
                 }
                 if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
@@ -1242,7 +1257,9 @@ pub const Emit = struct {
             .slider => {
                 const item = e.eachOf(i) != none;
                 if (n.recipe.len > 0) {
-                    e.print("_ = recipes.slider(f, {s}, {s}, {d}, {d}, {s}) catch unreachable;", .{ e.rtId(n.id, list_depth), e.ref(n.bind), n.range[0], n.range[1], e.config(n, true) });
+                    if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
+                    e.print("_ = recipes.slider(f, {s}, {s}, {d}, {d}, {s}) catch unreachable;", .{ e.rtId(n.id, list_depth), if (item) "&value" else e.ref(n.bind), n.range[0], n.range[1], e.config(n, true) });
+                    if (item) e.itemChange(n);
                     return "";
                 }
                 if (item) e.print("{{ var value = {s}; ", .{e.stateRef(n.bind)});
@@ -2767,11 +2784,18 @@ pub const Emit = struct {
             \\            }}
             \\
         , .{ end, std.zig.fmtId(n.id) }) else e.print(
-            \\                const region_out = {s};{s}
+            \\                const region_out = {s};{s}{s}
             \\                if (lcgf.ct_interop.compose(&p.draws[{d}], out.draw, region_out.draw, @backingInt(lcgf.types.Id.from("{s}")), &p.strings[{d}])) out.draw = &p.draws[{d}] else |_| {{}}
             \\            }}
             \\
-        , .{ end, if (fit) std.fmt.allocPrint(e.arena, "\n                // Input can change the content's size (a hover, a row's editor); the next frame\n                // lays the page out around it.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", slot % 2, n.id, slot % 2, slot % 2 });
+        , .{ end, if (fit) std.fmt.allocPrint(e.arena, "\n                // Input can change the content's size (a hover, a row's editor); the next frame\n                // lays the page out around it.\n                const content = region_out.tree.c.size;\n                if (lcgf.ct_interop.setFit(&p.ui, .{f}, .{{ content[0][1], content[1][1] }})) out.wake = 0;", .{std.zig.fmtId(n.id)}) catch unreachable else "", if (e.regionMoves(each)) "\n                // Its copies' transitions and animations ask for frames while they run.\n                out.wake = @min(out.wake, region_out.wake);" else "", slot % 2, n.id, slot % 2, slot % 2 });
+    }
+
+    /// Whether a node of region `each` has a transition or an animation.
+    fn regionMoves(e: *Emit, each: u32) bool {
+        const nodes = e.page.nodes.slice();
+        for (0..nodes.len) |i| if (e.eachOf(@intCast(i)) == each and (nodes.items(.live)[i].transition.seconds > 0 or nodes.items(.live)[i].animation.tracks.len > 0)) return true;
+        return false;
     }
 
     /// The comptime checks of region `each`: the item fields the page reads and its

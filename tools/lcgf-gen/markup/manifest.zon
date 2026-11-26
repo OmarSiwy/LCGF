@@ -254,6 +254,7 @@
         .{ .kind = "selector", .name = ":structural", .status = .mapped, .target = "build time: :root, :first-child, :nth-child(), :not(), :is(), :where(), :has()", .fixture = "landmarks" },
         .{ .kind = "selector", .name = "::backdrop", .status = .mapped, .target = "build time: a <dialog>'s backdrop fill from its static rules' background-color (ct.dialogFace / dialog.beginFace); other properties are an error", .fixture = "overlays" },
         .{ .kind = "selector", .name = ":hover", .status = .mapped, .target = "on a button, link, toggle button, checkbox, radio option, switch, range or text field: a recipe rule requiring States.hovered (recipes.ct.button / recipes.button with .recipe, recipes.ct.link, recipes.ct.toggle, …); on a box, recipes.ct.box / recipes.beginBox", .fixture = "states" },
+        .{ .kind = "selector", .name = ":hover in lcgf-each", .status = .mapped, .target = "inside lcgf-each=\"x in xs\": a recipe box, button, link, toggle button, checkbox, switch or range per copy (id.with(index)); a transition or animation keeps <id>_fade: [lcgf-max]Fade, one per copy", .fixture = "copies" },
         .{ .kind = "selector", .name = ":active", .status = .mapped, .target = "on a button, checkbox, switch or box: a recipe rule requiring States.held", .fixture = "states" },
         .{ .kind = "selector", .name = ":focus", .status = .mapped, .target = "on a button, checkbox or switch: a recipe rule requiring States.focused", .fixture = "states" },
         .{ .kind = "selector", .name = ":focus-visible", .status = .mapped, .target = "on a button, checkbox or switch: a recipe rule requiring States.focus_visible", .fixture = "states" },
@@ -326,5 +327,6 @@
         .{ .name = "inputs" },
         .{ .name = "transitions" },
         .{ .name = "adapters" },
+        .{ .name = "copies" },
     },
 }

@@ -408,8 +408,16 @@ list stays the theme select's. A `<summary>`'s CSS styles its `<details>` sectio
 (`model.disclosure`: the button's rules and a mark in the accent while the section is open);
 the section and its panel stay the accordion's. None of these four eases or animates. Margins and `box-shadow` there are
 errors. The recipes read the page's theme as tokens (`recipe_tokens`), so a recipe widget
-looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), inside
-`:not()` or `:is()`, or inside lcgf-each is an error.
+looks like the theme widgets beside it until its CSS says otherwise. State CSS on any other box, on an ancestor (`div:hover button`), or inside
+`:not()` or `:is()` is an error.
+
+Inside `<template lcgf-each="x in xs">`, a box, a button, a link, a toggle button, a checkbox, a
+switch or a range takes state CSS too: each copy is a recipe widget of its own,
+`id.with(index)`, hovered, held and focused by its own response. A transition or an animation
+there keeps one `controls.Fade` or `Clock` per copy, in a page field `<id>_fade: [N]Fade`
+sized by the template's `lcgf-max="N"`, which it then needs; copies past N restyle instantly.
+Both frontends index the same field (`testdata/copies`). Inside `lcgf-each="n" lcgf-max="N"`,
+whose copies share one widget, state CSS stays an error that names `lcgf-each="x in xs"`.
 
 The `disabled` attribute, or a `<fieldset disabled>` around the control (outside its first
 `<legend>`), makes it (one of those widgets but a link) a recipe widget with `States.disabled`: no pointer or keyboard input, no

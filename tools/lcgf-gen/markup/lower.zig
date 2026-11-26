@@ -553,7 +553,7 @@ pub const Lowerer = struct {
             const kind = nodes.items(.kind)[x];
             const control = l.recipeWidget(n, x) and kind != .container and !l.composite(kind);
             const eases = l.transitionOf(n) != null and control;
-            const plays = l.k.get(n, .animation).decl != none and (control or (kind == .container and l.eachOf(n) == none));
+            const plays = l.k.get(n, .animation).decl != none and (control or (kind == .container and l.recipeWidget(n, x)));
             if ((nodes.items(.live)[x].disabled and kind != .container) or eases or plays) l.recipeOf(n, &reported);
         }
     }
@@ -605,8 +605,9 @@ pub const Lowerer = struct {
             const node = l.page.nodes.get(x);
             if (node.recipe.len > 0 and !l.composite(node.kind)) {
                 const t = l.transition(r, at) orelse continue;
+                const copies = l.copiesOf(n, at, "a transition") orelse continue;
                 l.page.nodes.items(.live)[x].transition = t;
-                l.field(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition");
+                l.fieldOf(ok(std.fmt.allocPrint(l.arena, "{s}_fade", .{node.id})), .fade, at, "a transition", copies);
                 continue;
             }
             const restyled = node.uses.len > 0 or node.text_uses.color != none or node.text_uses.px != none or switch (node.kind) {
@@ -634,8 +635,9 @@ pub const Lowerer = struct {
                 continue;
             }
             const a = l.animation(r, d.loc) orelse continue;
+            const copies = l.copiesOf(n, d.loc, "an animation") orelse continue;
             l.page.nodes.items(.live)[x].animation = a;
-            l.field(ok(std.fmt.allocPrint(l.arena, "{s}_clock", .{node.id})), .clock, d.loc, "an animation");
+            l.fieldOf(ok(std.fmt.allocPrint(l.arena, "{s}_clock", .{node.id})), .clock, d.loc, "an animation", copies);
         }
     }
 
@@ -999,8 +1001,14 @@ pub const Lowerer = struct {
             return;
         };
         if (!fits) {
+            const where = if (l.enclosing(n, .list) != none)
+                "inside lcgf-each=\"n\" lcgf-max=\"N\", whose copies share one widget; use lcgf-each=\"x in xs\", whose copies keep their own state"
+            else if (l.eachOf(n) != none)
+                "inside lcgf-each=\"x in xs\": there it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a switch or a range"
+            else
+                "it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a select, a <summary>, a text, search or number field or a text area outside lcgf-each";
             for (entries.items) |d| if (!(ok(reported.getOrPut(l.arena, d.sel))).found_existing) {
-                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered: it restyles a <div>-like box, a <button>, a link, a toggle button, a checkbox, a radio, a switch, a range, a select, a <summary>, a text, search or number field or a text area outside lcgf-each", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n) });
+                l.ds.err(l.c.sels.items(.loc)[d.sel], "{s} on <{s}> is not lowered{s}{s}", .{ if (l.hasState(d.sel)) "state CSS" else "@media", l.tag(n), if (l.eachOf(n) != none or l.enclosing(n, .list) != none) " " else ": ", where });
             };
             return;
         }
@@ -1083,7 +1091,13 @@ pub const Lowerer = struct {
 
     /// Whether document node `n` (IR node `x`) can be a recipe widget or box.
     fn recipeWidget(l: *const Lowerer, n: u32, x: u32) bool {
-        return l.eachOf(n) == none and switch (l.page.nodes.items(.kind)[x]) {
+        // lcgf-max copies share one widget; a region's copies are widgets of their own.
+        if (l.enclosing(n, .list) != none) return false;
+        if (l.eachOf(n) != none) return switch (l.page.nodes.items(.kind)[x]) {
+            .button, .link, .toggle, .checkbox, .@"switch", .slider, .container => true,
+            else => false,
+        };
+        return switch (l.page.nodes.items(.kind)[x]) {
             .button, .link, .toggle, .checkbox, .radio, .@"switch", .container, .slider => true,
             .textfield, .search => !l.page.nodes.items(.secure)[x],
             .textarea, .number, .select => true,
@@ -3566,8 +3580,11 @@ pub const Lowerer = struct {
         const nodes = if (l.attr(n, "lcgf-nodes")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 256;
         const texts = if (l.attr(n, "lcgf-texts")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 64;
         if (nodes == 0 or texts == 0 or texts > 255 * 64) l.ds.err(at, "lcgf-nodes and lcgf-texts take positive counts", .{});
+        // The most copies that keep their own transition or animation state (`copiesOf`).
+        const copies = if (l.attr(n, "lcgf-max")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 0;
+        if (l.attr(n, "lcgf-max") != null and (copies == 0 or copies > 4096)) l.ds.err(l.valueLoc(n, "lcgf-max"), "lcgf-max takes a count from 1 to 4096", .{});
         const id = ok(std.fmt.allocPrint(l.arena, "each_{s}", .{list}));
-        l.ir_of[n] = l.addNode(.{ .kind = .each, .parent = parent, .loc = l.loc(n), .style = style, .base_style = style, .params_expr = params, .bind = list, .text = item, .id = id, .max = nodes, .range = .{ @floatFromInt(texts), 0, 0 }, .level = fit });
+        l.ir_of[n] = l.addNode(.{ .kind = .each, .parent = parent, .loc = l.loc(n), .style = style, .base_style = style, .params_expr = params, .bind = list, .text = item, .id = id, .max = nodes, .range = .{ @floatFromInt(texts), @floatFromInt(copies), 0 }, .level = fit });
     }
 
     /// A binding inside an lcgf-each region: per-item state lives in the app's item, so it names
@@ -3604,12 +3621,28 @@ pub const Lowerer = struct {
 
     /// The `each` region around document node `n`, as its IR node, or none.
     fn eachOf(l: *const Lowerer, n: u32) u32 {
+        return l.enclosing(n, .each);
+    }
+
+    /// The IR node of the innermost `kind` (`.each`, `.list`) document node `n` is in, or `none`.
+    fn enclosing(l: *const Lowerer, n: u32, kind: ir.Kind) u32 {
         var i = n;
         while (i != none) : (i = l.doc.nodes.items(.parent)[i]) {
             const r = l.ir_of[i];
-            if (r != none and l.page.nodes.items(.kind)[r] == .each) return r;
+            if (r != none and l.page.nodes.items(.kind)[r] == kind) return r;
         }
         return none;
+    }
+
+    /// The copies of document node `n`'s lcgf-each region that keep their own transition or
+    /// animation state: 0 outside a region; null, reported at `at`, when the region has no
+    /// lcgf-max.
+    fn copiesOf(l: *Lowerer, n: u32, at: Loc, what: []const u8) ?u32 {
+        const each = l.eachOf(n);
+        if (each == none) return 0;
+        const copies: u32 = @intFromFloat(l.page.nodes.items(.range)[each][1]);
+        if (copies == 0) l.ds.err(at, "{s} inside lcgf-each=\"x in xs\" needs lcgf-max=\"N\" on its template: the most copies that keep their own state", .{what});
+        return if (copies == 0) null else copies;
     }
 
     /// Regions whose content is not exactly one element; checked after the walk.
@@ -3791,6 +3824,14 @@ pub const Lowerer = struct {
             return;
         };
         ok(l.page.fields.append(l.arena, .{ .name = name, .type = ty, .loc = at, .why = why }));
+    }
+
+    /// `field`, an array of `copies` when that is above 0: one per lcgf-each copy.
+    fn fieldOf(l: *Lowerer, name: []const u8, ty: ir.FieldType, at: Loc, why: []const u8, copies: u32) void {
+        l.field(name, ty, at, why);
+        for (l.page.fields.items) |*f| if (std.mem.eql(u8, f.name, name)) {
+            f.cap = copies;
+        };
     }
 
     fn setDefault(l: *Lowerer, name: []const u8, default: []const u8) void {
