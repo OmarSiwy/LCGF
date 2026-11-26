@@ -52,7 +52,7 @@ Requests, by usage:
 - **E1:** a Spec region whose content is laid out by its parent, so the region could be
   `fit`-sized. Today it must have a definite size, because the comptime layout runs before
   the region's content exists.
-- **E2:** `compose` into several regions in one pass. Today a page has one region.
+- **E2:** `compose` into several regions in one pass. Today the page composes them one after another into two draw lists it alternates between, so each region copies the commands before it; one pass would copy them once (a performance request, not a usage one).
 
 ### What the runtime frontend emits
 

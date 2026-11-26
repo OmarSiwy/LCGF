@@ -1116,16 +1116,13 @@ pub const Lowerer = struct {
     fn eachRegion(l: *Lowerer, n: u32, parent: u32, item: []const u8, list: []const u8) void {
         const at = l.valueLoc(n, "lcgf-each");
         if (!l.identifier(item, at) or !l.identifier(list, at)) return;
-        for (l.page.nodes.items(.kind)) |k| if (k == .each) {
-            l.ds.err(at, "one lcgf-each region per page for now", .{});
-            return;
-        };
         var params: []const u8 = "";
         var margin: ?[4]f32 = null;
         var style = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
         l.uses.clearRetainingCapacity();
-        // The copies stack in a column.
-        if (l.px(n, .@"row-gap")) |g| style.gap = g;
+        // The copies stack in a column, or a row under display: flex.
+        if (l.display(n) == .flex) style.dir = if (l.keyword(n, .@"flex-direction")) |kw| (if (css.eq(kw, "column")) .y else .x) else .x;
+        if (l.px(n, if (style.dir == .x) .@"column-gap" else .@"row-gap")) |g| style.gap = g;
         if (style.size[0].kind == .fit or style.size[1].kind == .fit)
             l.ds.err(l.loc(n), "a run-time region is laid out before its items exist: give it a width and a height, or flex-grow (and align-self: stretch)", .{});
         const nodes = if (l.attr(n, "lcgf-nodes")) |v| std.fmt.parseInt(u32, v, 10) catch 0 else 256;
