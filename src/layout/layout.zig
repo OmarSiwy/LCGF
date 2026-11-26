@@ -106,15 +106,15 @@ pub fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void {
 
 /// `fitSpan` with the extra sizing rules of `fx` (flex.zig), for grids on a flex page.
 /// The rows past `last` that `fitOf` clears with whole vectors were folded by an earlier piece
-/// (grid.zig), so their sums are kept around it.
+/// (grid.zig), so their sums are kept around it. `opts` as `fitFlexOpts`.
 // ponytail: saved and restored rather than an exact clear in fitOf, which moved stack slots in
 // every page's frame (markup-zero-cost).
-pub fn fitSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32) void {
+pub fn fitSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32, comptime opts: FlexOptions) void {
     const a = @backingInt(axis);
     const tail = simd.padded(last) - last;
     var keep: [3][W]f32 = undefined;
     inline for (.{ fx.c.shrink_sum[a], fx.c.base_kids, fx.c.below_kids }, 0..) |col, k| @memcpy(keep[k][0..tail], col[last..][0..tail]);
-    fitOf(t, fx, axis, first, last, .{});
+    fitOf(t, fx, axis, first, last, opts);
     inline for (.{ fx.c.shrink_sum[a], fx.c.base_kids, fx.c.below_kids }, 0..) |col, k| @memcpy(col[last..][0..tail], keep[k][0..tail]);
 }
 

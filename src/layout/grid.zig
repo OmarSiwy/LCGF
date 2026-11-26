@@ -23,6 +23,7 @@ const simd = @import("../core/simd.zig");
 const mem = @import("../core/mem.zig");
 const types = @import("../core/types.zig");
 const layout = @import("layout.zig");
+const FlexOptions = @import("flex.zig").FlexOptions;
 const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Axis = types.Axis;
@@ -664,6 +665,11 @@ pub fn fit(t: *Tree, gs: *Grids, axis: Axis) void {
 /// `fit` with the flex rules of `fx` (a `*const Flex`, or void for none) on the rows around
 /// the grids, for a page with both.
 pub fn fitWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis) void {
+    fitWithOpts(t, gs, fx, axis, .{});
+}
+
+/// `fitWith` with the flex features of `opts` compiled in (`layout.fitFlexOpts`).
+pub fn fitWithOpts(t: *Tree, gs: *Grids, fx: anytype, axis: Axis, comptime opts: FlexOptions) void {
     if (t.len == 0) return;
     const a = @backingInt(axis);
     const nat = t.c.nat[a];
@@ -673,7 +679,7 @@ pub fn fitWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis) void {
         k -= 1;
         const node = gs.g.node[k];
         // Folds rows (node, to); `node` itself is folded by the next piece, after its fit is set.
-        fitRows(t, fx, axis, node, to);
+        fitRows(t, fx, axis, node, to, opts);
         to = node + 1;
         const first = gs.g.first[a][k];
         @memset(gs.tr.content[first..][0..gs.g.count[a][k]], 0);
@@ -697,7 +703,7 @@ pub fn fitWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis) void {
         }
         t.c.fit[a][node] = sizeTracks(gs, k, a, 0);
     }
-    fitRows(t, fx, axis, 0, to);
+    fitRows(t, fx, axis, 0, to, opts);
 }
 
 /// `layout.resolve` for a tree with grids. Rows are resolved in order, in pieces: after a grid
@@ -772,8 +778,8 @@ inline fn resolveRows(t: *Tree, fx: anytype, axis: Axis, from: u32, to: u32) voi
     if (@TypeOf(fx) == void) layout.resolveSpan(t, axis, from - 1, to) else layout.resolveSpanFlex(t, fx, axis, from - 1, to);
 }
 
-inline fn fitRows(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32) void {
-    if (@TypeOf(fx) == void) layout.fitSpan(t, axis, first, last) else layout.fitSpanFlex(t, fx, axis, first, last);
+inline fn fitRows(t: *Tree, fx: anytype, axis: Axis, first: u32, last: u32, comptime opts: FlexOptions) void {
+    if (@TypeOf(fx) == void) layout.fitSpan(t, axis, first, last) else layout.fitSpanFlex(t, fx, axis, first, last, opts);
 }
 
 /// Every pass in order, as `layout.run`, with `fit` and `resolve` taken from this file.

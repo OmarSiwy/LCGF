@@ -1537,7 +1537,12 @@ pub const Emit = struct {
             if (pos[1] > 0) e.write(" .sticky = &sd.st,");
             if (e.hasLayers()) e.write(" .layers = &sd.ly,");
             if (flex) e.write(" .flex = &ui.flex.?,");
-            e.print(" }};\n        f.layoutSides({s}, sides);\n", .{e.fontExpr(paragraphs)});
+            // A baseline-aligned wrapping row compiles in the per-line baselines, as `end` does
+            // without side tables (`FlexOptions.line_baseline`).
+            if (flex and e.lineBaseline())
+                e.print(" }};\n        f.layoutSidesOpts({s}, sides, .{{ .line_baseline = true }});\n", .{e.fontExpr(paragraphs)})
+            else
+                e.print(" }};\n        f.layoutSides({s}, sides);\n", .{e.fontExpr(paragraphs)});
             if (regions) e.write("        for (ui.regions) |row| if (row != lcgf.types.none) lcgf.layout.snapSubtree(f.tree(), row);\n");
             e.print("        return f.finishSides({s}, sides);\n    }}\n\n", .{e.fontExpr(paragraphs)});
         }

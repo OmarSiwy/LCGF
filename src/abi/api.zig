@@ -187,6 +187,7 @@ pub const frame: Container = .{ .prefix = "frame", .T = Frame, .file = "src/runt
     .{ "layoutGrid", later_a7 },
     .{ "endSides", later_a7 },
     .{ "layoutSides", later_a7 },
+    .{ "layoutSidesOpts", "comptime FlexOptions: layoutSides" },
     .{ "finishSides", later_a7 },
     .{ "layoutTextRounded", later_a7 },
     .{ "arrangeText", later_a7 },

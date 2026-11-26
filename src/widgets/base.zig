@@ -707,15 +707,15 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 const gs = &tb.gs;
                 const fx = if (has_flex) &tb.fx else {};
                 grid.autoPlace(gs);
-                grid.fitWith(t, gs, fx, .x);
+                grid.fitWithOpts(t, gs, fx, .x, flex_opts);
                 grid.resolveWith(t, gs, fx, .x, in.viewport[0]);
-                if (has_flex) @import("../layout/wrap.zig").wrap(t, fx);
+                if (has_flex) @import("../layout/wrap.zig").wrapOpts(t, fx, flex_opts);
                 layout.textAvail(t, tx);
                 font.wrap(tx);
                 layout.applyText(t, tx, .y);
-                grid.fitWith(t, gs, fx, .y);
+                grid.fitWithOpts(t, gs, fx, .y, flex_opts);
                 grid.resolveWith(t, gs, fx, .y, in.viewport[1]);
-                if (has_flex) layout.placeFlex(t, fx) else layout.place(t);
+                if (has_flex) layout.placeFlexOpts(t, fx, flex_opts) else layout.place(t);
             } else if (has_flex) {
                 // `layout.runFlex`'s sequence.
                 const fx = &tb.fx;
@@ -1863,6 +1863,30 @@ test "ComptimeUi.rebuild: a grid page with side tables lays out again around a m
     // The next frame lays the page out as the rebuild did.
     const next = S.ui.frame(&in).tree;
     for (0..6) |row| try testing.expectEqual(again.rect(@intCast(row)), next.rect(@intCast(row)));
+}
+
+test "ComptimeUi: a baseline-aligned wrapping row in a grid cell takes a baseline per line" {
+    const big = spec_zig.textStyled(spec_zig.label("Big"), .{ .px = 24 });
+    const row = comptime spec_zig.flexed(spec_zig.row(.{ .size = .{ .px(90), .fit } }, .{ big, spec_zig.label("small"), spec_zig.label("next") }), .{ .wrap = true, .baseline = true });
+    const S = struct {
+        var flex: ComptimeUi(struct {}, spec_zig.col(.{}, .{row}), .default) = .{};
+        var grid: ComptimeUi(struct {}, spec_zig.grid(.{}, .{ .columns = &.{.px(90)} }, .{row}), .default) = .{};
+    };
+    const in: Input = .{};
+    const a = S.flex.frame(&in).tree;
+    const b = S.grid.frame(&in).tree;
+    // root, col or grid, row, Big, small, next: the labels sit in the row as on a flex page.
+    for (3..6) |r| {
+        const ra = a.rect(@intCast(r));
+        const rb = b.rect(@intCast(r));
+        try testing.expectEqual(ra.x0 - a.rect(2).x0, rb.x0 - b.rect(2).x0);
+        try testing.expectEqual(ra.y0 - a.rect(2).y0, rb.y0 - b.rect(2).y0);
+    }
+    // "Big" and "small" share the first line on one baseline (bottom edges, Mono has no
+    // ascent), and "next" wrapped to a second line.
+    try testing.expectEqual(b.rect(3).y1, b.rect(4).y1);
+    try testing.expect(b.rect(4).y0 > b.rect(3).y0);
+    try testing.expect(b.rect(5).y0 >= b.rect(3).y1);
 }
 
 test "ComptimeUiTokens: rows read the token table when pushed; a change lays out again" {

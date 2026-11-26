@@ -550,7 +550,12 @@ pub const Frame = struct {
     /// `layout.run`'s (with flex rules, `runFlex`'s), with the font's measure and wrap; then
     /// the anchors and the sticky nodes.
     pub fn layoutSides(f: *Frame, font: anytype, sides: Sides) void {
-        if (comptime isParagraphs(@TypeOf(font))) f.layoutSidesWith(f.withStrings(font), sides) else f.layoutSidesWith(font, sides);
+        f.layoutSidesOpts(font, sides, .{});
+    }
+
+    /// `layoutSides` with the flex features of `opts` compiled in (`layoutFlexOpts`).
+    pub fn layoutSidesOpts(f: *Frame, font: anytype, sides: Sides, comptime opts: FlexOptions) void {
+        if (comptime isParagraphs(@TypeOf(font))) f.layoutSidesWith(f.withStrings(font), sides, opts) else f.layoutSidesWith(font, sides, opts);
     }
 
     /// The paint half of `endSides`: in layer order when `sides.layers` is given, then a
@@ -561,7 +566,7 @@ pub const Frame = struct {
         return out;
     }
 
-    fn layoutSidesWith(f: *Frame, font: anytype, sides: Sides) void {
+    fn layoutSidesWith(f: *Frame, font: anytype, sides: Sides, comptime opts: FlexOptions) void {
         const t = f.tree();
         const tx = f.texts();
         t.seal(0);
@@ -583,22 +588,22 @@ pub const Frame = struct {
             if (sides.grids) |gs| {
                 if (axis == .x) grid.autoPlace(gs);
                 if (sides.flex) |fx| {
-                    grid.fitWith(t, gs, fx, axis);
+                    grid.fitWithOpts(t, gs, fx, axis, opts);
                     grid.resolveWith(t, gs, fx, axis, f.in.viewport[a]);
                 } else {
                     grid.fit(t, gs, axis);
                     grid.resolve(t, gs, axis, f.in.viewport[a]);
                 }
             } else if (sides.flex) |fx| {
-                layout.fitFlex(t, fx, axis);
+                layout.fitFlexOpts(t, fx, axis, opts);
                 layout.resolveFlex(t, fx, axis, f.in.viewport[a]);
             } else {
                 layout.fit(t, axis);
                 layout.resolve(t, axis, f.in.viewport[a]);
             }
-            if (axis == .x) if (sides.flex) |fx| @import("../layout/wrap.zig").wrap(t, fx);
+            if (axis == .x) if (sides.flex) |fx| @import("../layout/wrap.zig").wrapOpts(t, fx, opts);
         }
-        if (sides.flex) |fx| layout.placeFlex(t, fx) else layout.place(t);
+        if (sides.flex) |fx| layout.placeFlexOpts(t, fx, opts) else layout.place(t);
         if (sides.anchors) |an| overlay.anchor(t, an, .{ .x1 = f.in.viewport[0], .y1 = f.in.viewport[1] });
         if (sides.sticky) |st| scroll.stick(t, st);
         f.finalizeLayout(.{}) catch unreachable;

@@ -55,6 +55,15 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         label.ct.label(theme, "c6"),
         label.ct.label(theme, "c7"),
     }),
+    // align-items: baseline on a wrapping row in a grid cell: a baseline per line.
+    s.grid(.{}, .{ .columns = &.{ .px(90), .fr(1) } }, .{
+        s.flexed(s.row(.{}, .{
+            s.textStyled(label.ct.label(theme, "Big"), .{ .px = 24, .color = .rgb(230, 230, 235) }),
+            label.ct.label(theme, "small"),
+            label.ct.label(theme, "next"),
+        }), .{ .wrap = true, .baseline = true }),
+        label.ct.label(theme, "x"),
+    }),
     s.grid(.{}, .{ .rows = &.{ .fit, .fit }, .flow = .column_dense, .distribution = .{ .space_between, .start } }, .{
         label.ct.label(theme, "1"),
         label.ct.label(theme, "2"),

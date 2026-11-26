@@ -392,7 +392,7 @@ layout: a fixed sequence of linear passes over the tree columns.
 - `fn fitFlex(t: *Tree, fx: *const Flex, axis: Axis) void`: `fit` with the extra sizing rules of `fx` (flex.zig).
 - `fn fitFlexOpts(t: *Tree, fx: *const Flex, axis: Axis, comptime opts: FlexOptions) void`: `fitFlex` with the features of `opts` compiled in.
 - `fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void`: `fit` over rows [first, last), any `first < last <= len`.
-- `fn fitSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32) void`
+- `fn fitSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32, comptime opts: FlexOptions) void`
 - `fn resolve(t: anytype, axis: Axis, viewport: f32) void`: Top-down: final size of every node on one axis.
 - `fn resolveFlex(t: *Tree, fx: *const Flex, axis: Axis, viewport: f32) void`: `resolve` with the extra sizing rules of `fx` (flex.zig).
 - `fn resolveSpan(t: anytype, axis: Axis, first: u32, last: u32) void`: `resolve` over rows [first, last), any `first < last <= len`: every row after `first` from its parent, in row order, with `first`'s own size taken as given and only read.
@@ -505,6 +505,7 @@ grid: two-dimensional layout in rows and columns of tracks, after CSS Grid (http
 - `fn autoPlace(gs: *Grids) void`
 - `fn fit(t: *Tree, gs: *Grids, axis: Axis) void`: `layout.fit` for a tree with grids.
 - `fn fitWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis) void`: `fit` with the flex rules of `fx` (a `*const Flex`, or void for none) on the rows around the grids, for a page with both.
+- `fn fitWithOpts(t: *Tree, gs: *Grids, fx: anytype, axis: Axis, comptime opts: FlexOptions) void`: `fitWith` with the flex features of `opts` compiled in (`layout.fitFlexOpts`).
 - `fn resolve(t: *Tree, gs: *Grids, axis: Axis, viewport: f32) void`: `layout.resolve` for a tree with grids.
 - `fn resolveWith(t: *Tree, gs: *Grids, fx: anytype, axis: Axis, viewport: f32) void`: `resolve` with the flex rules of `fx`, as `fitWith`.
 - `fn run(t: *Tree, tx: *Texts, gs: *Grids, viewport: [2]f32) void`: Every pass in order, as `layout.run`, with `fit` and `resolve` taken from this file.
@@ -3629,6 +3630,7 @@ Fields: `ctx`, `in`
 - `fn finishParagraphs(f: *Frame, font: anytype) Output`: The paint half of `endParagraphs`: `finish`, with `font`'s decorations painted after their runs, before the host reads the draw list.
 - `fn endSides(f: *Frame, font: anytype, sides: Sides) Output`: `end` with the side tables in `sides`.
 - `fn layoutSides(f: *Frame, font: anytype, sides: Sides) void`: The layout half of `endSides`: `grid.run`'s passes when there are grids, else `layout.run`'s (with flex rules, `runFlex`'s), with the font's measure and wrap; then the anchors and the sticky nodes.
+- `fn layoutSidesOpts(f: *Frame, font: anytype, sides: Sides, comptime opts: FlexOptions) void`: `layoutSides` with the flex features of `opts` compiled in (`layoutFlexOpts`).
 - `fn finishSides(f: *Frame, font: anytype, sides: Sides) Output`: The paint half of `endSides`: in layer order when `sides.layers` is given, then a `protocol.MonoParagraphsOf` font's decorations.
 - `fn endGrid(f: *Frame, font: Mono, gs: *grid.Grids) Output`: `endSides` with grids only.
 - `fn layoutGrid(f: *Frame, font: Mono, gs: *grid.Grids) void`: `layoutSides` with grids only.

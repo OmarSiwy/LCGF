@@ -28,6 +28,9 @@
     .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 4px; width: 280px; }
     .news { columns: 3; column-gap: 6px; width: 240px; }
     .narrow { columns: 50px 8; column-gap: 10px; width: 230px; }
+    .pair { display: grid; grid-template-columns: 90px 1fr; }
+    .wrapbase { display: flex; flex-wrap: wrap; align-items: baseline; align-content: start; }
+    .big { font-size: 24px; }
     .flow { display: grid; grid-template-rows: auto auto; grid-auto-flow: column dense; justify-content: space-between; }
   </style>
 </head>
@@ -49,6 +52,7 @@
   <div class="tiles"><span>t1</span><span>t2</span><span>t3</span><span>t4</span><span>t5</span><span>t6</span></div>
   <div class="news"><div>n1</div><div>n2</div><div>n3</div><div>n4</div><div>n5</div></div>
   <div class="narrow"><div>c1</div><div>c2</div><div>c3</div><div>c4</div><div>c5</div><div>c6</div><div>c7</div></div>
+  <div class="pair"><div class="wrapbase"><span class="big">Big</span><span>small</span><span>next</span></div><span>x</span></div>
   <div class="flow"><span>1</span><span>2</span><span>3</span></div>
 </body>
 </html>
