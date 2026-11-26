@@ -39,6 +39,8 @@ const geometry = @import("../draw/geometry.zig");
 const dynamic = @import("../comptime/dynamic.zig");
 const ct_layout = @import("../comptime/layout.zig");
 const ct_paint = @import("../comptime/paint.zig");
+const ct_events = @import("../comptime/events.zig");
+const Input = @import("../core/input.zig").Input;
 const Span = @import("../core/strings.zig").Span;
 const Style = types.Style;
 const TextStyle = types.TextStyle;
@@ -205,6 +207,15 @@ pub const Header = extern struct {
     /// (`tables.inherit`), for the labels' runs.
     alpha: u32 = 0,
     clip_radii: u32 = 0,
+    /// `widgets` u32 each: the widgets' rows, and 1 for a slider; `focus_count` u32: the
+    /// focusable widgets' positions in focus order; `widgets` u32: each widget's place in it
+    /// or `none` (ct_events' tables).
+    widgets: u32 = 0,
+    widget_rows: u32 = 0,
+    widget_sliders: u32 = 0,
+    focus_count: u32 = 0,
+    focus_slots: u32 = 0,
+    focus_pos: u32 = 0,
 };
 
 /// One segment of a label's format (src/core/fmt.zig's `Seg`), its argument the field's byte
@@ -438,6 +449,13 @@ fn writeBlock(w: *Writer, t: *const tree.Tree, nodes: []const Node, fields: []co
             const padded = try w.arena.alloc(u8, rowsMax(n) * c.size);
             @memset(padded, 0);
             @memcpy(padded[0..bytes.len], bytes);
+            // A column of one value in every row is padded with it too, as comptime's dropped
+            // columns are (one shared splat table): a compiler that sees the words as constants
+            // then folds its loads.
+            const uniform = for (1..n) |i| {
+                if (!std.mem.eql(u8, bytes[0..c.size], bytes[i * c.size ..][0..c.size])) break false;
+            } else true;
+            if (uniform) for (n..rowsMax(n)) |i| @memcpy(padded[i * c.size ..][0..c.size], bytes[0..c.size]);
             offs[k] = try w.section(padded);
         }
     }
@@ -482,7 +500,13 @@ pub const Options = struct {
     /// Bits of the coordinate type (`coordBits`).
     coord: u32 = 0,
     string_cap: u32 = default_string_cap,
+    /// The interactive widgets (ct_events: nodes with an id), in row order.
+    widgets: []const Widget = &.{},
 };
+
+/// One widget of a static UI: its row, whether it is a slider (else a click target) and
+/// whether keyboard focus stops at it.
+pub const Widget = struct { row: u32, slider: bool, focusable: bool = true };
 
 /// The words of the static UI of `nodes`, in `arena`.
 pub fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u32 {
@@ -681,6 +705,25 @@ pub fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u
     }
     h.patch_count = @intCast(patches.items.len);
     h.patches = try w.section(std.mem.sliceAsBytes(patches.items));
+    // The widgets.
+    const nw = o.widgets.len;
+    const wrows = try arena.alloc(u32, nw);
+    const wsliders = try arena.alloc(u32, nw);
+    const fpos = try arena.alloc(u32, nw);
+    var fslots: std.ArrayList(u32) = .empty;
+    for (o.widgets, wrows, wsliders, fpos, 0..) |wd, *r, *sl, *fp, k| {
+        if (wd.row >= n) return error.BadTree;
+        r.* = wd.row;
+        sl.* = @intFromBool(wd.slider);
+        fp.* = if (wd.focusable) @intCast(fslots.items.len) else none;
+        if (wd.focusable) try fslots.append(arena, @intCast(k));
+    }
+    h.widgets = @intCast(nw);
+    h.widget_rows = try w.section(std.mem.sliceAsBytes(wrows));
+    h.widget_sliders = try w.section(std.mem.sliceAsBytes(wsliders));
+    h.focus_count = @intCast(fslots.items.len);
+    h.focus_slots = try w.section(std.mem.sliceAsBytes(fslots.items));
+    h.focus_pos = try w.section(std.mem.sliceAsBytes(fpos));
 
     while (w.words.items.len % 16 != 0) try w.words.append(arena, 0);
     h.words = @intCast(w.words.items.len);
@@ -695,11 +738,11 @@ const Reference = struct { pos: [2][]f32, size: [2][]f32 };
 /// while compiling.
 fn reference(arena: std.mem.Allocator, words: []const u32, h: *const Header, text: bool) Error!Reference {
     var counter: mem.Carver = .{ .buf = null };
-    _ = Run.carve(&counter, words, h, &h.full);
+    _ = Run.carve(&counter, words, h, &h.full, null);
     _ = Run.carveTexts(&counter, h.labels);
     const buf = try arena.alignedAlloc(u8, .fromByteUnits(mem.column_align), counter.off);
     var carver: mem.Carver = .{ .buf = buf };
-    var run = Run.carve(&carver, words, h, &h.full);
+    var run = Run.carve(&carver, words, h, &h.full, null);
     var tx = Run.carveTexts(&carver, h.labels);
     const spans = try arena.alloc(Span, h.labels);
     @memset(spans, .{ .start = 0, .bytes = 0 });
@@ -747,7 +790,9 @@ const Run = struct {
     windows: bool,
     root_when: bool,
 
-    inline fn carve(carver: *mem.Carver, words: []const u32, h: *const Header, b: *const Block) Run {
+    /// `cols`, when given, has each constant column's rows (`column_arrays` order) apart from
+    /// the words: see `frameWith`.
+    inline fn carve(carver: *mem.Carver, words: []const u32, h: *const Header, b: *const Block, cols: ?[*]const [*]const u8) Run {
         const n = b.n;
         const rows = rowsMax(n);
         const offs: *const [column_arrays.len]u32 = @ptrCast(words[b.cols..][0..column_arrays.len]);
@@ -774,7 +819,12 @@ const Run = struct {
                 .array => |a| @typeInfo(a.child).pointer.child,
                 else => unreachable,
             };
-            const s: []T = if (offs[k] == none) carver.slice(T, rows) else @constCast(at(T, words, offs[k], rows));
+            const s: []T = if (offs[k] == none)
+                carver.slice(T, rows)
+            else if (cols) |cs|
+                @as([*]T, @ptrCast(@alignCast(@constCast(cs[k]))))[0..rows]
+            else
+                @constCast(at(T, words, offs[k], rows));
             if (comptime @typeInfo(FT) == .array) {
                 @field(r.v.c, c.field)[c.axis] = s;
             } else @field(r.v.c, c.field) = s;
@@ -871,6 +921,17 @@ pub const Ui = struct {
     batch_key: []const u32,
     alpha: []const f32,
     clip_radii: []const [4]f32,
+    /// Input state across frames: the slot the left button went down on (or `none`), the
+    /// button last frame, the focused slot (or `none`), and 1 while every quad counts as
+    /// dirty (after a frame), else the patched ones in `dirty` do.
+    input: []u32,
+    dirty: []u8,
+    /// The widgets' visible rects (ct_events.Rects), filled when input asks.
+    rects: [4][]f32,
+    widget_rows: []const u32,
+    widget_sliders: []const u32,
+    focus_slots: []const u32,
+    focus_pos: []const u32,
 
     pub const InitError = error{ NotTables, Version, LayoutHash, Truncated, BufferTooSmall, Unaligned };
 
@@ -886,9 +947,9 @@ pub const Ui = struct {
         return h;
     }
 
-    inline fn carve(carver: *mem.Carver, words: []const u32, h: *const Header) Ui {
-        const full = Run.carve(carver, words, h, &h.full);
-        const skel = if (h.folded > 0) Run.carve(carver, words, h, &h.skel) else full;
+    inline fn carve(carver: *mem.Carver, words: []const u32, h: *const Header, cols: ?[*]const [*]const u8) Ui {
+        const full = Run.carve(carver, words, h, &h.full, cols);
+        const skel = if (h.folded > 0) Run.carve(carver, words, h, &h.skel, if (cols) |cs| cs + column_arrays.len else null) else full;
         const m = h.quads;
         const nb = h.batches;
         return .{
@@ -915,7 +976,19 @@ pub const Ui = struct {
             .batch_key = at(u32, words, h.batch_key, nb),
             .alpha = at(f32, words, h.alpha, h.full.xlen),
             .clip_radii = at([4]f32, words, h.clip_radii, h.full.xlen),
+            .input = carver.slice(u32, 4),
+            .dirty = carver.slice(u8, m + 1),
+            .rects = .{ carver.slice(f32, rect_rows(h)), carver.slice(f32, rect_rows(h)), carver.slice(f32, rect_rows(h)), carver.slice(f32, rect_rows(h)) },
+            .widget_rows = at(u32, words, h.widget_rows, h.widgets),
+            .widget_sliders = at(u32, words, h.widget_sliders, h.widgets),
+            .focus_slots = at(u32, words, h.focus_slots, h.focus_count),
+            .focus_pos = at(u32, words, h.focus_pos, h.widgets),
         };
+    }
+
+    /// Rows of the rect table: one per widget, padded to whole vectors of the widest build.
+    fn rect_rows(h: *const Header) usize {
+        return std.mem.alignForward(usize, h.widgets, pad_lanes);
     }
 
     fn start() usize {
@@ -926,7 +999,7 @@ pub const Ui = struct {
     pub fn bytes(words: []const u32) InitError!usize {
         const h = try check(words);
         var counter: mem.Carver = .{ .buf = null, .off = start() };
-        _ = carve(&counter, words, h);
+        _ = carve(&counter, words, h, null);
         return counter.off;
     }
 
@@ -937,7 +1010,8 @@ pub const Ui = struct {
         if (buf.len < try bytes(words)) return error.BufferTooSmall;
         var carver: mem.Carver = .{ .buf = @alignCast(buf), .off = start() };
         const ui: *Ui = @ptrCast(@alignCast(buf.ptr));
-        ui.* = carve(&carver, words, h);
+        ui.* = carve(&carver, words, h, null);
+        @memcpy(ui.input, &[4]u32{ none, 0, none, 1 });
         return ui;
     }
 
@@ -969,23 +1043,30 @@ pub const Ui = struct {
         return &ui.d;
     }
 
+    /// One frame of the UI `init` placed in `buf`, every table read from `words` alone (none
+    /// from the `Ui` in `buf`): inlined, so a caller that passes constant words gets the frame
+    /// specialized to them, as Zig's comptime pipeline is to its tables.
+    /// `cols`, when not null, gives each constant column of the full tree then of the skeleton
+    /// (`column_arrays` order; unused for written ones) as its own array of the same rows: a
+    /// compiler folds loads from a column of one value only when it is an object of its own.
+    pub inline fn frameWith(words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32) DrawList {
+        // Carving again lays out the same slices `init` did; nothing is cleared.
+        var carver: mem.Carver = .{ .buf = buf, .off = start(), .zeroed = true };
+        var ui = carve(&carver, words, @ptrCast(words.ptr), cols);
+        ui.frameOn(state, viewport);
+        return ui.d;
+    }
+
     inline fn frameOn(ui: *Ui, state: [*]const u8, viewport: [2]f32) void {
-        const h = ui.h;
-        // The labels' text, gathered into the frame's strings in label order.
-        var used: u32 = 0;
-        const args: CArgs = .{ .state = state };
-        for (ui.get(u32, h.label_offsets, h.labels), ui.get([4]u32, h.label_formats, h.labels), ui.spans[0..h.labels]) |off, lf, *sp| {
-            var sink: fmt.Sink = .{ .buf = ui.strings[used..] };
-            if (lf[0] == none) {
-                sink.put(args.str(off));
-            } else {
-                const text = std.mem.sliceAsBytes(ui.words[h.format_text..])[lf[2]..][0..lf[3]];
-                fmt.write(ui.get(Seg, h.segs, h.seg_count)[lf[0]..][0..lf[1]], text, args, &sink);
-            }
-            sp.* = .{ .start = used, .bytes = @intCast(sink.len) };
-            used += @intCast(sink.len);
-        }
+        const used = ui.gather(state);
         ui.select(state);
+        ui.layOut(viewport);
+        ui.paint(state, used);
+    }
+
+    /// The passes over this frame's text and selection, the expand, slot sources and finalize.
+    inline fn layOut(ui: *Ui, viewport: [2]f32) void {
+        const h = ui.h;
         const spans = ui.spans[0..h.labels];
         const n = h.full.n;
         const full = &ui.full;
@@ -1004,9 +1085,165 @@ pub const Ui = struct {
             }
         }
         if (ui.slot_source.len > 0) ct_layout.slotSourcesOver(ui.slot_source, ui.get(u32, h.slot_defaults, h.slot_count), ui.get(u32, h.slots, n), full.mask);
-        @call(layout.pass_call, layout.finalize, .{&full.v});
-        ct_paint.emitLiveTextOver(ui, {}, full.mask, spans, ui.strings[0..used], &ui.d);
+        @call(layout.pass_call, layout.finalizeWith, .{ &full.v, @as(@import("../layout/rounding.zig").Options, .{}) }) catch unreachable;
+    }
+
+    /// The draw list from this frame's layout, the bound colours patched in; every quad dirty.
+    inline fn paint(ui: *Ui, state: [*]const u8, used: u32) void {
+        ct_paint.emitLiveTextOver(ui, {}, ui.full.mask, ui.spans[0..ui.h.labels], ui.strings[0..used], &ui.d);
         ui.patchAll(state);
+        ui.input[3] = 1;
+    }
+
+    /// The labels' text from `state` into the frame's strings, in label order; returns the
+    /// bytes used.
+    inline fn gather(ui: *Ui, state: [*]const u8) u32 {
+        const h = ui.h;
+        var used: u32 = 0;
+        const args: CArgs = .{ .state = state };
+        for (ui.get(u32, h.label_offsets, h.labels), ui.get([4]u32, h.label_formats, h.labels), ui.spans[0..h.labels]) |off, lf, *sp| {
+            var sink: fmt.Sink = .{ .buf = ui.strings[used..] };
+            if (lf[0] == none) {
+                sink.put(args.str(off));
+            } else {
+                const text = std.mem.sliceAsBytes(ui.words[h.format_text..])[lf[2]..][0..lf[3]];
+                fmt.write(ui.get(Seg, h.segs, h.seg_count)[lf[0]..][0..lf[1]], text, args, &sink);
+            }
+            sp.* = .{ .start = used, .bytes = @intCast(sink.len) };
+            used += @intCast(sink.len);
+        }
+        return used;
+    }
+
+    /// Lays out again only what state field `field` moves (ct_layout's `relayout`), after a
+    /// frame: nothing when no label shows it; the field's dirty span (`dirtySpan`) when the UI
+    /// does not fold and the span is not the whole tree without regions; else the whole frame
+    /// again in last frame's viewport and selection. Then the draw list is made again. Returns
+    /// whether anything was laid out.
+    pub fn relayout(ui: *Ui, state: [*]const u8, field: u32) bool {
+        const h = ui.h;
+        if (field >= h.fields) return false;
+        const span = ui.get([2]u32, h.spans, h.fields)[field];
+        if (span[0] == none) return false;
+        const used = ui.gather(state);
+        const full = &ui.full;
+        const vp: [2]f32 = .{ full.v.c.size[0][0], full.v.c.size[1][0] };
+        if (h.folded > 0 or (span[0] == 0 and !full.live)) {
+            ui.layOut(vp);
+        } else {
+            ct_layout.relayoutOver(full, &full.v, &ui.tx, ui.spans[0..h.labels], span[0], span[1], Mono{});
+        }
+        ui.paint(state, used);
+        return true;
+    }
+
+    /// The colour field `field`'s rgb into its quads (ct_paint.Patches.apply): each changed
+    /// quad becomes dirty.
+    pub fn patch(ui: *Ui, state: [*]const u8, field: u32) void {
+        const h = ui.h;
+        var rows: ct_paint.VisibleRows = .{};
+        for (ui.get([4]u32, h.patches, h.patch_count)) |p| if (p[0] == field) {
+            const row = rows.of(ui, {}, &ui.d, p[1]) orelse continue;
+            patchQuad(&ui.d.quads[row], p, state);
+            ui.dirty[row] = 1;
+        };
+    }
+
+    /// The quads a patch changed since `clearDirty`, one byte each; all of them after a frame.
+    pub fn dirtyQuads(ui: *Ui) []const u8 {
+        if (ui.input[3] != 0) {
+            @memset(ui.dirty, 1);
+            ui.input[3] = 0;
+        }
+        return ui.dirty[0..ui.h.quads];
+    }
+
+    pub fn clearDirty(ui: *Ui) void {
+        @memset(ui.dirty, 0);
+        ui.input[3] = 0;
+    }
+
+    /// The widgets' visible rects in last frame's layout, in the UI's coordinate type.
+    fn fillRects(ui: *Ui) void {
+        for (ui.widget_rows, 0..) |row, k| {
+            const r = ui.visOf(row);
+            inline for (0..4) |side| ui.rects[side][k] = r[side];
+        }
+    }
+
+    inline fn visOf(ui: *const Ui, i: u32) V4 {
+        const c = &ui.full.v.c;
+        const g = ui.geometryRow(i);
+        return ui.inCoord(.{ c.vis[0][g], c.vis[1][g], c.vis[2][g], c.vis[3][g] });
+    }
+
+    /// The topmost widget under (x, y) in last frame's layout (ct_events.at), as its row, or
+    /// `none`.
+    pub fn widgetAt(ui: *Ui, x: f32, y: f32) u32 {
+        ui.fillRects();
+        const k = ui.topmostSlot(x, y);
+        return if (k == none) none else ui.widget_rows[k];
+    }
+
+    fn topmostSlot(ui: *const Ui, x: f32, y: f32) u32 {
+        return ct_events.topmost(.{ ui.rects[0], ui.rects[1], ui.rects[2], ui.rects[3] }, {}, ui.rects[0].len, x, y);
+    }
+
+    /// This frame's pointer event (ct_events.pointer), its widget as a row.
+    pub fn pointer(ui: *Ui, in: *const Input) ?ct_events.Hit {
+        ui.fillRects();
+        const Ctx = struct {
+            ui: *const Ui,
+            pub fn at(c: @This(), x: f32, y: f32) u32 {
+                return c.ui.topmostSlot(x, y);
+            }
+            pub fn allows(_: @This(), _: u32) bool {
+                return true;
+            }
+            pub fn activates(_: @This(), _: u32) bool {
+                return true;
+            }
+            pub fn slider(c: @This(), k: u32) bool {
+                return c.ui.widget_sliders[k] != 0;
+            }
+            pub fn clicks(c: @This(), k: u32) bool {
+                return c.ui.widget_sliders[k] == 0;
+            }
+            pub fn span(c: @This(), k: u32) [2]f32 {
+                return .{ c.ui.rects[0][k], c.ui.rects[2][k] };
+            }
+        };
+        var down = ui.input[1] != 0;
+        defer ui.input[1] = @intFromBool(down);
+        var hit = ct_events.pointerOver(Ctx{ .ui = ui }, &ui.input[0], &down, in) orelse return null;
+        hit.slot = ui.widget_rows[hit.slot];
+        return hit;
+    }
+
+    /// Moves focus for every Tab press and repeat in `in` (ct_events.focusKeys).
+    pub fn focusKeys(ui: *Ui, in: *const Input, tab: u8) void {
+        ct_events.focusKeysOver(ui.focus_slots, ui.focus_pos, &ui.input[2], in, tab);
+    }
+
+    /// The widget Tab (or Shift+Tab, `back`) moves focus to from widget row `from` (`none`:
+    /// no focus), as a row (ct_events.nextFocus).
+    pub fn nextFocus(ui: *const Ui, from: u32, back: bool) u32 {
+        const k = ct_events.nextFocusOver(ui.focus_slots, ui.focus_pos, ui.slotOfRow(from), back);
+        return if (k == none) none else ui.widget_rows[k];
+    }
+
+    /// The focused widget's row, or `none`.
+    pub fn focus(ui: *const Ui) u32 {
+        const k = ui.input[2];
+        return if (k == none) none else ui.widget_rows[k];
+    }
+
+    pub fn setFocus(ui: *Ui, row: u32) void {
+        ui.input[2] = ui.slotOfRow(row);
+    }
+
+    fn slotOfRow(ui: *const Ui, row: u32) u32 {
+        return @intCast(std.mem.indexOfScalar(u32, ui.widget_rows, row) orelse return none);
     }
 
     /// The bound colours' rgb into their quads (ct_paint.Patches.apply for every field), the
@@ -1016,10 +1253,15 @@ pub const Ui = struct {
         var rows: ct_paint.VisibleRows = .{};
         for (ui.get([4]u32, h.patches, h.patch_count)) |p| {
             const row = rows.of(ui, {}, &ui.d, p[1]) orelse continue;
-            const bits = std.mem.readInt(u32, state[p[3]..][0..4], .little) & 0xffffff;
-            const q = &ui.d.quads[row];
-            if (p[2] == 0) q.fill = (q.fill & 0xff000000) | bits else q.border_color = (q.border_color & 0xff000000) | bits;
+            patchQuad(&ui.d.quads[row], p, state);
         }
+    }
+
+    /// Patch `p` (field, template, 0 fill / 1 border, the field's offset) into quad `q`: the
+    /// colour's rgb, the alpha the quad's style gave kept.
+    inline fn patchQuad(q: *Quad, p: [4]u32, state: [*]const u8) void {
+        const bits = std.mem.readInt(u32, state[p[3]..][0..4], .little) & 0xffffff;
+        if (p[2] == 0) q.fill = (q.fill & 0xff000000) | bits else q.border_color = (q.border_color & 0xff000000) | bits;
     }
 
     const V4 = @Vector(4, f32);
@@ -1035,13 +1277,18 @@ pub const Ui = struct {
     pub inline fn rectOf(ui: *const Ui, _: void, i: u32) V4 {
         const c = &ui.full.v.c;
         const g = ui.geometryRow(i);
-        var r: V4 = .{ c.rect[0][g], c.rect[1][g], c.rect[2][g], c.rect[3][g] };
+        return ui.inCoord(.{ c.rect[0][g], c.rect[1][g], c.rect[2][g], c.rect[3][g] });
+    }
+
+    /// `r` as the comptime UI keeps it: in its coordinate type.
+    inline fn inCoord(ui: *const Ui, r: V4) V4 {
+        var out = r;
         if (ui.h.coord != 0) {
             const hi: f32 = @floatFromInt((@as(i64, 1) << @intCast(ui.h.coord - 1)) - 1);
             const lo: f32 = -hi - 1;
-            inline for (0..4) |k| r[k] = @floatFromInt(@as(i32, @intFromFloat(@min(@max(r[k], lo), hi))));
+            inline for (0..4) |k| out[k] = @floatFromInt(@as(i32, @intFromFloat(@min(@max(r[k], lo), hi))));
         }
-        return r;
+        return out;
     }
 
     pub inline fn clipOf(ui: *const Ui, _: void, i: u32) [4]f32 {
@@ -1100,6 +1347,9 @@ fn status(e: Ui.InitError) c_int {
 }
 
 pub const frame_symbol = std.fmt.comptimePrint("lcgf_ct_frame_u32_f32_l{d}", .{simd.lanes});
+pub const frame_words_symbol = std.fmt.comptimePrint("lcgf_ct_frame_words_u32_f32_l{d}", .{simd.lanes});
+/// The number of column pointers `frameWith`'s `cols` holds.
+pub const cols_len = 2 * column_arrays.len;
 
 /// The C functions, by the names lcgf.h declares.
 pub const exports = .{
@@ -1108,6 +1358,18 @@ pub const exports = .{
     .{ "lcgf_ct_init", &cInit },
     .{ "lcgf_ct_layout", &cLayout },
     .{ frame_symbol, &cFrame },
+    .{ "lcgf_ct_relayout", &cRelayout },
+    .{ "lcgf_ct_patch", &cPatch },
+    .{ "lcgf_ct_dirty", &cDirty },
+    .{ "lcgf_ct_clear_dirty", &cClearDirty },
+    .{ "lcgf_ct_draw", &cDraw },
+    .{ "lcgf_ct_at", &cAt },
+    .{ "lcgf_ct_pointer", &cPointer },
+    .{ "lcgf_ct_focus_keys", &cFocusKeys },
+    .{ "lcgf_ct_focus", &cFocus },
+    .{ "lcgf_ct_set_focus", &cSetFocus },
+    .{ "lcgf_ct_next_focus", &cNextFocus },
+    .{ "lcgf_ct_shortcut", &cShortcut },
 };
 
 pub fn exportAll() void {
@@ -1135,6 +1397,85 @@ fn cLayout() callconv(.c) u32 {
 fn cFrame(buf: [*]u8, state: [*]const u8, width: f32, height: f32, out: *seam.CDraw) callconv(.c) void {
     const ui: *Ui = @ptrCast(@alignCast(buf));
     out.* = seam.cDraw(ui.frame(state, .{ width, height }));
+}
+
+fn uiOf(buf: *anyopaque) *Ui {
+    return @ptrCast(@alignCast(buf));
+}
+
+fn cRelayout(buf: *anyopaque, state: [*]const u8, field: u32, out: *seam.CDraw) callconv(.c) c_int {
+    const ui = uiOf(buf);
+    const done = ui.relayout(state, field);
+    out.* = seam.cDraw(&ui.d);
+    return @intFromBool(done);
+}
+
+fn cPatch(buf: *anyopaque, state: [*]const u8, field: u32) callconv(.c) void {
+    uiOf(buf).patch(state, field);
+}
+
+fn cDirty(buf: *anyopaque) callconv(.c) [*]const u8 {
+    return uiOf(buf).dirtyQuads().ptr;
+}
+
+fn cClearDirty(buf: *anyopaque) callconv(.c) void {
+    uiOf(buf).clearDirty();
+}
+
+fn cDraw(buf: *anyopaque, out: *seam.CDraw) callconv(.c) void {
+    out.* = seam.cDraw(&uiOf(buf).d);
+}
+
+fn cAt(buf: *anyopaque, x: f32, y: f32) callconv(.c) u32 {
+    return uiOf(buf).widgetAt(x, y);
+}
+
+/// 0: no event; 1: a click on `widget`; 2: a slider `widget` dragged to `value`.
+fn cPointer(buf: *anyopaque, in: *const seam.CInput, widget: *u32, value: *f32) callconv(.c) c_int {
+    const ui = uiOf(buf);
+    const input = in.input();
+    const hit = ui.pointer(&input) orelse return 0;
+    widget.* = hit.slot;
+    value.* = hit.value;
+    const k = std.mem.indexOfScalar(u32, ui.widget_rows, hit.slot).?;
+    return if (ui.widget_sliders[k] != 0) 2 else 1;
+}
+
+fn cFocusKeys(buf: *anyopaque, in: *const seam.CInput, tab: u8) callconv(.c) void {
+    const input = in.input();
+    uiOf(buf).focusKeys(&input, tab);
+}
+
+fn cFocus(buf: *anyopaque) callconv(.c) u32 {
+    return uiOf(buf).focus();
+}
+
+fn cSetFocus(buf: *anyopaque, widget: u32) callconv(.c) void {
+    uiOf(buf).setFocus(widget);
+}
+
+fn cNextFocus(buf: *anyopaque, from: u32, back: c_int) callconv(.c) u32 {
+    return uiOf(buf).nextFocus(from, back != 0);
+}
+
+/// One keyboard shortcut as C lays it out (lcgf.h's `lcgf_shortcut`).
+pub const CShortcut = extern struct { code: u8, mods: u8, _pad: u16 = 0, widget: u32 };
+
+/// The widget the first shortcut of `list` on key `code` with exactly `mods` held activates
+/// (ct_events' chord), or `none`.
+fn cShortcut(list: [*]const CShortcut, len: usize, code: u8, mods: u8) callconv(.c) u32 {
+    const c = ct_events.chord(code, @bitCast(mods));
+    for (list[0..len]) |sc| if (ct_events.chord(sc.code, @bitCast(sc.mods)) == c) return sc.widget;
+    return none;
+}
+
+/// `cFrame` with the words passed in and every table read from them: what a frame specialized
+/// to constant words calls (exported by src/abi/ct_c.zig only).
+pub fn cFrameWords(words: [*]const u32, len: usize, cols: ?[*]const [*]const u8, buf: [*]align(mem.column_align) u8, buf_len: usize, state: [*]const u8, width: f32, height: f32, out: *seam.CDraw) callconv(.c) void {
+    const d = Ui.frameWith(words[0..len], cols, buf[0..buf_len], state, .{ width, height });
+    const ui: *Ui = @ptrCast(buf);
+    ui.d = d;
+    out.* = seam.cDraw(&ui.d);
 }
 
 // ---- tests -------------------------------------------------------------------------------------
@@ -1346,7 +1687,10 @@ pub fn wordsOf(arena: std.mem.Allocator, comptime e: examples.Example) ![]u32 {
         const k = comptime std.meta.fieldIndex(e.State, b.field).?;
         if (b.border) nodes[b.node].border_bind = k else nodes[b.node].fill_bind = k;
     }
-    return make(arena, &nodes, .{ .fields = fields, .state_size = st.size, .state_align = st.alignment, .coord = coordBits(e.options.viewport) });
+    const E = ct_events.Events(e.spec);
+    var widgets: [E.widget_count]Widget = undefined;
+    for (&widgets, E.widget_nodes, E.widget_kinds, E.widget_focusable) |*wd, row, kind, f| wd.* = .{ .row = row, .slider = kind == .slider, .focusable = f };
+    return make(arena, &nodes, .{ .fields = fields, .state_size = st.size, .state_align = st.alignment, .coord = coordBits(e.options.viewport), .widgets = &widgets });
 }
 
 test "ct: a static UI's frames equal Zig's comptime pipeline, draw list for draw list" {
@@ -1396,6 +1740,116 @@ test "ct: a static UI's frames equal Zig's comptime pipeline, draw list for draw
             try testing.expectEqual(zd.cmd_len, d.cmd_len);
             inline for (.{ "kind", "first", "count", "key" }) |col|
                 try testing.expectEqualSlices(@typeInfo(@TypeOf(@field(zd.cmd, col))).pointer.child, @field(zd.cmd, col)[0..zd.cmd_len], @field(d.cmd, col)[0..d.cmd_len]);
+        }
+    }
+}
+
+test "ct: relayouts, patches and input equal Zig's comptime pipeline's" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const text = [_][]const u8{ "", "Mixer", "Battery 82%", "x", "a much longer title than fits", "Settings", "0123456789" };
+    inline for (gate_examples) |e| {
+        const L = ct_layout.Layout(e.spec, e.options);
+        const P = ct_paint.Paint(e.spec, e.options);
+        const E = ct_events.Events(e.spec);
+        const Pt = Patched(e);
+        const Field = std.meta.FieldEnum(e.State);
+        const names = @typeInfo(e.State).@"struct".field_names;
+        const fields = try arena.dupe(plan.Field, &comptime plan.fieldsOf(e.State));
+        const st = plan.layoutState(fields);
+        const words = try wordsOf(arena, e);
+        const buf = try arena.alignedAlloc(u8, .fromByteUnits(mem.column_align), try Ui.bytes(words));
+        const ui = try Ui.init(words, buf);
+        const cstate = try arena.alignedAlloc(u8, .@"8", @max(st.size, 1));
+        var scratch: L.Scratch = undefined;
+        var ram: L.Cols.Dynamic = undefined;
+        var dbuf: [1 << 16]u8 align(64) = undefined;
+        var carver: mem.Carver = .{ .buf = &dbuf };
+        var zd = DrawList.init(&carver, P.quad_count, P.label_count, 0);
+        var dirty: P.Dirty = .empty;
+        const nodes = comptime nodesOf(e.State, e.spec);
+        var zs: e.State = .{};
+        var sel: L.Regions.Selection = undefined;
+        var ptr: E.Pointer = .{};
+        var focus: ?E.Widget = null;
+        var text_buf: [default_string_cap]u8 = undefined;
+        var spans_buf: [@max(L.label_count, 1)]Span = undefined;
+        const spans = spans_buf[0..L.label_count];
+        for (0..48) |fi| {
+            const f: u32 = @intCast(fi);
+            const vp: [2]f32 = .{ @floatFromInt(40 + (f * 37) % 761), @floatFromInt(30 + (f * 23) % 571) };
+            errdefer std.debug.print("{s}, frame {d}\n", .{ e.name, f });
+            if (f % 4 == 3) {
+                dirty = .empty;
+                ui.clearDirty();
+                inline for (names, 0..) |name, k| if (@FieldType(e.State, name) == types.Color) {
+                    @field(zs, name) = @bitCast(colorFor(f, k));
+                    Pt.apply(@field(Field, name), &zs, &ram, &zd, &dirty);
+                    cStateOf(e.State, &zs, fields, cstate);
+                    ui.patch(cstate.ptr, k);
+                };
+            } else {
+                // A field a label shows (ct_dump's `labelFields`), laid out again.
+                const shown = comptime blk: {
+                    var out: []const u32 = &.{};
+                    for (0..names.len) |k| {
+                        for (nodes) |nd| if (nd.labelShows(k)) {
+                            out = out ++ [_]u32{k};
+                            break;
+                        };
+                    }
+                    break :blk out;
+                };
+                const k_: ?u32 = if (f % 4 == 0 or shown.len == 0) null else shown[(f / 4 + f % 4) % @max(shown.len, 1)];
+                if (k_) |j| {
+                    inline for (names, 0..) |name, k| if (k == j) {
+                        @field(zs, name) = @field(stateFor(e.State, f, &text), name);
+                    };
+                } else zs = stateFor(e.State, f, &text);
+                cStateOf(e.State, &zs, fields, cstate);
+                const used = gatherText(e.State, &nodes, &zs, &text_buf, spans);
+                if (k_) |j| {
+                    inline for (names, 0..) |name, k| if (k == j) L.relayout(name, &scratch, &ram, spans, Mono{});
+                    _ = ui.relayout(cstate.ptr, j);
+                } else {
+                    sel = L.Regions.select(e.State, &zs);
+                    L.runLiveText(&scratch, &ram, vp, sel, spans, Mono{});
+                    _ = ui.frame(cstate.ptr, vp);
+                }
+                Pt.rebuildLiveText(&zs, &ram, sel, spans, text_buf[0..used], &zd, &dirty);
+            }
+            const d = &ui.d;
+            try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(zd.quads[0..zd.quad_len]), std.mem.sliceAsBytes(d.quads[0..d.quad_len]));
+            try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(zd.runs[0..zd.run_len]), std.mem.sliceAsBytes(d.runs[0..d.run_len]));
+            try testing.expectEqualStrings(zd.strings, d.strings);
+            try testing.expectEqualSlices(u32, zd.cmd.first[0..zd.cmd_len], d.cmd.first[0..d.cmd_len]);
+            const dq = ui.dirtyQuads();
+            for (0..P.quad_count) |k| try testing.expectEqual(dirty.isSet(k), dq[k] != 0);
+            // Input: the pointer over the top-left of the UI, the left button held for three
+            // frames of six, and Tab (Shift+Tab every third) every fifth frame.
+            if (comptime E.widget_count > 0) {
+                var r: E.Rects = .{};
+                for (0..4) |side| for (E.widget_nodes, 0..) |node, w| {
+                    const x = ram.vis[side][L.Cols.slot(node)];
+                    r.c[side][w] = if (@TypeOf(x) == f32) x else @floatFromInt(x);
+                };
+                const keys = [_]Input.Event{.{ .kind = .press, .code = 0x2b, .mods = .{ .shift = f % 15 == 5 } }};
+                const in: Input = .{ .pointer = .{ @floatFromInt(((f / 6) * 11) % 150 + f % 6), @floatFromInt(((f / 6) * 5) % 56) }, .buttons = .{ .left = f % 6 < 3 }, .events = if (f % 5 == 0) &keys else &.{} };
+                const want = E.pointer(&ptr, &r, &in);
+                const got = ui.pointer(&in);
+                try testing.expectEqual(want == null, got == null);
+                if (want) |ev| switch (ev) {
+                    inline else => |payload, tag| {
+                        try testing.expectEqual(@as(u32, @backingInt(tag)), got.?.slot);
+                        if (@TypeOf(payload) == f32) try testing.expectEqual(payload, got.?.value);
+                    },
+                };
+                E.focusKeys(&focus, &in, 0x2b);
+                ui.focusKeys(&in, 0x2b);
+                try testing.expectEqual(if (focus) |w| @as(u32, @backingInt(w)) else none, ui.focus());
+                try testing.expectEqual(if (E.nextFocus(focus, true)) |w| @as(u32, @backingInt(w)) else none, ui.nextFocus(ui.focus(), true));
+            }
         }
     }
 }

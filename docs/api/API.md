@@ -1197,6 +1197,7 @@ Layout for a comptime UI: the generic tier-0 layout passes (src/layout/layout.zi
 - `fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: bool) type`: `Plain`, with the row count a compile-time constant of the view when `unroll`: every pass loop then has a constant trip count the optimizer may unroll (C0165 measures it).
 - `fn fillTexts(tx: *Texts, label_rows: anytype, spans: anytype) void`: Label k's text run: row `label_rows[k]`, the bytes of `spans[k]` and the default `TextStyle`, as `Frame.text` would push it; `w`, `h` and `avail` cleared for the font.
 - `fn passesOver(t: anytype, v: anytype, tx: *Texts, spans: anytype, sel: anytype, m: anytype, viewport: [2]f32, font: anytype) void`: Every pass but `finalize` over the view `v` of a static UI, `Frame.end`'s sequence: `font` measures the labels' text (`spans[k]` is label k's bytes; void: none measured), the live mask `m` of the selection `sel` is applied, then fit, resolve and place on both axes.
+- `fn relayoutOver(t: anytype, v: anytype, tx: *Texts, spans: anytype, first: u32, last: u32, font: anytype) void`: `passesOver` and finalize again over rows [first, last) only, after a frame over the same view (it keeps last frame's layout): the passes in their subtree forms (`fitSpan`, `resolveSpan`, `placeSpan`, `finalizeSpan`).
 - `fn expandOver(n: usize, base: anytype, rel: anytype, size: anytype, keep: anytype, sk: anytype, full: anytype) void`: A folded layout's whole tree from its skeleton's: each row's position is its base row's plus `rel`, its size the base's times `keep` plus `size` (one select per row, no branch).
 - `fn slotSourcesOver(out: anytype, defaults: anytype, by_node: anytype, m: anytype) void`: `slot_source`: each shared geometry slot shows its live row this frame, else its default.
 - `fn FoldPlan(comptime C: type) type`: Which rows of a UI fold: `root[j]` is true for a row whose subtree is laid out while compiling.
@@ -1418,7 +1419,13 @@ Events: the comptime front end's input side.
 ### Top level
 
 - `Availability = struct { enabled: bool = true, activates: bool = true }`: Input eligibility, kept separate from visuals.
+- `Hit = struct { slot: u32, value: f32 = 0 }`: A pointer event on the widget at `slot`: a slider's `value`, else a click.
 - `fn Events(comptime spec: Spec) type`: The interactive widgets of `spec` and how input reaches them.
+- `fn topmost(c: [4][]const f32, enabled: anytype, rows: usize, x: f32, y: f32) u32`: The topmost of `rows` rects under (x, y), or `none`: `c[0..4]` are the x0, y0, x1, y1 columns, padded to whole vectors (padding rows empty, x0 == x1, so never hit).
+- `fn nextFocusOver(order: anytype, pos: anytype, from: u32, back: bool) u32`: The widget Tab (`back` false) or Shift+Tab (`back` true) moves focus to from slot `from` (`none`: no focus), wrapping at the ends, as a slot; `none` when nothing is focusable.
+- `fn focusKeysOver(order: anytype, pos: anytype, focus: *u32, in: *const Input, tab: u8) void`: `nextFocusOver` for every Tab press (and auto-repeat) in this frame's key events, in order; Shift goes back.
+- `fn pointerOver(ctx: anytype, pressed: *u32, down_before: *bool, in: *const Input) ?Hit`: The event this frame's mouse makes, or null.
+- `fn chord(code: u8, mods: Input.Mods) u16`: A key and the four modifiers as one 12-bit number.
 
 ### `Events(..)` (generic struct)
 The interactive widgets of `spec` and how input reaches them.
@@ -8336,8 +8343,12 @@ Static UIs across the seam: the comptime pipeline (ct_layout, ct_paint) for prog
 - `Seg = extern struct { kind: fmt.Kind, prec: u8, _pad: u16 = 0, arg: u32, start: u32, len: u32 }`: One segment of a label's format (src/core/fmt.zig's `Seg`), its argument the field's byte offset in the state.
 - `RegionKind = enum(u32) { none, list, when, choice }`
 - `Error = error{ OutOfMemory, BadTree, BadLabel, BadRegion, BadBind, Transform }`
+- `Widget = struct { row: u32, slider: bool, focusable: bool = true }`: One widget of a static UI: its row, whether it is a slider (else a click target) and whether keyboard focus stops at it.
 - `Select = dynamic.Select`: One region's selection this frame (ct_dynamic.Select).
 - `frame_symbol = std.fmt.comptimePrint("lcgf_ct_frame_u32_f32_l{d}", .{simd.lanes})`
+- `frame_words_symbol = std.fmt.comptimePrint("lcgf_ct_frame_words_u32_f32_l{d}", .{simd.lanes})`
+- `cols_len = 2 * column_arrays.len`: The number of column pointers `frameWith`'s `cols` holds.
+- `CShortcut = extern struct { code: u8, mods: u8, _pad: u16 = 0, widget: u32 }`: One keyboard shortcut as C lays it out (lcgf.h's `lcgf_shortcut`).
 - `Controls = struct { title: []const u8 = "Volume", muted: bool = false, volume: f32 = 0.5, pan: f32 = 0 }`: Sized controls, for the events gate: the examples' checkboxes and sliders have no size of their own, so nothing can hit them.
 - `Palette = struct { title: []const u8 = "Palette", accent: types.Color = .rgb(200, 40, 40), edge: types.Color = .rgb(40, 40, 200) }`: Colours patched into quads, for the patch gate: a swatch filled with `accent` and a bar filled with `accent` and bordered with `edge` (ct_paint.Patches).
 - `Meter = struct { name: []const u8 = "Gain", level: f32 = 0.5, count: u32 = 3, on: bool = true, peak: f32 = 0 }`: Formatted labels, for the format gate: every argument kind (string, f32 at two precisions, u32, bool), braces, and a slider in the options form.
@@ -8348,6 +8359,7 @@ Static UIs across the seam: the comptime pipeline (ct_layout, ct_paint) for prog
 - `fn coordBits(viewport: ?[2]f32) u32`: The coordinate bits for a fixed screen (columns.Coord): 0 (f32) without one.
 - `fn make(arena: std.mem.Allocator, nodes: []const Node, o: Options) Error![]u32`: The words of the static UI of `nodes`, in `arena`.
 - `fn exportAll() void`
+- `fn cFrameWords(words: [*]const u32, len: usize, cols: ?[*]const [*]const u8, buf: [*]align(mem.column_align) u8, buf_len: usize, state: [*]const u8, width: f…`: `cFrame` with the words passed in and every table read from them: what a frame specialized to constant words calls (exported by src/abi/ct_c.zig only).
 - `fn bindingsOf(comptime name: []const u8) []const Bind`: The bindings of a static example.
 - `fn Patched(comptime e: anytype) type`: ct_paint.Patches over `e`'s bindings (`bindingsOf`): what the static UI's frame paints through.
 - `fn gatherText(comptime State: type, comptime nodes: []const Node, state: *const State, buf: []u8, spans: []Span) u32`: The labels' text of `state`, as the static UI's frame gathers it: each label's string field, or its format written (src/core/fmt.zig), in label order into `buf`, cut where `buf` ends.
@@ -8371,7 +8383,7 @@ Fields: `kind`, `row`, `end`, `stride`, `max`, `alts`, `field_offset`, `field_ty
 ### `Header` (struct)
 The first words.
 
-Fields: `magic`, `version`, `layout_hash`, `words`, `coord`, `has_child_clip`, `state_size`, `state_align`, `string_cap`, `labels`, `quads`, `batches`, `folded`, `regions`, `has_windows`, `root_when`, `slot_count`, `slots`, `slot_defaults`, `full`, `skel`, `label_offsets`, `label_formats`, `seg_count`, `segs`, `format_bytes`, `format_text`, `expand`, `fields`, `spans`, `patch_count`, `patches`, `paint_node`, `clip_node`, `templates`, `keys`, `batch_first`, `batch_count`, `batch_key`, `label_plans`, `alpha`, `clip_radii`
+Fields: `magic`, `version`, `layout_hash`, `words`, `coord`, `has_child_clip`, `state_size`, `state_align`, `string_cap`, `labels`, `quads`, `batches`, `folded`, `regions`, `has_windows`, `root_when`, `slot_count`, `slots`, `slot_defaults`, `full`, `skel`, `label_offsets`, `label_formats`, `seg_count`, `segs`, `format_bytes`, `format_text`, `expand`, `fields`, `spans`, `patch_count`, `patches`, `paint_node`, `clip_node`, `templates`, `keys`, `batch_first`, `batch_count`, `batch_key`, `label_plans`, `alpha`, `clip_radii`, `widgets`, `widget_rows`, `widget_sliders`, `focus_count`, `focus_slots`, `focus_pos`
 
 
 ### `Node` (struct)
@@ -8385,19 +8397,30 @@ Fields: `style`, `parent`, `end`, `id`, `label_field`, `format`, `shows`, `regio
 ### `Options` (struct)
 What a static UI's spec gives `make` besides its rows.
 
-Fields: `fields`, `state_size`, `state_align`, `coord`, `string_cap`
+Fields: `fields`, `state_size`, `state_align`, `coord`, `string_cap`, `widgets`
 
 
 ### `Ui` (struct)
 A static UI, placed at the start of the caller's buffer by `init`.
 
-Fields: `words`, `h`, `full`, `skel`, `tx`, `spans`, `strings`, `sel`, `slot_source`, `d`, `quad_count`, `label_count`, `batch_count`, `node`, `clip_node`, `templates`, `keys`, `label_plans`, `batch_first`, `batch_counts`, `batch_key`, `alpha`, `clip_radii`
+Fields: `words`, `h`, `full`, `skel`, `tx`, `spans`, `strings`, `sel`, `slot_source`, `d`, `quad_count`, `label_count`, `batch_count`, `node`, `clip_node`, `templates`, `keys`, `label_plans`, `batch_first`, `batch_counts`, `batch_key`, `alpha`, `clip_radii`, `input`, `dirty`, `rects`, `widget_rows`, `widget_sliders`, `focus_slots`, `focus_pos`
 
 - `InitError = error{ NotTables, Version, LayoutHash, Truncated, BufferTooSmall, Unaligned }`
 - `fn check(words: []const u32) InitError!*const Header`: Checks the header of `words`.
 - `fn bytes(words: []const u32) InitError!usize`: Bytes one UI of `words` needs, for any lane count.
 - `fn init(words: []const u32, buf: []u8) InitError!*Ui`: Checks `words` and places a UI at the start of `buf` (aligned to `mem.column_align`).
 - `fn frame(ui: *Ui, state: [*]const u8, viewport: [2]f32) *const DrawList`: One frame: the labels' text and the regions' selectors from `state`, laid out in a `viewport`-sized area and painted.
+- `fn frameWith(words: []const u32, cols: ?[*]const [*]const u8, buf: []align(mem.column_align) u8, state: [*]const u8, viewport: [2]f32) DrawList`: One frame of the UI `init` placed in `buf`, every table read from `words` alone (none from the `Ui` in `buf`): inlined, so a caller that passes constant words gets the frame specialized to them, as Zig's comptime pipeline is to its tables.
+- `fn relayout(ui: *Ui, state: [*]const u8, field: u32) bool`: Lays out again only what state field `field` moves (ct_layout's `relayout`), after a frame: nothing when no label shows it; the field's dirty span (`dirtySpan`) when the UI does not fold and the span is not the whole tree without regions; else the whole frame again in last frame's viewport and selection.
+- `fn patch(ui: *Ui, state: [*]const u8, field: u32) void`: The colour field `field`'s rgb into its quads (ct_paint.Patches.apply): each changed quad becomes dirty.
+- `fn dirtyQuads(ui: *Ui) []const u8`: The quads a patch changed since `clearDirty`, one byte each; all of them after a frame.
+- `fn clearDirty(ui: *Ui) void`
+- `fn widgetAt(ui: *Ui, x: f32, y: f32) u32`: The topmost widget under (x, y) in last frame's layout (ct_events.at), as its row, or `none`.
+- `fn pointer(ui: *Ui, in: *const Input) ?ct_events.Hit`: This frame's pointer event (ct_events.pointer), its widget as a row.
+- `fn focusKeys(ui: *Ui, in: *const Input, tab: u8) void`: Moves focus for every Tab press and repeat in `in` (ct_events.focusKeys).
+- `fn nextFocus(ui: *const Ui, from: u32, back: bool) u32`: The widget Tab (or Shift+Tab, `back`) moves focus to from widget row `from` (`none`: no focus), as a row (ct_events.nextFocus).
+- `fn focus(ui: *const Ui) u32`: The focused widget's row, or `none`.
+- `fn setFocus(ui: *Ui, row: u32) void`
 - `fn rectOf(ui: *const Ui, _: void, i: u32) V4`: Rect of row i as the comptime UI keeps it: in its coordinate type.
 - `fn clipOf(ui: *const Ui, _: void, i: u32) [4]f32`
 - `fn sourceOf(_: *const Ui, i: u32) u32`

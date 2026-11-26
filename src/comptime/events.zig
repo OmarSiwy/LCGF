@@ -206,19 +206,7 @@ pub fn Events(comptime spec: Spec) type {
                 }
                 return result;
             }
-            const px = simd.f(x);
-            const py = simd.f(y);
-            var found: u32 = none;
-            var i: usize = 0;
-            while (i < rect_rows) : (i += W) {
-                var inside = (px >= simd.loadF(&r.c[0], i)) & (px < simd.loadF(&r.c[2], i)) &
-                    (py >= simd.loadF(&r.c[1], i)) & (py < simd.loadF(&r.c[3], i));
-                if (comptime filtered) inside &= simd.loadU(&mask.enabled, i) != simd.u(0);
-                const m = simd.bits(inside);
-                // Highest set lane. Wraps when m == 0, and is then discarded.
-                const top = @as(u32, W - 1) -% @as(u32, @clz(m));
-                found = simd.selU(m != 0, @as(u32, @intCast(i)) +% top, found);
-            }
+            const found = topmost(.{ &r.c[0], &r.c[1], &r.c[2], &r.c[3] }, if (filtered) &mask.enabled else {}, rect_rows, x, y);
             if (comptime count == 0) return null;
             if (found == none) return null;
             return widget(found);
@@ -281,22 +269,25 @@ pub fn Events(comptime spec: Spec) type {
         /// focusable, Tab goes to the first and Shift+Tab to the last. Null when nothing is
         /// focusable.
         pub fn nextFocus(from: ?Widget, back: bool) ?Widget {
-            const len: u32 = focus_table.len;
-            if (len == 0) return null;
-            const at_ = if (from) |w| focus_pos[slotOf(w)] else none;
-            const k = if (at_ == none)
-                (if (back) len - 1 else 0)
-            else if (back) (at_ + len - 1) % len else (at_ + 1) % len;
-            return focus_table[k];
+            if (comptime count == 0) return null;
+            const k = nextFocusOver(&focus_slots, &focus_pos, if (from) |w| @intCast(slotOf(w)) else none, back);
+            return if (k == none) null else widget(k);
         }
+        /// `focus_order` by widget position.
+        const focus_slots = blk: {
+            @setEvalBranchQuota(1000 + 8 * F.node_count);
+            var out: [focus_table.len]u32 = undefined;
+            for (&out, focus_table) |*o, w| o.* = slotOf(w);
+            break :blk out;
+        };
 
         /// Moves `focus` for every Tab press (and auto-repeat) in this frame's key events, in
         /// order; Shift goes back. `tab` is the platform's scancode for Tab, as in `Input.Keys`.
         pub fn focusKeys(focus: *?Widget, in: *const Input, tab: u8) void {
-            for (in.events) |e| {
-                if (e.code != tab or (e.kind != .press and e.kind != .repeat)) continue;
-                focus.* = nextFocus(focus.*, e.mods.shift);
-            }
+            if (comptime count == 0) return;
+            var k: u32 = if (focus.*) |w| @intCast(slotOf(w)) else none;
+            focusKeysOver(&focus_slots, &focus_pos, &k, in, tab);
+            focus.* = if (k == none) null else widget(k);
         }
 
         /// Tab walks the existing order, skipping dynamically disabled widgets. A bounded
@@ -425,43 +416,141 @@ pub fn Events(comptime spec: Spec) type {
 
         fn pointerMasked(comptime filtered: bool, p: *Pointer, r: *const Rects, mask: *const InputMask, in: *const Input) ?Event {
             if (comptime count == 0) return null;
-            const down = in.buttons.left;
-            defer p.down = down;
-            const x = in.pointer[0];
-            const y = in.pointer[1];
-            if (down and !p.down) p.pressed = atMasked(filtered, r, mask, x, y);
-            const w = p.pressed orelse return null;
-            if (comptime filtered) {
-                if (!mask.allows(w)) {
-                    p.pressed = null;
-                    return null;
+            const Ctx = struct {
+                r: *const Rects,
+                mask: *const InputMask,
+                pub fn at(c: @This(), x: f32, y: f32) u32 {
+                    return if (atMasked(filtered, c.r, c.mask, x, y)) |w| @intCast(slotOf(w)) else none;
                 }
-            }
-            if (!down) p.pressed = null;
-            if (comptime filtered) if (mask.activates[slotOf(w)] == 0) return null;
-            switch (w) {
+                pub fn allows(c: @This(), k: u32) bool {
+                    return !filtered or c.mask.enabled[k] != 0;
+                }
+                pub fn activates(c: @This(), k: u32) bool {
+                    return !filtered or c.mask.activates[k] != 0;
+                }
+                pub fn slider(_: @This(), k: u32) bool {
+                    return widget_sliders[k];
+                }
+                pub fn clicks(_: @This(), k: u32) bool {
+                    return widget_clicks[k];
+                }
+                pub fn span(c: @This(), k: u32) [2]f32 {
+                    return .{ c.r.c[0][k], c.r.c[2][k] };
+                }
+            };
+            var pressed: u32 = if (p.pressed) |w| @intCast(slotOf(w)) else none;
+            defer p.pressed = if (pressed == none) null else widget(pressed);
+            const hit = pointerOver(Ctx{ .r = r, .mask = mask }, &pressed, &p.down, in) orelse return null;
+            switch (widget(hit.slot)) {
                 inline else => |tag| {
                     const k = comptime slot(tag);
-                    if (comptime widget_kinds[k] == .slider) {
-                        if (!down) return null;
-                        const x0 = r.c[0][k];
-                        const span = r.c[2][k] - x0;
-                        const v = std.math.clamp((x - x0) / @max(span, std.math.floatMin(f32)), 0, 1);
-                        return @unionInit(Event, @tagName(tag), v);
-                    }
-                    if (down or atMasked(filtered, r, mask, x, y) != tag) return null;
-                    // A custom widget whose events carry a payload reports them from its own
-                    // `step`; a click on it is not an event here.
-                    if (comptime widget_payloads[k] != void) return null;
+                    if (comptime widget_kinds[k] == .slider) return @unionInit(Event, @tagName(tag), hit.value);
+                    if (comptime widget_payloads[k] != void) unreachable;
                     return @unionInit(Event, @tagName(tag), {});
                 },
             }
         }
+        const widget_sliders = blk: {
+            @setEvalBranchQuota(1000 + 8 * count);
+            var out: [count]bool = undefined;
+            for (&out, widget_kinds) |*o, kind| o.* = kind == .slider;
+            break :blk out;
+        };
+        /// A widget whose click is an event here: not a slider, not a custom widget whose
+        /// events carry a payload (it reports them from its own `step`).
+        const widget_clicks = blk: {
+            @setEvalBranchQuota(1000 + 8 * count);
+            var out: [count]bool = undefined;
+            for (&out, widget_kinds, widget_payloads) |*o, kind, P| o.* = kind != .slider and P == void;
+            break :blk out;
+        };
     };
 }
 
+// ---- input over widget tables ---------------------------------------------------------------------
+//
+// The cores of `Events`, by widget position (slot) instead of `Widget`, so the static-UI engine
+// (src/abi/ct.zig) runs them over tables read from its words.
+
+/// The topmost of `rows` rects under (x, y), or `none`: `c[0..4]` are the x0, y0, x1, y1
+/// columns, padded to whole vectors (padding rows empty, x0 == x1, so never hit). As
+/// `hit.at`: `lanes` rects per step, no early exit, half-open edges, and the latest row wins
+/// where rects overlap. `enabled`, unless void, masks out the rows whose word is 0.
+pub inline fn topmost(c: [4][]const f32, enabled: anytype, rows: usize, x: f32, y: f32) u32 {
+    const px = simd.f(x);
+    const py = simd.f(y);
+    var found: u32 = none;
+    var i: usize = 0;
+    while (i < rows) : (i += W) {
+        var inside = (px >= simd.loadF(c[0], i)) & (px < simd.loadF(c[2], i)) &
+            (py >= simd.loadF(c[1], i)) & (py < simd.loadF(c[3], i));
+        if (comptime @TypeOf(enabled) != void) inside &= simd.loadU(enabled, i) != simd.u(0);
+        const m = simd.bits(inside);
+        // Highest set lane. Wraps when m == 0, and is then discarded.
+        const top = @as(u32, W - 1) -% @as(u32, @clz(m));
+        found = simd.selU(m != 0, @as(u32, @intCast(i)) +% top, found);
+    }
+    return found;
+}
+
+/// The widget Tab (`back` false) or Shift+Tab (`back` true) moves focus to from slot `from`
+/// (`none`: no focus), wrapping at the ends, as a slot; `none` when nothing is focusable.
+/// `order` is the focusable slots in focus order, `pos[k]` slot k's place in it or `none`.
+pub inline fn nextFocusOver(order: anytype, pos: anytype, from: u32, back: bool) u32 {
+    const len: u32 = @intCast(order.len);
+    if (len == 0) return none;
+    const at_ = if (from == none) none else pos[from];
+    const k = if (at_ == none)
+        (if (back) len - 1 else 0)
+    else if (back) (at_ + len - 1) % len else (at_ + 1) % len;
+    return order[k];
+}
+
+/// `nextFocusOver` for every Tab press (and auto-repeat) in this frame's key events, in
+/// order; Shift goes back. `tab` is the platform's scancode for Tab, as in `Input.Keys`.
+pub inline fn focusKeysOver(order: anytype, pos: anytype, focus: *u32, in: *const Input, tab: u8) void {
+    for (in.events) |e| {
+        if (e.code != tab or (e.kind != .press and e.kind != .repeat)) continue;
+        focus.* = nextFocusOver(order, pos, focus.*, e.mods.shift);
+    }
+}
+
+/// A pointer event on the widget at `slot`: a slider's `value`, else a click.
+pub const Hit = struct { slot: u32, value: f32 = 0 };
+
+/// The event this frame's mouse makes, or null. A slider reports its value on press and every
+/// frame it stays pressed (a drag, clamped to the slider's ends, even outside it); any other
+/// widget reports a click when the button goes up over the widget it went down on. `pressed`
+/// (the slot the left button went down on, while held, or `none`) and `down` (the button last
+/// frame) carry over between frames. `ctx` answers by slot: `at(x, y)`, `allows`,
+/// `activates`, `slider`, `clicks` and a slider's `span` (x0, x1).
+pub inline fn pointerOver(ctx: anytype, pressed: *u32, down_before: *bool, in: *const Input) ?Hit {
+    const down = in.buttons.left;
+    defer down_before.* = down;
+    const x = in.pointer[0];
+    const y = in.pointer[1];
+    if (down and !down_before.*) pressed.* = ctx.at(x, y);
+    const k = pressed.*;
+    if (k == none) return null;
+    if (!ctx.allows(k)) {
+        pressed.* = none;
+        return null;
+    }
+    if (!down) pressed.* = none;
+    if (!ctx.activates(k)) return null;
+    if (ctx.slider(k)) {
+        if (!down) return null;
+        const sp = ctx.span(k);
+        const v = std.math.clamp((x - sp[0]) / @max(sp[1] - sp[0], std.math.floatMin(f32)), 0, 1);
+        return .{ .slot = k, .value = v };
+    }
+    if (down or ctx.at(x, y) != k) return null;
+    if (!ctx.clicks(k)) return null;
+    return .{ .slot = k };
+}
+
 /// A key and the four modifiers as one 12-bit number.
-fn chord(code: u8, mods: Input.Mods) u16 {
+pub fn chord(code: u8, mods: Input.Mods) u16 {
     return (@as(u16, @as(u8, @bitCast(mods)) & 0xf) << 8) | code;
 }
 

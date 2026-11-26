@@ -286,7 +286,7 @@ void lcgf_rt_view(void *rt, lcgf_view *out);
  * label, at the offsets the words carry), runs the passes over the skeleton, expands, finalizes
  * and copies the templates. Status codes are lcgf_status's. */
 #define LCGF_CT_FORMAT_VERSION 2u
-#define LCGF_CT_LAYOUT 0x338b01e5u
+#define LCGF_CT_LAYOUT 0x09d5a282u
 int lcgf_ct_check(const uint32_t *tables, size_t len);
 /* Bytes one static UI of these tables needs, for any lane count, or 0 if they are refused. */
 size_t lcgf_ct_bytes(const uint32_t *tables, size_t len);
@@ -296,6 +296,37 @@ void lcgf_ct_frame_u32_f32_l4(void *ui, const void *state, float width, float he
 void lcgf_ct_frame_u32_f32_l8(void *ui, const void *state, float width, float height, lcgf_draw *out);
 void lcgf_ct_frame_u32_f32_l16(void *ui, const void *state, float width, float height, lcgf_draw *out);
 void lcgf_ct_frame_u32_f32_auto(void *ui, const void *state, float width, float height, lcgf_draw *out);
+/* After a frame, with no new viewport or selection: lays out again only what state field
+ * `field` (its index in the state) moves, as the comptime pipeline's `relayout` does, and
+ * paints again. Returns 1, or 0 when no label shows the field (nothing changed). */
+int lcgf_ct_relayout(void *ui, const void *state, uint32_t field, lcgf_draw *out);
+/* The colour field `field`'s rgb into the quads bound to it in the last draw list. */
+void lcgf_ct_patch(void *ui, const void *state, uint32_t field);
+/* One byte per quad of the last draw list: 1 where a patch changed it since lcgf_ct_clear_dirty;
+ * all 1 after a frame or relayout. */
+const uint8_t *lcgf_ct_dirty(void *ui);
+void lcgf_ct_clear_dirty(void *ui);
+/* The last draw list again. */
+void lcgf_ct_draw(void *ui, lcgf_draw *out);
+/* Input over the last frame's layout. Widgets are named by their rows; LCGF_NO_WIDGET is none. The
+ * topmost widget under (x, y); this frame's pointer event (0 none, 1 a click, 2 a slider
+ * dragged to *value); Tab moving focus; the focused widget; the one Tab (or Shift+Tab, back)
+ * moves to from `from`. */
+uint32_t lcgf_ct_at(void *ui, float x, float y);
+int lcgf_ct_pointer(void *ui, const lcgf_input *in, uint32_t *widget, float *value);
+void lcgf_ct_focus_keys(void *ui, const lcgf_input *in, uint8_t tab);
+uint32_t lcgf_ct_focus(void *ui);
+void lcgf_ct_set_focus(void *ui, uint32_t widget);
+uint32_t lcgf_ct_next_focus(void *ui, uint32_t from, int back);
+/* A keyboard shortcut: a scancode, the modifiers held exactly (lcgf_input.mods' bits) and the
+ * widget it activates. The widget of the first in `list` that key `code` with `mods` matches. */
+typedef struct lcgf_shortcut {
+    uint8_t code;
+    uint8_t mods;
+    uint16_t pad_;
+    uint32_t widget;
+} lcgf_shortcut;
+uint32_t lcgf_ct_shortcut(const lcgf_shortcut *list, size_t len, uint8_t code, uint8_t mods);
 
 #ifndef LCGF_LANES
 #if defined(__AVX512F__) && defined(LCGF_WANT_16_LANES)

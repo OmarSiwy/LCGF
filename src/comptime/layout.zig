@@ -396,24 +396,9 @@ pub fn PlainOf(comptime spec: Spec, comptime options: Options, comptime unroll: 
                 return runText(scratch, ram, vp, spans, font);
             }
             var v = view(scratch);
-            var tx = texts(scratch, spans);
-            if (needs.text) font.measure(&tx);
-            inline for (0..2) |a| {
-                @memset(scratch.fit[a][first..last], 0);
-                @memset(scratch.grow_sum[a][first..last], 0);
-                @memset(scratch.used[a][first..last], 0);
-            }
-            @memset(scratch.cursor[first..last], 0);
-            if (needs.text) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .x });
-            layout.fitSpan(&v, .x, first, last);
-            layout.resolveSpan(&v, .x, first, last);
-            if (needs.wrap) layout.textAvail(&v, &tx);
-            if (needs.wrap) font.wrap(&tx);
-            if (needs.text) @call(layout.pass_call, layout.applyText, .{ &v, &tx, .y });
-            layout.fitSpan(&v, .y, first, last);
-            layout.resolveSpan(&v, .y, first, last);
-            layout.placeSpan(&v, first, last);
-            layout.finalizeSpan(&v, first, last);
+            var tx: Texts = .{ .len = label_count, .cap = @max(label_count, 1), .c = undefined };
+            inline for (tx_info.field_names) |name| @field(tx.c, name) = &@field(scratch, "tx_" ++ name);
+            relayoutOver(@This(), &v, &tx, spans, first, last, if (needs.text) font else {});
             keep(scratch, ram);
         }
 
@@ -581,6 +566,36 @@ pub inline fn passesOver(t: anytype, v: anytype, tx: *Texts, spans: anytype, sel
     @call(layout.pass_call, layout.fit, .{ v, .y });
     @call(layout.pass_call, layout.resolve, .{ v, .y, simd.selF(shown, viewport[1], 0) });
     @call(layout.pass_call, layout.place, .{v});
+}
+
+/// `passesOver` and finalize again over rows [first, last) only, after a frame over the same
+/// view (it keeps last frame's layout): the passes in their subtree forms (`fitSpan`,
+/// `resolveSpan`, `placeSpan`, `finalizeSpan`). Every label is measured again (one SIMD
+/// sweep), and only its own leaf row takes the extent. `t` as for `passesOver`.
+pub inline fn relayoutOver(t: anytype, v: anytype, tx: *Texts, spans: anytype, first: u32, last: u32, font: anytype) void {
+    const c = &v.c;
+    const measure = @TypeOf(font) != void;
+    if (measure) {
+        fillTexts(tx, t.label_rows, spans);
+        font.measure(tx);
+    }
+    inline for (0..2) |a| {
+        @memset(c.fit[a][first..last], 0);
+        @memset(c.grow_sum[a][first..last], 0);
+        @memset(c.used[a][first..last], 0);
+    }
+    @memset(c.cursor[first..last], 0);
+    const wrap = measure and (TextStyle{}).wrap;
+    if (measure) @call(layout.pass_call, layout.applyText, .{ v, tx, .x });
+    layout.fitSpan(v, .x, first, last);
+    layout.resolveSpan(v, .x, first, last);
+    if (wrap) layout.textAvail(v, tx);
+    if (wrap) font.wrap(tx);
+    if (measure) @call(layout.pass_call, layout.applyText, .{ v, tx, .y });
+    layout.fitSpan(v, .y, first, last);
+    layout.resolveSpan(v, .y, first, last);
+    layout.placeSpan(v, first, last);
+    layout.finalizeSpan(v, first, last);
 }
 
 /// A folded layout's whole tree from its skeleton's: each row's position is its base row's

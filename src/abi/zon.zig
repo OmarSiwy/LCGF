@@ -369,7 +369,9 @@ pub fn expandStatic(arena: std.mem.Allocator, spec: ZSpec) Error!Static {
 
 /// The words of a static UI, in `arena` (`abi_ct.make`).
 pub fn staticTables(arena: std.mem.Allocator, x: *const Static) (Error || abi_ct.Error)![]u32 {
-    return abi_ct.make(arena, x.nodes, .{ .fields = x.fields, .state_size = x.state_size, .state_align = x.state_align, .coord = abi_ct.coordBits(x.spec.viewport) });
+    const widgets = try arena.alloc(abi_ct.Widget, x.widgets.len);
+    for (widgets, x.widgets) |*o, wd| o.* = .{ .row = wd.row, .slider = wd.slider };
+    return abi_ct.make(arena, x.nodes, .{ .fields = x.fields, .state_size = x.state_size, .state_align = x.state_align, .coord = abi_ct.coordBits(x.spec.viewport), .widgets = widgets });
 }
 
 const StaticExpander = struct {
