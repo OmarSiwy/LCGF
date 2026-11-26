@@ -59,7 +59,11 @@ pub const Lowerer = struct {
     /// The box being lowered's `box-shadow`, drawn by a node `addNode` puts before it.
     shadow: ?Shadow = null,
 
+    /// Its `outline`, drawn by a ring node beside the shadow's.
+    outline: ?Outline = null,
+
     const Shadow = struct { x: f32, y: f32, blur: f32, spread: f32, color: types.Color };
+    const Outline = struct { width: f32, offset: f32, color: types.Color };
 
     fn ok(r: anytype) @typeInfo(@TypeOf(r)).error_union.payload {
         return r catch @panic("out of memory");
@@ -237,7 +241,7 @@ pub const Lowerer = struct {
             count += 1;
         }
         const index = std.mem.indexOfScalar(Prop, sh.longhands, v.prop).?;
-        if (std.mem.eql(u8, sh.name, "flex") or std.mem.eql(u8, sh.name, "border") or std.mem.eql(u8, sh.name, "background") or std.mem.eql(u8, sh.name, "flex-flow"))
+        if (std.mem.eql(u8, sh.name, "flex") or std.mem.eql(u8, sh.name, "border") or std.mem.eql(u8, sh.name, "background") or std.mem.eql(u8, sh.name, "flex-flow") or std.mem.eql(u8, sh.name, "outline"))
             return l.byType(sh.name, v, parts[0..count]);
         if (sh.longhands.len == 1) return .{ v.first, v.end };
         if (count > sh.longhands.len) {
@@ -261,9 +265,9 @@ pub const Lowerer = struct {
             const is_len = values.len(l.c, t) != null;
             const is_color = values.color(l.c, t, p[1]) != null and l.c.toks.items(.type)[t] != .number;
             const want: bool = switch (v.prop) {
-                .@"border-top-width" => is_len,
-                .@"border-color", .@"background-color" => is_color,
-                .@"border-style" => !is_len and !is_color,
+                .@"border-top-width", .@"outline-width" => is_len,
+                .@"border-color", .@"background-color", .@"outline-color" => is_color,
+                .@"border-style", .@"outline-style" => !is_len and !is_color,
                 .@"background-image" => l.c.toks.items(.type)[t] == .url or (l.c.toks.items(.type)[t] == .function and !is_color),
                 .@"flex-grow" => l.c.toks.items(.type)[t] == .number and p[0] == parts[0][0],
                 .@"flex-shrink" => parts.len > 1 and l.c.toks.items(.type)[t] == .number and p[0] == parts[1][0],
@@ -973,24 +977,28 @@ pub const Lowerer = struct {
         if (l.current != none) node.text_uses = l.text_tokens[l.current];
         node.flex = l.flex;
         l.flex = .{};
-        if (l.shadow != null) l.decorate(&node);
+        if (l.shadow != null or l.outline != null) l.decorate(&node);
         ok(l.page.nodes.append(l.arena, node));
         return @intCast(l.page.nodes.len - 1);
     }
 
-    /// A box with a shadow: a column in its place takes what places and sizes it among its
-    /// siblings (size, min, max, margins, align-self, aspect, position, transform, opacity,
-    /// visibility) and holds a floating shadow node of its size, then the box, which fills it.
-    /// The shadow paints first, so under the box; its offset and spread are its paint outset,
-    /// and its blur `features.shadow`. Both frontends build the three nodes as written.
+    /// A box with a shadow or an outline: a column in its place takes what places and sizes
+    /// it among its siblings (size, min, max, margins, align-self, aspect, position,
+    /// transform, opacity, visibility) and holds floating nodes of its size, the shadow and
+    /// the outline ring, then the box, which fills it. They paint first, so the shadow is
+    /// under the box; the ring lies outside it. Their paint outsets place them (the shadow's
+    /// offset and spread; the ring's width and offset), and `features.shadow` blurs the
+    /// shadow. Both frontends build the nodes as written.
     fn decorate(l: *Lowerer, node: *ir.Node) void {
-        const sh = l.shadow.?;
+        const shade = l.shadow;
+        const ring = l.outline;
         l.shadow = null;
+        l.outline = null;
         switch (node.kind) {
-            .when, .list, .choice, .each => return l.ds.err(node.loc, "box-shadow on a template is not lowered; put it on the element inside", .{}),
+            .when, .list, .choice, .each => return l.ds.err(node.loc, "box-shadow and outline on a template are not lowered; put them on the element inside", .{}),
             else => {},
         }
-        if (node.uses.len > 0) return l.ds.err(node.loc, "box-shadow on a box sized or painted by run-time tokens is not lowered", .{});
+        if (node.uses.len > 0) return l.ds.err(node.loc, "box-shadow and outline on a box sized or painted by run-time tokens are not lowered", .{});
         const b = node.style;
         const d: Style = .{};
         const wrap_style: Style = .{ .size = b.size, .min = b.min, .max = b.max, .shrink = b.shrink, .float = b.float, .offset = b.offset, .transform = b.transform, .transform_origin = b.transform_origin, .opacity = b.opacity, .participation = b.participation };
@@ -1004,11 +1012,36 @@ pub const Lowerer = struct {
         ok(l.page.nodes.append(l.arena, wrapper));
         const w: u32 = @intCast(l.page.nodes.len - 1);
         node.parent = w;
-        var radii = b.radii;
-        for (&radii) |*r| r.* = if (r.* < 0) -1 else r.* + sh.spread;
-        const s = sh.spread;
-        const shadow: Style = .{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = sh.color, .radius = @max(b.radius + s, 0), .radii = radii, .paint_outset = .{ s - sh.x, s - sh.y, s + sh.x, s + sh.y } };
-        ok(l.page.nodes.append(l.arena, .{ .kind = .container, .parent = w, .loc = node.loc, .style = shadow, .params_expr = ok(std.fmt.allocPrint(l.arena, "lcgf.features.shadow({d})", .{sh.blur / 2})) }));
+        if (shade) |sh| {
+            const s = sh.spread;
+            const shadow: Style = .{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = sh.color, .radius = @max(b.radius + s, 0), .radii = grown(b.radii, s), .paint_outset = .{ s - sh.x, s - sh.y, s + sh.x, s + sh.y } };
+            ok(l.page.nodes.append(l.arena, .{ .kind = .container, .parent = w, .loc = node.loc, .style = shadow, .params_expr = ok(std.fmt.allocPrint(l.arena, "lcgf.features.shadow({d})", .{sh.blur / 2})) }));
+        }
+        if (ring) |o| {
+            const g = o.width + o.offset;
+            const style: Style = .{ .float = true, .size = .{ .pct(1), .pct(1) }, .border = o.width, .border_color = o.color, .radius = b.radius + g, .radii = grown(b.radii, g), .paint_outset = @splat(g) };
+            ok(l.page.nodes.append(l.arena, .{ .kind = .container, .parent = w, .loc = node.loc, .style = style }));
+        }
+    }
+
+    /// Per-corner radii grown by `by`; a corner that takes `radius` (negative) still does.
+    fn grown(radii: [4]f32, by: f32) [4]f32 {
+        var out = radii;
+        for (&out) |*r| r.* = if (r.* < 0) -1 else @max(r.* + by, 0);
+        return out;
+    }
+
+    /// `outline: width style color` and `outline-offset`, into `l.outline`. CSS's initial
+    /// style is none, so only a declared solid (or auto) style draws one.
+    fn outlineOf(l: *Lowerer, n: u32) void {
+        const kw = l.keyword(n, .@"outline-style") orelse return;
+        if (css.eq(kw, "none") or css.eq(kw, "hidden")) return;
+        if (!css.eq(kw, "solid") and !css.eq(kw, "auto"))
+            return l.ds.err(l.declared(n, .@"outline-style").?.loc, "outline-style: {s} is not lowered; use solid", .{kw});
+        const width = l.px(n, .@"outline-width") orelse 3; // medium
+        const offset = l.px(n, .@"outline-offset") orelse 0;
+        if (offset < 0 or width < 0) return l.ds.err(l.declared(n, .@"outline-style").?.loc, "an outline inside the box (negative width or offset) is not lowered", .{});
+        l.outline = .{ .width = width, .offset = offset, .color = l.colorOf(n, .@"outline-color") orelse l.text[n].color };
     }
 
     /// `box-shadow: [x y [blur [spread]]] [color]`, one outer shadow, into `l.shadow`.
@@ -1151,7 +1184,9 @@ pub const Lowerer = struct {
         l.uses.clearRetainingCapacity();
         l.flex = .{};
         l.shadow = null;
+        l.outline = null;
         l.boxShadow(n);
+        l.outlineOf(n);
         const main: u1 = @backingInt(axis);
         const cross: u1 = 1 - main;
         inline for (.{ .{ Prop.width, 0, ir.Target.width }, .{ Prop.height, 1, ir.Target.height } }) |pa| if (l.length(n, pa[0])) |len| {

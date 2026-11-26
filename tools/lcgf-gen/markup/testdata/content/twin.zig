@@ -1,6 +1,6 @@
 //! content, written by hand: the document elements over widgets and roles: a link, lists, a
 //! details section, the accent colour,
-//! text-transform, box-shadow.
+//! text-transform, box-shadow, outline.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -30,6 +30,11 @@ pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
         s.col(.{ .float = true, .size = .{ .pct(1), .pct(1) }, .fill = .rgba(0, 0, 0, 128), .radius = 5, .params = lcgf.features.shadow(3), .paint_outset = .{ 1, -1, 1, 3 } }, .{}),
         s.col(.{ .size = .{ .fill, .fill }, .pad = @splat(8), .fill = .rgb(51, 51, 51), .radius = 4 }, .{ label.ct.label(theme, "Card"), label.ct.label(theme, "body") }),
     }), .{ .margin = @splat(4) }),
+    // outline: a floating ring node, outset by its width and offset, in the same column.
+    s.col(.{}, .{
+        s.col(.{ .float = true, .size = .{ .pct(1), .pct(1) }, .border = 2, .border_color = .rgb(255, 204, 0), .radius = 6, .paint_outset = @splat(3) }, .{}),
+        s.col(.{ .size = .{ .fill, .fill }, .radius = 3 }, .{label.ct.label(theme, "Ringed")}),
+    }),
     // <details open bind:open>: an accordion section, its <summary> the header.
     accordion.ct.section(theme, .more, .more_open, "More", .{
         s.textStyled(label.ct.label(theme, "Hidden text"), .{ .color = theme.text, .wrap = true }),

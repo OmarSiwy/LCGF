@@ -1,19 +1,19 @@
 content.html:3:8: error: accent-color is lowered on :root only, as the theme's accent
   .x { accent-color: red; }
        ^
-content.html:12:3: error: a link shows one literal or one field; its content cannot hold elements
+content.html:14:3: error: a link shows one literal or one field; its content cannot hold elements
   <a href="#" on:click="go"><span>b</span></a>
   ^
-content.html:13:3: error: <details> needs bind:open="field", the bool it shows its content by
+content.html:15:3: error: <details> needs bind:open="field", the bool it shows its content by
   <details><summary>c</summary><p>d</p></details>
   ^
-content.html:14:3: error: <details> takes a <summary> first and then its content
+content.html:16:3: error: <details> takes a <summary> first and then its content
   <details bind:open="e"><p>f</p></details>
   ^
-content.html:15:3: error: text-transform on text that shows a field is not lowered (display mapping, F13); transform the value in the app
+content.html:17:3: error: text-transform on text that shows a field is not lowered (display mapping, F13); transform the value in the app
   <p class="t">{name}</p>
   ^
-content.html:16:3: error: text-transform maps ASCII letters only, at build time; write this text in the case it shows
+content.html:18:3: error: text-transform maps ASCII letters only, at build time; write this text in the case it shows
   <p class="t">café</p>
   ^
 content.html:5:24: error: text-transform: 'full-width' is not a supported value
@@ -27,4 +27,10 @@ content.html:7:21: error: an inset box-shadow is not lowered (P2 decoration)
                     ^
 content.html:8:9: error: box-shadow takes an x and a y offset
   .s3 { box-shadow: 1px red; }
+        ^
+content.html:9:9: error: outline-style: dashed is not lowered; use solid
+  .o1 { outline: 1px dashed red; }
+        ^
+content.html:10:9: error: an outline inside the box (negative width or offset) is not lowered
+  .o2 { outline: 1px solid red; outline-offset: -2px; }
         ^
