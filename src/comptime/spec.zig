@@ -182,7 +182,7 @@ pub fn heading(comptime level: u8, comptime caption: anytype) Spec {
     return s;
 }
 
-/// Frame string bytes for all declared literals, plus the caller's budget when a bound
+/// Frame string bytes for all declared literals and accessible names, plus the caller's budget when a bound
 /// label or a widget hook can append runtime text. Literal-only pages need exactly their bytes.
 pub fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32 {
     var bytes: u32 = 0;
@@ -193,6 +193,8 @@ pub fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32 {
 
 fn countStrings(comptime n: Spec, bytes: *u32, dynamic: *bool) void {
     if (n.text) |str| bytes.* += @intCast(str.len);
+    // An accessible name is added to the frame's strings too (`ComptimeUi.semantics`).
+    if (n.name) |str| bytes.* += @intCast(str.len);
     if (n.widget != null or (n.kind == .label and (n.bind != null or n.format != null))) dynamic.* = true;
     for (n.children) |c| countStrings(c, bytes, dynamic);
 }

@@ -1025,7 +1025,7 @@ Spec: a UI declared as a compile-time value.
 - `fn label(comptime caption: anytype) Spec`: A literal caption (`label("Save")`) or a bound string field (`label(.title)`).
 - `fn landmark(comptime role: Landmark, comptime style: Style, comptime children: anytype) Spec`: Preserve the layout and children while exposing this row's document role.
 - `fn heading(comptime level: u8, comptime caption: anytype) Spec`: A document heading whose accessibility name is its displayed literal, bound or formatted text: `heading(1, "Mixer")`, `heading(2, .title)` or `heading(1, text("Gain {.1} dB", .{.g}))`.
-- `fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32`: Frame string bytes for all declared literals, plus the caller's budget when a bound label or a widget hook can append runtime text.
+- `fn stringCapacity(comptime tree: Spec, comptime dynamic_bytes: u32) u32`: Frame string bytes for all declared literals and accessible names, plus the caller's budget when a bound label or a widget hook can append runtime text.
 - `fn labelError(comptime s: Spec) ?[]const u8`: Check the two sources before emitting a label.
 - `fn labelBytes(comptime s: Spec, state: anytype) []const u8`: Resolve a label's source at compile time.
 - `fn text(comptime format: []const u8, comptime args: anytype) Spec`: Text of the state fields `args` written into `format`: `text("Volume {.1} dB", .{.volume})`.
@@ -3828,6 +3828,7 @@ Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rec
 - `fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output`: Uses the same accessibility settings as the runtime context.
 - `fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.…`: Optional caller-owned direction rows and device grid, sequenced at the same points as style.locale.end.
 - `fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`: Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
+- `fn semantics(ui: *Self, s: *a11y.Semantics) void`: Names each live node of this frame that has an accessible name (`Spec.name`, set with `spec.named`) in `s` (`Semantics.label`), its bytes added to this frame's strings.
 - `fn keep(ui: *Self, comptime W: type) *[4]f32`: Hover and held for the widget at spec row `row`, as `Interaction.response` reports them: while a widget is held, only it shows hover.
 - `fn treeRow(ui: *const Self, row: u32) u32`: Current tree row of a spec descriptor, or types.none when its subtree is inactive.
 - `fn lastRect(ui: *const Self, row: u32) types.Rect`: During a widget step, geometry of a descriptor in the last completed frame.

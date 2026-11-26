@@ -767,6 +767,18 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             }
         }
 
+        /// Names each live node of this frame that has an accessible name (`Spec.name`, set
+        /// with `spec.named`) in `s` (`Semantics.label`), its bytes added to this frame's
+        /// strings. A host with an accessibility bridge calls it after `frame`, between
+        /// `Semantics.clear` and `a11y.names`, as an app's `semantics` writes what its runtime
+        /// tree does not say. A spec without names writes nothing.
+        pub fn semantics(ui: *Self, s: *a11y.Semantics) void {
+            inline for (comptime namedRows(spec)) |row| {
+                const r = ui.treeRow(row);
+                if (r != types.none) s.c.label[r] = ui.tables.strings.add(comptime nodeAt(spec, row).name.?);
+            }
+        }
+
         /// Hover and held for the widget at spec row `row`, as `Interaction.response` reports
         /// them: while a widget is held, only it shows hover.
         /// The floats the custom widget `W` (its `Spec.widget`) keeps (`kept`).
@@ -871,6 +883,23 @@ fn customRows(comptime n: Spec) []const u32 {
         const out = rows[0..rows.len].*;
         return &out;
     }
+}
+
+/// Spec rows (depth first) of the nodes with an accessible name.
+fn namedRows(comptime n: Spec) []const u32 {
+    comptime {
+        var rows: []const u32 = &.{};
+        var i: u32 = 0;
+        namedWalk(n, &i, &rows);
+        const out = rows[0..rows.len].*;
+        return &out;
+    }
+}
+
+fn namedWalk(comptime n: Spec, comptime next: *u32, comptime rows: *[]const u32) void {
+    if (n.name != null) rows.* = rows.* ++ .{next.*};
+    next.* += 1;
+    for (n.children) |c| namedWalk(c, next, rows);
 }
 
 fn customWalk(comptime n: Spec, comptime next: *u32, comptime rows: *[]const u32) void {
@@ -1014,10 +1043,14 @@ pub fn Semantic(comptime cap: u32) type {
             const tb = &h.ui.tables;
             const trees = [2]*const Tree{ &ctx.trees[ctx.cur], &tb.t };
             const txs = [2]*const Texts{ &ctx.texts[ctx.cur], &tb.tx };
+            for (&p.s) |*s| s.clear();
+            // What each tree does not say itself: the runtime app's `semantics`, if it has
+            // one, and the comptime page's names.
+            if (@hasDecl(@TypeOf(h.app), "semantics")) h.app.semantics(trees[0], &p.s[0], &ctx.strings[ctx.cur]);
+            if (@hasDecl(@TypeOf(h.ui), "semantics")) h.ui.semantics(&p.s[1]);
             x.strings = .{ ctx.strings[ctx.cur].buf[0..ctx.strings[ctx.cur].len], tb.strings.buf[0..tb.strings.len] };
             for (0..2) |k| {
                 std.debug.assert(trees[k].len <= cap);
-                p.s[k].clear();
                 a11y.names(trees[k], &p.s[k]);
                 a11y.states(trees[k], &p.s[k]);
                 a11y.flatten(trees[k], txs[k], x.strings[k], &p.s[k], &p.out[k]);
@@ -1354,6 +1387,30 @@ test "button: hover and hold pick the fill by table index; click on release over
     try testing.expect(app.clicked);
     try testing.expectEqual(theme.control_hot.bitsOf(), fill(out, row));
     try testing.expectEqual(@backingInt(types.Role.button), out.tree.c.role[row]);
+}
+
+test "ComptimeUi.semantics: a named node's accessible name reaches the a11y export" {
+    const sp = spec_zig.col(.{}, .{spec_zig.named(spec_zig.landmark(.navigation, .{}, .{}), "Primary")});
+    const U = ComptimeUi(struct {}, sp, .{});
+    const ui = &struct {
+        var v: U = .{};
+    }.v;
+    const in: Input = .{};
+    const out = ui.frame(&in);
+    var buf: [1 << 14]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var s = a11y.Semantics.init(&carver, 8);
+    var ex = a11y.Export.init(&carver, 8);
+    s.clear();
+    ui.semantics(&s);
+    a11y.names(out.tree, &s);
+    a11y.states(out.tree, &s);
+    const tb = &ui.tables;
+    a11y.flatten(out.tree, &tb.tx, tb.strings.buf[0..tb.strings.len], &s, &ex);
+    const r = for (0..ex.len) |r| {
+        if (ex.c.role[r] == @backingInt(a11y.Role.navigation)) break r;
+    } else return error.NoNavigation;
+    try testing.expectEqualStrings("Primary", tb.strings.buf[ex.c.name_start[r]..][0..ex.c.name_bytes[r]]);
 }
 
 test "checkbox, slider: value columns and the slider's held-rect mapping" {

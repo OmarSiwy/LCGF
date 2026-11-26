@@ -12,6 +12,9 @@ const types = lcgf.types;
 
 pub const theme: w.Theme = .{};
 
+/// Accessible names the a11y export must carry (parity.zig).
+pub const names = .{ "Primary", "Settings" };
+
 const item: types.Style = .{ .size = .{ .grow(2), .fit }, .min = .{ 100, 0 }, .shrink = true };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .gap = 12, .fill = theme.panel }, .{

@@ -1234,6 +1234,8 @@ pub const Lowerer = struct {
         const nodes = l.page.nodes.slice();
         for (0..nodes.len) |i| {
             const kind = nodes.items(.kind)[i];
+            if (nodes.items(.name)[i].len > 0 and l.inList(@intCast(i)))
+                l.ds.err(nodes.items(.loc)[i], "an accessible name inside a repeated template is carried on comptime pages only so far", .{});
             switch (kind) {
                 .container, .landmark, .label, .text, .heading => continue,
                 .when, .list, .choice => continue,
@@ -1250,6 +1252,13 @@ pub const Lowerer = struct {
             if (nodes.items(.margin)[i] != null or !std.meta.eql(nodes.items(.style)[i], nodes.items(.base_style)[i]) or nodes.items(.params_expr)[i].len > 0)
                 l.ds.err(nodes.items(.loc)[i], "{s}", .{manifest.refusal("feature", "runtime-widget-style", "").?});
         }
+    }
+
+    /// Whether IR node `i` is inside an lcgf-each lcgf-max template (`.list`).
+    fn inList(l: *const Lowerer, i: u32) bool {
+        var p = l.page.nodes.items(.parent)[i];
+        while (p != none) : (p = l.page.nodes.items(.parent)[p]) if (l.page.nodes.items(.kind)[p] == .list) return true;
+        return false;
     }
 
     /// Run-time tokens on a widget: its builder makes its own rows, so neither frontend can
@@ -1618,6 +1627,12 @@ pub const Lowerer = struct {
         node.params_expr = params;
         node.margin = margin;
         node.name = l.attr(n, "aria-label") orelse "";
+        // A control that shows no caption of its own is named by its <label>'s text.
+        const captionless = switch (node.kind) {
+            .textfield, .search, .textarea, .number, .slider, .progress => true,
+            else => false,
+        };
+        if (node.name.len == 0 and captionless) node.name = l.controlCaption(n);
     }
 
     fn button(l: *Lowerer, n: u32, parent: u32) void {

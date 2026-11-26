@@ -920,6 +920,25 @@ pub const Emit = struct {
             \\    before: State = .{},
             \\
         );
+        const named = e.namedCount();
+        if (named > 0) e.print(
+            \\    /// Tree rows of the nodes with an accessible name, as this frame built them (none
+            \\    /// for one it did not build).
+            \\    named: [{d}]u32 = @splat(lcgf.types.none),
+            \\
+            \\    /// Names the nodes with an accessible name (`aria-label`, a `<label>`'s text) in `sem`
+            \\    /// (`Semantics.label`), their bytes added to the frame's strings `str`. A host with
+            \\    /// an accessibility bridge calls it after each built frame, before `a11y.names`.
+            \\    pub fn semantics(ui: *const Ui, t: *const lcgf.tree.Tree, sem: *lcgf.a11y_tree.Semantics, str: *lcgf.strings.Strings) void {{
+            \\        _ = t;
+            \\        const names = [_][]const u8{{{s} }};
+            \\        for (ui.named, names) |row, name| if (row != lcgf.types.none) {{
+            \\            sem.c.label[row] = str.add(name);
+            \\        }};
+            \\    }}
+            \\
+            \\
+        , .{ named, e.namedList() });
         const flex = e.hasFlex();
         if (flex) e.write(
             \\    /// Flex rules (layout/flex.zig) of the nodes with margins, written while the page
@@ -954,6 +973,7 @@ pub const Emit = struct {
             \\
         );
         if (tokens.len > 0) e.write("        ui.seen = ui.tokens.generation;\n");
+        if (named > 0) e.write("        ui.named = @splat(lcgf.types.none);\n");
         if (flex) e.write(
             \\        if (ui.flex == null) {
             \\            var carver: lcgf.mem.Carver = .{ .buf = &ui.flex_buf };
@@ -1003,6 +1023,8 @@ pub const Emit = struct {
                     e.print(".{f} => {{ ", .{std.zig.fmtId(field.cases[k])});
                 }
             }
+            // A named node: its row, which `Ui.semantics` names (engine spec R2).
+            if (within == none) if (e.namedIndex(i)) |k| e.print("ui.named[{d}] = f.tree().len; ", .{k});
             var close = e.rtOpenFlex(i, lists);
             if (in_choice) close = std.fmt.allocPrint(e.arena, "{s}{s}}},", .{ close, if (close.len > 0) " " else "" }) catch unreachable;
             if (nodes.items(.kind)[i] == .list) lists += 1;
@@ -1035,6 +1057,30 @@ pub const Emit = struct {
                 e.print("        if ({s} != ui.before.{f}) h.{f}(ui, {s}); // {s}\n", .{ e.stateRef(h.field), std.zig.fmtId(h.field), std.zig.fmtId(h.name), e.stateRef(h.field), e.where(h.loc) }),
         };
         e.write("    }\n};\n\n");
+    }
+
+    /// Whether node `i` has an accessible name the runtime page carries (outside run-time
+    /// regions): its index among them.
+    fn namedIndex(e: *Emit, i: u32) ?u32 {
+        const nodes = e.page.nodes.slice();
+        if (nodes.items(.name)[i].len == 0 or e.eachOf(i) != none) return null;
+        var k: u32 = 0;
+        for (0..i) |j| k += @intFromBool(nodes.items(.name)[j].len > 0 and e.eachOf(@intCast(j)) == none);
+        return k;
+    }
+
+    fn namedCount(e: *Emit) u32 {
+        var k: u32 = 0;
+        for (0..e.page.nodes.len) |i| k += @intFromBool(e.namedIndex(@intCast(i)) != null);
+        return k;
+    }
+
+    fn namedList(e: *Emit) []const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        for (e.page.nodes.items(.name), 0..) |name, i| if (e.namedIndex(@intCast(i)) != null)
+            out.print(e.arena, " \"{f}\",", .{std.zig.fmtString(name)}) catch unreachable;
+        if (out.items.len > 0) out.items.len -= 1;
+        return out.items;
     }
 
     /// Whether a node has flex rules (CSS margins, engine spec F2).

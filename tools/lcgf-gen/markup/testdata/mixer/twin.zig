@@ -12,6 +12,9 @@ const progress = lcgf.widgets_progress;
 
 pub const theme: w.Theme = .{};
 
+/// Accessible names the a11y export must carry (parity.zig).
+pub const names = .{"Volume"};
+
 pub const State = struct { title: []const u8 = "", muted: bool = false, volume: f32 = 0.5, level: f32 = 0 };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{

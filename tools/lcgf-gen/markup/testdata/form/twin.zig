@@ -11,12 +11,15 @@ const textarea = lcgf.widgets_textarea;
 
 pub const theme: w.Theme = .{};
 
+/// Accessible names the a11y export must carry (parity.zig).
+pub const names = .{ "Sign up", "Search" };
+
 pub const State = struct { name: textfield.Text(256) = .{}, find: textfield.Text(256) = .{}, bio: textfield.Text(256) = .{} };
 
 pub const spec = s.col(.{ .size = .{ .fill, .fill }, .fill = theme.panel }, .{
     s.named(s.landmark(.form, .{}, .{
         textfield.ct.textfield(theme, .name, .name, "Your name"),
-        search.ct.search(theme, .find, .find, "Find"),
+        s.named(search.ct.search(theme, .find, .find, "Find"), "Search"),
         textarea.ct.textarea(theme, .bio, .bio, 4, "About you"),
     }), "Sign up"),
 });

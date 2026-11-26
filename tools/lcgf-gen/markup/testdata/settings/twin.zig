@@ -11,6 +11,9 @@ const Frame = lcgf.frame.Frame;
 
 pub const theme: w.Theme = .{};
 
+/// Accessible names the a11y export must carry (parity.zig).
+pub const names = .{"Settings"};
+
 pub const State = struct { wifi: bool = true, bold: bool = false, reset_text: []const u8 = "" };
 
 const body: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
