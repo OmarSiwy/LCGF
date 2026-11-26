@@ -450,6 +450,86 @@ pub const Lowerer = struct {
         }
         l.checkFields();
         l.checkRegions();
+        l.checkProps();
+    }
+
+    /// `<sfy-name …>`: an app component (plan §3.4). Its attributes are props: a literal
+    /// string, `{f}` (a view-state field; `{f:f32}` types one nothing else on the page binds)
+    /// or, inside an lcgf-each, `{x.f}` (a field of the item). CSS cannot restyle what the app
+    /// builds; margins (`spec.flexed`) and `aria-label` (`spec.named`) wrap it.
+    fn appComponent(l: *Lowerer, n: u32, parent: u32) void {
+        const t = l.tag(n);
+        const each = l.eachOf(n);
+        var params: []const u8 = "";
+        var margin: ?[4]f32 = null;
+        const st = l.boxStyle(n, .{}, l.parentDir(parent), &params, &margin);
+        if (!std.meta.eql(st, Style{}) or params.len > 0)
+            l.ds.err(l.loc(n), "CSS does not restyle an app component, only its margins; style it in the app or wrap it in a <div>", .{});
+        const c = l.content(n);
+        if (each != none and (c.elements > 0 or c.text))
+            l.ds.err(l.loc(n), "inside lcgf-each a component takes no children yet; give it props", .{});
+        var props: std.ArrayList(ir.Prop) = .empty;
+        const doc = l.doc;
+        const first = doc.nodes.items(.attr_first)[n];
+        for (first..first + doc.nodes.items(.attr_count)[n]) |a_| {
+            const a: u32 = @intCast(a_);
+            const name = doc.attrs.items(.name)[a];
+            const skipped = for ([_][]const u8{ "id", "class", "style", "aria-label", "slot" }) |x| {
+                if (std.mem.eql(u8, x, name)) break true;
+            } else std.mem.startsWith(u8, name, "on:");
+            if (skipped) continue;
+            if (std.mem.startsWith(u8, name, "bind:")) {
+                l.ds.err(doc.attrLoc(a), "bind: on a component is not lowered; pass the field as a prop (level=\"{{gain}}\") and report changes with on:click", .{});
+                continue;
+            }
+            if (!l.identifier(name, doc.attrLoc(a))) continue;
+            if (std.mem.eql(u8, name, "children")) {
+                l.ds.err(doc.attrLoc(a), "'children' is the component's content; write it between the tags", .{});
+                continue;
+            }
+            const v = doc.attrs.items(.value)[a];
+            const at = doc.valueLoc(a);
+            var prop: ir.Prop = .{ .name = name, .kind = .literal, .value = v, .loc = at };
+            if (isBound(v)) {
+                const inner = std.mem.trim(u8, std.mem.trim(u8, v, " ")[1 .. std.mem.trim(u8, v, " ").len - 1], " ");
+                if (std.mem.indexOfScalar(u8, inner, '.')) |dot| {
+                    if (each == none or !std.mem.eql(u8, inner[0..dot], l.page.nodes.items(.text)[each]) or !l.identifier(inner[dot + 1 ..], at)) {
+                        l.ds.err(at, "'{s}' names no item: `{{x.field}}` reads the item of an enclosing lcgf-each=\"x in xs\"", .{inner});
+                        continue;
+                    }
+                    ok(l.page.item_fields.append(l.arena, .{ .each = l.page.nodes.items(.id)[each], .field = inner[dot + 1 ..], .loc = at }));
+                    prop.kind = .item;
+                    prop.value = inner;
+                } else {
+                    const colon = std.mem.indexOfScalar(u8, inner, ':');
+                    const f = if (colon) |k| inner[0..k] else inner;
+                    if (!l.identifier(f, at)) continue;
+                    if (colon) |k| {
+                        const ty = std.meta.stringToEnum(ir.FieldType, inner[k + 1 ..]) orelse .text;
+                        if (ty != .str and ty != .bool and ty != .f32 and ty != .u32) {
+                            l.ds.err(at, "'{{{s}}}': the type after ':' is str, bool, f32 or u32", .{inner});
+                            continue;
+                        }
+                        l.field(f, ty, at, "a component prop");
+                    }
+                    prop.kind = .field;
+                    prop.value = f;
+                }
+            }
+            ok(props.append(l.arena, prop));
+        }
+        const id: []const u8 = if (l.attr(n, "id")) |x| (if (l.identifier(x, l.valueLoc(n, "id"))) x else "") else l.attr(n, "on:click") orelse "";
+        l.ir_of[n] = l.addNode(.{ .kind = .component, .parent = parent, .loc = l.loc(n), .text = t, .id = id, .props = props.items, .margin = margin, .name = l.attr(n, "aria-label") orelse "" });
+        l.handlers(n, id, "", null);
+    }
+
+    /// A `{f}` prop names a view-state field; something on the page must type it.
+    fn checkProps(l: *Lowerer) void {
+        for (l.page.nodes.items(.props)) |props| for (props) |p| if (p.kind == .field) {
+            for (l.page.fields.items) |f| {
+                if (std.mem.eql(u8, f.name, p.value)) break;
+            } else l.ds.err(p.loc, "nothing on the page types '{s}': bind it to a control or give its type, {{{s}:f32}} (str, bool, f32 or u32)", .{ p.value, p.value });
+        };
     }
 
     fn inside(l: *const Lowerer, n: u32, ancestor: u32) bool {
@@ -617,6 +697,7 @@ pub const Lowerer = struct {
             return;
         }
         if (disp == .contents) return; // children go to the nearest box
+        if (isComponent(t)) return l.appComponent(n, parent);
         if (l.widget(n, t, parent)) return;
         const content_ = l.content(n);
         const heading = headingLevel(t);
@@ -968,7 +1049,7 @@ pub const Lowerer = struct {
         const parent = if (l.ir_of[p] != none) l.ir_of[p] else l.irParent(p);
         if (parent == none) return;
         const kind = l.page.nodes.items(.kind)[parent];
-        if (kind != .container and kind != .landmark) return;
+        if (kind != .container and kind != .landmark and kind != .component) return;
         const style = lcgf.widgets_label.labelStyle(&l.page.theme);
         var node: ir.Node = .{ .kind = .label, .parent = parent, .loc = .{ .file = l.doc.file, .off = l.doc.nodes.items(.src)[n] }, .style = style, .base_style = style, .text_style = l.text[p], .base_text = lcgf.widgets_label.labelText(&l.page.theme) };
         l.caption(&node, collapse(l.arena, bytes), node.loc);
@@ -1097,6 +1178,10 @@ pub const Lowerer = struct {
                 .when, .list, .choice => continue,
                 .each => {
                     l.ds.err(nodes.items(.loc)[i], "lcgf-each regions are lowered on comptime pages only so far; this page asks for the runtime frontend", .{});
+                    continue;
+                },
+                .component => {
+                    l.ds.err(nodes.items(.loc)[i], "app components are lowered on comptime pages only so far; this page asks for the runtime frontend", .{});
                     continue;
                 },
                 else => {},
@@ -1775,6 +1860,11 @@ fn breaks(arena: std.mem.Allocator, s: []const u8) []const u8 {
 fn headingLevel(t: []const u8) u8 {
     if (t.len == 2 and t[0] == 'h' and t[1] >= '1' and t[1] <= '6') return t[1] - '0';
     return 0;
+}
+
+/// A custom element (a name with a hyphen, not lcgf-*): an app component.
+fn isComponent(t: []const u8) bool {
+    return std.mem.indexOfScalar(u8, t, '-') != null and !std.mem.startsWith(u8, t, "lcgf-");
 }
 
 fn isLandmark(t: []const u8) bool {

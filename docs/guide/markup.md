@@ -85,6 +85,39 @@ compiles in every language.
 Field types are inferred from where a field is bound, and two bindings must agree. Defaults come
 from the HTML: `checked`, `value`, the checked radio. Anything else starts at zero.
 
+## App components
+
+An element whose name has a hyphen (`<sfy-meter>`, anything but `lcgf-*`) is a component of
+your app module (`.app` in `addMarkup`), declared in its `pub const components`. A spec
+component is `pub fn @"sfy-meter"(comptime props: Props) lcgf.spec.Spec`, as in
+`tools/lcgf-gen/markup/testdata/components/app.zig`.
+
+`<sfy-meter level="{gain}" caption="Gain"></sfy-meter>` becomes
+`app.components.@"sfy-meter"(.{ .level = .gain, .caption = "Gain" })`, inlined into the spec:
+
+- A literal attribute is a string, and `{f}` is the field's name, `.f`.
+- Something on the page must type `f`: a control bound to it, text that shows it, or the prop
+  itself, written as `{f:f32}` (`str`, `bool`, `f32` or `u32`).
+- The element's content is the prop `children: []const lcgf.spec.Spec`. `spec.col` and
+  `spec.row` take it as it is.
+- `id="zoom"` passes `.id = .zoom`. With `on:click="zoom"`, a click on the widget the
+  component gives that id calls your handler. Widgets in the content call theirs as anywhere
+  else.
+- CSS sets only a component's margins. `aria-label` names it.
+
+Inside `<template lcgf-each="net in nets">`, a component is the runtime form,
+`pub fn @"sfy-net"(f: *lcgf.frame.Frame, props: anytype) lcgf.types.Response`, called once per
+item with `.id` made unique by the item's index and `{net.name}` as the item's value. Its
+on:click reads `Response.clicked` and gets the index. It takes no content yet.
+
+Before the spec is built, the generated `checkComponents` checks each component and each prop
+against the app's declaration: whether it is present, its type, and props without a default
+that the markup does not pass. Each message starts at the HTML:
+
+    page.html:14:5: component <sfy-tool> is missing from app.components: add `pub fn @"sfy-tool"(comptime props: anytype) lcgf.spec.Spec`
+
+Components are lowered on comptime pages only so far.
+
 ## Frontends
 
 By default the page is a comptime page (`ComptimeUi`).

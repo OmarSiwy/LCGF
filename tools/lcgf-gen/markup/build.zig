@@ -72,8 +72,13 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
     pages.append(b.allocator, .{ .name = "lcgf", .module = lcgf }) catch @panic("out of memory");
     for (manifest.manifest.fixtures) |f| {
         const html = b.path(b.fmt("{s}/{s}/page.html", .{ dir, f.name }));
-        const page = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec", .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
-        const page_rt = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
+        const app = if (f.app) b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/app.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} }) else null;
+        const page = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec", .app = app, .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
+        const page_rt = addPage(b, gen, lcgf, .{ .html = html, .frontend = "runtime", .app = app, .runtime_vars = if (f.runtime_vars.len > 0) f.runtime_vars else null });
+        if (f.app) {
+            const wrong = b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/app_wrong.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
+            pages.append(b.allocator, .{ .name = b.fmt("{s}_wrong", .{f.name}), .module = addPage(b, gen, lcgf, .{ .html = html, .frontend = "spec", .app = wrong }) }) catch @panic("out of memory");
+        }
         if (f.runtime_vars.len > 0) {
             const rt_test = b.addTest(.{ .name = b.fmt("markup-{s}-tokens", .{f.name}), .root_module = b.createModule(.{
                 .root_source_file = b.path(b.fmt("{s}/{s}/runtime_test.zig", .{ dir, f.name })),
@@ -85,6 +90,7 @@ pub fn steps(b: *Build, lexbor: *Build.Dependency, lcgf: *Build.Module, lcgf_hos
         }
         if (f.waits_for.len == 0) pages.append(b.allocator, .{ .name = f.name, .module = page }) catch @panic("out of memory");
         const twin = b.createModule(.{ .root_source_file = b.path(b.fmt("{s}/{s}/twin.zig", .{ dir, f.name })), .imports = &.{.{ .name = "lcgf", .module = lcgf }} });
+        if (app) |a| twin.addImport("app", a);
         const t = b.addTest(.{ .name = b.fmt("markup-{s}", .{f.name}), .root_module = b.createModule(.{
             .root_source_file = b.path(dir ++ "/fixture.zig"),
             .target = target,

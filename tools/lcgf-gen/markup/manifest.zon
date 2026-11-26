@@ -78,6 +78,8 @@
         .{ .kind = "element", .name = "details", .status = .planned, .diagnostic = "<details> is not lowered yet (widgets_accordion.ct.section)" },
         .{ .kind = "element", .name = "progress", .status = .mapped, .target = "widgets_progress.ct.progress w/progress:92, f32 0..1", .fixture = "mixer" },
         .{ .kind = "element", .name = "label", .status = .mapped, .target = "the wrapped or for= control's caption", .fixture = "mixer" },
+        .{ .kind = "element", .name = "x-name", .status = .mapped, .target = "app component (plan §3.4): app.components.@\"x-name\"(.{ .prop = … }) returning a Spec; literal props are strings, {f} is .f, content is the prop children: []const Spec; id and on:click name its widget; checked at the HTML (checkComponents)", .fixture = "components" },
+        .{ .kind = "element", .name = "x-name", .applies_to = "lcgf-each item", .status = .mapped, .target = "the runtime form app.components.@\"x-name\"(f, .{ .id = Id.with(index), .prop = item.f }) once per item; on:click reads its Response.clicked and gets the index; no content yet", .fixture = "components" },
         .{ .kind = "attribute", .name = "type", .applies_to = "file", .status = .rejected, .diagnostic = "file selection needs a host file picker; open one from a button's handler" },
         .{ .kind = "attribute", .name = "type", .applies_to = "image", .status = .rejected, .diagnostic = "<input type=image> submits pixel coordinates, which are not modelled; use a button" },
 
@@ -239,5 +241,6 @@
         .{ .name = "rename", .spec_only = true },
         .{ .name = "form" },
         .{ .name = "flexitems" },
+        .{ .name = "components", .spec_only = true, .app = true },
     },
 }

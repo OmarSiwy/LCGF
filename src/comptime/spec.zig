@@ -128,14 +128,16 @@ pub const RegionKind = enum(u8) {
 };
 
 /// A tuple of specs as a slice that outlives the call: the copy into a `const` makes it a
-/// comptime-known value the compiler interns, so the returned slice stays valid.
+/// comptime-known value the compiler interns, so the returned slice stays valid. A slice
+/// (a component's `children`) is already one.
 fn kids(comptime tuple: anytype) []const Spec {
+    if (@TypeOf(tuple) == []const Spec) return tuple;
     const arr: [tuple.len]Spec = tuple;
     const final = arr;
     return &final;
 }
 
-/// A vertical container. `children` is a tuple (or array) of specs:
+/// A vertical container. `children` is a tuple, array or slice of specs:
 /// `col(.{ .pad = @splat(8), .gap = 4 }, .{ label(.a), ... })`. Its `dir` is always `.y`.
 pub fn col(comptime style: Style, comptime children: anytype) Spec {
     var s = style;

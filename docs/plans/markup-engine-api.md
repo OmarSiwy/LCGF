@@ -52,6 +52,17 @@ Requests, by usage:
 - **E1 (landed, this branch):** `ct_interop.fitRegion(id, style)` and `setFit(ui, id, size)`. On a `fit` axis the region takes the size its owner last measured (kept in `ComptimeUi.keep`), one frame late. The page measures the content in its own viewport and sets `out.wake = 0` on a change. A layout that admits a region's measured content within the same frame would remove the lag.
 - **E2:** `compose` into several regions in one pass. Today the page composes them one after another into two draw lists it alternates between, so each region copies the commands before it; one pass would copy them once (a performance request, not a usage one).
 
+### App components (M8.3)
+
+- **Landed (this branch):** `spec.col`/`spec.row` take a slice of specs as well as a tuple, so
+  a component passes its `children: []const Spec` prop on as it is.
+- **Open:**
+  - A component builds with its own theme: the page's `theme` is not passed in.
+  - A runtime component (inside an lcgf-each) takes no content; a slot there would be a
+    callback into the generated code.
+  - The runtime frontend does not lower components: its `spec` (for `Signals`) would need the
+    comptime form as well.
+
 ### What the runtime frontend emits
 
 There is no engine change for these:

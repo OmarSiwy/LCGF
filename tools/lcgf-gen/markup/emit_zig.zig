@@ -245,6 +245,7 @@ pub const Emit = struct {
         const restyle = !std.meta.eql(n.style, n.base_style) or n.params_expr.len > 0;
         const has_children = switch (n.kind) {
             .container, .landmark, .when, .choice, .list => true,
+            .component => e.hasChild(i),
             else => false,
         };
         var inner_close: std.ArrayList(u8) = .empty;
@@ -353,6 +354,11 @@ pub const Emit = struct {
                 e.write(")");
             },
             .each => e.print("lcgf.ct_interop.{s}(.{f}, {s})", .{ if (n.level == 1) "fitRegion" else "region", std.zig.fmtId(n.id), e.styleText(n.style, n.params_expr) }),
+            .component => {
+                // The content is the `children` prop, a tuple of Specs.
+                e.componentCall(n, false, 0, has_children);
+                if (has_children) inner_close.appendSlice(e.arena, "} })") catch unreachable;
+            },
             .spinner => unreachable,
         }
         if (restyle and !has_children) {
@@ -390,7 +396,9 @@ pub const Emit = struct {
             return;
         }
         var stack: std.ArrayList(struct { node: u32, close: []const u8 }) = .empty;
-        e.write("pub const spec = ");
+        // App components are checked first, so a wrong one fails at the HTML.
+        const checked = e.specComponents();
+        e.write(if (checked) "pub const spec = blk: {\n    checkComponents();\n    break :blk " else "pub const spec = ");
         for (0..nodes.len) |i_| {
             const i: u32 = @intCast(i_);
             const parent = nodes.items(.parent)[i];
@@ -414,7 +422,11 @@ pub const Emit = struct {
             e.write(top.close);
             e.write(if (stack.items.len > 0) ",\n" else "");
         }
-        e.write(";\n");
+        e.write(if (checked) ";\n};\n" else ";\n");
+        if (!checked) return;
+        e.write("\n/// Checks the app's components against the markup; every message starts at the HTML.\nfn checkComponents() void {\n    comptime {\n");
+        for (nodes.items(.kind), 0..) |k, i| if (k == .component and e.eachOf(@intCast(i)) == none) e.componentChecks(@intCast(i), false, "        ");
+        e.write("    }\n}\n");
     }
 
     fn fieldType(t: ir.FieldType) []const u8 {
@@ -465,6 +477,7 @@ pub const Emit = struct {
         std.mem.swap(std.ArrayList(u8), &rt, &e.out);
         e.print("//! Generated from {s} by lcgf-gen ({s} frontend); do not edit.\n\n", .{ std.fs.path.basename(source), if (e.runtime) "runtime" else "spec" });
         e.write("const lcgf = @import(\"lcgf\");\nconst s = lcgf.spec;\nconst w = lcgf.widgets_base;\n");
+        if (std.mem.indexOfScalar(ir.Kind, page.nodes.items(.kind), .component) != null) e.write("const app = @import(\"app\");\n");
         var it = e.modules.iterator();
         var names: std.ArrayList([]const u8) = .empty;
         while (it.next()) |m| names.append(e.arena, m.key_ptr.*) catch unreachable;
@@ -703,8 +716,98 @@ pub const Emit = struct {
                 e.print("_ = f.open(.none, .{{}}); switch ({s}) {{", .{e.stateRef(n.bind)});
                 return "} f.close();";
             },
+            .component => {
+                if (e.clickHandler(n.id) != null) {
+                    e.write("if (");
+                    e.componentCall(n, true, list_depth, false);
+                    e.print(".clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) });
+                } else {
+                    e.write("_ = ");
+                    e.componentCall(n, true, list_depth, false);
+                    e.write(";");
+                }
+                return "";
+            },
             .spacer, .spinner, .each => unreachable,
         }
+    }
+
+    /// `app.components.@"tag"(.{ .prop = value, … })`, or in a run-time region the runtime
+    /// form `(f, .{ … })`: literals as strings, `{f}` as `.f` (the spec) or its value, `{x.f}`
+    /// as the item's field; `id` names the widget its on:click is on.
+    fn componentCall(e: *Emit, n: ir.Node, region: bool, list_depth: u32, children: bool) void {
+        e.print("app.components.{f}({s}.{{", .{ std.zig.fmtId(n.text), if (region) "f, " else "" });
+        var k: usize = 0;
+        if (n.id.len > 0) {
+            if (region) e.print(" .id = {s}", .{e.rtId(n.id, list_depth)}) else e.print(" .id = .{f}", .{std.zig.fmtId(n.id)});
+            k += 1;
+        }
+        for (n.props) |p| {
+            e.print("{s} .{f} = ", .{ if (k > 0) "," else "", std.zig.fmtId(p.name) });
+            switch (p.kind) {
+                .literal => e.string(p.value),
+                .field => if (region) e.write(e.stateRef(p.value)) else e.print(".{f}", .{std.zig.fmtId(p.value)}),
+                .item => e.write(p.value),
+            }
+            k += 1;
+        }
+        if (children) e.write(if (k > 0) ", .children = &.{" else " .children = &.{") else e.write(if (k > 0) " })" else "})");
+    }
+
+    fn hasChild(e: *Emit, i: u32) bool {
+        return std.mem.indexOfScalar(u32, e.page.nodes.items(.parent), i) != null;
+    }
+
+    /// Whether the page has an app component outside its run-time regions (in the spec).
+    fn specComponents(e: *Emit) bool {
+        for (e.page.nodes.items(.kind), 0..) |k, i| if (k == .component and e.eachOf(@intCast(i)) == none) return true;
+        return false;
+    }
+
+    /// The checks of component node `i` against the app's declaration, each message at the
+    /// HTML; `region` for the runtime form inside an lcgf-each, whose block has `Item`.
+    fn componentChecks(e: *Emit, i: u32, region: bool, pad: []const u8) void {
+        const n = e.page.nodes.get(i);
+        const at = e.whereFull(n.loc);
+        const tag = n.text;
+        // Escaped for the generated string literal.
+        const want = std.fmt.allocPrint(e.arena, "pub fn @\\\"{s}\\\"({s}", .{ tag, if (region) "f: *lcgf.frame.Frame, props: anytype) …" else "comptime props: anytype) lcgf.spec.Spec" }) catch unreachable;
+        e.print("{s}if (!@hasDecl(app, \"components\")) @compileError(\"{s}: <{s}> is an app component: give addMarkup an .app module with `pub const components`\")\n", .{ pad, at, tag });
+        e.print("{s}else if (!@hasDecl(app.components, \"{s}\")) @compileError(\"{s}: component <{s}> is missing from app.components: add `{s}`\")\n", .{ pad, tag, at, tag, want });
+        e.print("{s}else if (@typeInfo(@TypeOf(app.components.{f})) != .@\"fn\" or @typeInfo(@TypeOf(app.components.{f})).@\"fn\".param_types.len != {d}) @compileError(\"{s}: <{s}> must be `{s}`{s}\")\n", .{ pad, std.zig.fmtId(tag), std.zig.fmtId(tag), @as(u8, if (region) 2 else 1), at, tag, want, if (region) " inside lcgf-each" else "; inside lcgf-each it is the runtime form" });
+        e.print("{s}else if (@typeInfo(@TypeOf(app.components.{f})).@\"fn\".param_types[{d}]) |P| {{\n", .{ pad, std.zig.fmtId(tag), @as(u8, if (region) 1 else 0) });
+        // Every prop the markup passes, typed as it passes it.
+        if (n.id.len > 0) e.print("{s}    if (!@hasField(P, \"id\")) @compileError(\"{s}: <{s}> has no prop 'id', so id= and on:click cannot name its widget\");\n", .{ pad, at, tag });
+        if (e.hasChild(i)) e.print("{s}    if (!@hasField(P, \"children\")) @compileError(\"{s}: <{s}> takes no content: it has no prop 'children'\")\n{s}    else if (@FieldType(P, \"children\") != []const lcgf.spec.Spec) @compileError(\"{s}: the content of <{s}> is its prop 'children', which must be []const lcgf.spec.Spec\");\n", .{ pad, at, tag, pad, at, tag });
+        for (n.props) |p| {
+            const pat = e.whereFull(p.loc);
+            e.print("{s}    if (!@hasField(P, \"{s}\")) @compileError(\"{s}: <{s}> has no prop '{s}'\")\n", .{ pad, p.name, pat, tag, p.name });
+            const field = if (p.kind == .item) p.value[std.mem.indexOfScalar(u8, p.value, '.').? + 1 ..] else p.value;
+            const want_ty, const why = switch (p.kind) {
+                .literal => .{ "[]const u8", "a literal" },
+                .field => if (region) .{ std.fmt.allocPrint(e.arena, "@FieldType(State, \"{s}\")", .{field}) catch unreachable, std.fmt.allocPrint(e.arena, "the view state's '{s}'", .{field}) catch unreachable } else .{ "@EnumLiteral()", std.fmt.allocPrint(e.arena, "the name of the field '{s}'", .{field}) catch unreachable },
+                .item => .{ std.fmt.allocPrint(e.arena, "@FieldType(Item, \"{s}\")", .{field}) catch unreachable, std.fmt.allocPrint(e.arena, "the item's '{s}'", .{field}) catch unreachable },
+            };
+            e.print("{s}    else if (@FieldType(P, \"{s}\") != {s}) @compileError(\"{s}: prop '{s}' of <{s}> is \" ++ @typeName(@FieldType(P, \"{s}\")) ++ \", but the markup passes {s}, \" ++ @typeName({s}));\n", .{ pad, p.name, want_ty, pat, p.name, tag, p.name, why, want_ty });
+        }
+        // And every prop without a default is passed.
+        e.print("{s}    if (@typeInfo(P) == .@\"struct\") for (@typeInfo(P).@\"struct\".field_names, @typeInfo(P).@\"struct\".field_attrs) |name, attrs| {{\n", .{pad});
+        e.print("{s}        const given = for ([_][]const u8{{", .{pad});
+        var k: usize = 0;
+        if (n.id.len > 0) {
+            e.write(" \"id\"");
+            k += 1;
+        }
+        if (e.hasChild(i)) {
+            e.print("{s} \"children\"", .{if (k > 0) "," else ""});
+            k += 1;
+        }
+        for (n.props) |p| {
+            e.print("{s} \"{s}\"", .{ if (k > 0) "," else "", p.name });
+            k += 1;
+        }
+        e.print(" }}) |x| {{\n{s}            if (@import(\"std\").mem.eql(u8, x, name)) break true;\n{s}        }} else false;\n", .{ pad, pad });
+        e.print("{s}        if (attrs.default_value_ptr == null and !given) @compileError(\"{s}: <{s}> needs the prop '\" ++ name ++ \"'\");\n{s}    }};\n{s}}}\n", .{ pad, at, tag, pad, pad });
     }
 
     /// A text control inside an lcgf-each: the region keeps one editor (`edit_<id>`), for the
@@ -1022,7 +1125,8 @@ pub const Emit = struct {
             for (hs) |h| if (h.event == .submit and h.each.len == 0) e.print("                .{f} => |result| if (result.submitted) h.{f}(&p.ui), // {s}\n", .{ std.zig.fmtId(h.widget), std.zig.fmtId(h.name), e.where(h.loc) });
             var widgets: u32 = 0;
             for (e.page.nodes.items(.id), 0..) |id, k| widgets += @intFromBool(id.len > 0 and (e.eachOf(@intCast(k)) == none or e.page.nodes.items(.kind)[k] == .each));
-            if (widgets > clicks) e.write("                else => {},\n");
+            // An app component's widgets are tags of `Widget` the markup does not see.
+            if (widgets > clicks or e.specComponents()) e.write("                else => {},\n");
             e.write("            };\n");
         }
         for (hs) |h| if (h.event == .submit and h.each.len > 0)
@@ -1138,6 +1242,9 @@ pub const Emit = struct {
             seen.put(e.arena, f.field, {}) catch unreachable;
             e.print("                    if (!@hasField(Item, \"{s}\")) @compileError(\"{s}: the items of '{s}' have no field '{s}'\");\n", .{ f.field, e.whereFull(f.loc), n.bind, f.field });
         }
+        for (0..e.page.nodes.len) |k| if (e.page.nodes.items(.kind)[k] == .component and e.eachOf(@intCast(k)) == each)
+            e.componentChecks(@intCast(k), true, "                    ");
+        // Item props are item fields, so `seen` holds them too.
         if (seen.count() == 0) e.write("                    _ = Item;\n");
         e.write("                }\n");
         // The copies' statements first: they name `ui` only when they read the view state.
@@ -1202,6 +1309,10 @@ pub const Emit = struct {
             e.print("    if (!@hasDecl(H, \"{s}\")) @compileError(\"{s}: handler '{s}' is missing: add `{s}`\");\n", .{ h.name, at, h.name, e.signature(h, "\" ++ @typeName(H) ++ \"") });
             // The found type would spell out `Ui`, the whole spec; the expected one is enough.
             e.print("    if (@TypeOf(H.{f}) != {s}) @compileError(\"{s}: handler '{s}' must be `{s}`\");\n", .{ std.zig.fmtId(h.name), e.fnType(h), at, h.name, e.signature(h, "H") });
+        }
+        for (e.page.nodes.items(.kind), e.page.nodes.items(.id), e.page.nodes.items(.text), 0..) |k, id, tag, i| {
+            if (k != .component or e.eachOf(@intCast(i)) != none or e.clickHandler(id) == null) continue;
+            e.print("    if (!@hasField(Widget, \"{s}\")) @compileError(\"{s}: <{s}> makes no widget '{s}': give props.id to the widget its click is on\");\n", .{ id, e.whereFull(e.page.nodes.items(.loc)[i]), tag, id });
         }
         e.write("}\n");
     }

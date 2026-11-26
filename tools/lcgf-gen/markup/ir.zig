@@ -50,6 +50,10 @@ pub const Kind = enum(u8) {
     /// list, `text` the item's name, `id` the region's id; `max` and `level` its node and text
     /// capacity.
     each,
+    /// `<sfy-name prop="…">`: an app component, `app.components.@"sfy-name"(.{ … })`. `text` is
+    /// the tag, `props` its attributes, `id` the widget a click handler names; its children are
+    /// the `children` prop. Inside an lcgf-each it is the runtime form, `(f, .{ … })`.
+    component,
 };
 
 /// Where a caption's text comes from.
@@ -95,6 +99,18 @@ pub const Node = struct {
     /// Style fields read from run-time theme tokens, and the text style's.
     uses: []const TokenUse = &.{},
     text_uses: TextTokens = .{},
+    /// A component's props, in attribute order.
+    props: []const Prop = &.{},
+};
+
+/// One attribute of an app component: a literal string, a view-state field (`{f}`, passed as
+/// `.f` in the spec, its value in a region) or a field of the region's item (`{x.f}`).
+pub const Prop = struct {
+    name: []const u8,
+    kind: enum(u8) { literal, field, item },
+    /// The literal bytes, the field's name, or `x.f`.
+    value: []const u8,
+    loc: diag.Loc,
 };
 
 /// A run-time theme token (`--t-*` under `--runtime-vars=t-`): a field of the generated

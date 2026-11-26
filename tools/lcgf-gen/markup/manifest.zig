@@ -37,6 +37,9 @@ pub const Fixture = struct {
     spec_only: bool = false,
     /// Built for the runtime frontend with `--runtime-vars=<this>`, and its runtime_test.zig run.
     runtime_vars: []const u8 = "",
+    /// Its page and twin import `app` from `<name>/app.zig` (app components). The compile-fail
+    /// cases also get the page built over `<name>/app_wrong.zig`, as `<name>_wrong`.
+    app: bool = false,
 };
 
 pub const Manifest = struct { rows: []const Row, fixtures: []const Fixture };
