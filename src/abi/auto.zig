@@ -29,7 +29,7 @@ fn lanedPrefix(comptime name: []const u8) ?[]const u8 {
 /// lcgf.h's names.
 const entries = blk: {
     @setEvalBranchQuota(20_000);
-    const lists = .{ lcgf.abi_seam.exports, lcgf.abi_runtime.exports, lcgf.abi_api.c_names, lcgf.abi_ct.exports };
+    const lists = .{ lcgf.abi_seam.exports, lcgf.abi_api.c_names, lcgf.abi_canvas.exports, lcgf.abi_ct.exports };
     var count = 0;
     for (lists) |list| count += list.len;
     var e: [count]Entry = undefined;

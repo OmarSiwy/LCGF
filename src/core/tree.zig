@@ -15,7 +15,7 @@ const Rect = types.Rect;
 const b01 = simd.b2f;
 
 /// One row of a tree's paint extras (`Tree.Extras`). Extern: C++ and Rust write a row's first
-/// five fields in place (`lcgf_extra`, src/abi/runtime.zig's `CView`).
+/// five fields in place (`lcgf_extra`, src/abi/view.zig's `CView`).
 pub const Extra = extern struct {
     /// `Style.border`. Read by finalize (children clip inside it), inherit and paint.
     border: f32,

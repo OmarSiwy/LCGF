@@ -113,7 +113,7 @@ pub const Frame = struct {
     }
 
     /// `open` from a style already turned into its row (`Template.from`; a `*const Template`
-    /// or a C `*const FlatRow`): the row is pushed as it is. What C++ and Rust call, having made the row themselves (src/abi/runtime.zig).
+    /// or a C `*const FlatRow`): the row is pushed as it is. What C++ and Rust call, having made the row themselves (src/abi/api.zig).
     pub fn openRow(f: *Frame, id: Id, row: anytype) Node {
         const ctx = f.ctx;
         return f.enter(f.tree().pushRow(ctx.stack[ctx.depth - 1], id, row));

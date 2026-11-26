@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 /* The layout of every type below the library reads: compare with lcgf_layout(). */
-#define LCGF_LAYOUT 0x17bc1ff0u
+#define LCGF_LAYOUT 0x6affb337u
 #define LCGF_CONTEXT_ALIGN 64
 #define LCGF_COLUMN_ALIGN 64
 #define LCGF_NO_WIDGET 0xffffffffu
@@ -442,7 +442,8 @@ void lcgf_context_begin(lcgf_context *ctx, const lcgf_input *in, lcgf_frame *fra
 /// Lets frames make canvas nodes (`lcgf_frame_canvas`), in `buf`: `lcgf_context_canvas_bytes`
 /// of the caller's memory, pointer-aligned, alive as long as the context.
 int lcgf_context_enable_canvas(lcgf_context *ctx, void *buf, size_t len);
-/// Bytes `lcgf_context_enable_canvas` needs for `limits`.
+/// Bytes `lcgf_context_enable_canvas` needs for `limits`: the canvas rows and their palettes,
+/// two generations of `customs` each.
 size_t lcgf_context_canvas_bytes(const lcgf_limits *limits);
 /// Starts a node. Everything created until the matching `close` is its child.
 uint32_t lcgf_frame_open(lcgf_frame *f, uint32_t id, const lcgf_style *style);
@@ -450,7 +451,7 @@ void lcgf_frame_close(lcgf_frame *f);
 /// A node with no children. Same as `open` then `close`.
 uint32_t lcgf_frame_leaf(lcgf_frame *f, uint32_t id, const lcgf_style *style);
 /// `open` from a style already turned into its row (`Template.from`; a `*const Template`
-/// or a C `*const FlatRow`): the row is pushed as it is. What C++ and Rust call, having made the row themselves (src/abi/runtime.zig).
+/// or a C `*const FlatRow`): the row is pushed as it is. What C++ and Rust call, having made the row themselves (src/abi/api.zig).
 uint32_t lcgf_frame_open_row(lcgf_frame *f, uint32_t id, const lcgf_row *row);
 /// `leaf` from a row (`openRow`).
 uint32_t lcgf_frame_leaf_row(lcgf_frame *f, uint32_t id, const lcgf_row *row);
@@ -470,15 +471,8 @@ uint32_t lcgf_frame_text_written(lcgf_frame *f, size_t n, const lcgf_text_style 
 uint32_t lcgf_frame_custom(lcgf_frame *f, uint32_t id, const lcgf_style *style, uint64_t data);
 /// `custom` from a row (`openRow`).
 uint32_t lcgf_frame_custom_row(lcgf_frame *f, uint32_t id, const lcgf_row *row, uint64_t data);
-/// A node that draws `o.ranges` of `shapes` under `o.camera` with `o.palette`: a `canvas`
-/// command in paint order, clipped to the node. Needs `Context.enableCanvas`. It is a
-/// custom row, so it takes a `Limits.customs` row, orders, layers and damages like a
-/// custom node; its damage covers the camera, the palette, the ranges, the overrides and
-/// `shapes.revision`, so a pan, a recolour or an edit redraws it; not the batch's address, so
-/// a batch moved in memory does not redraw (bump `revision` when a node switches to another
-/// batch at the same revision). An overlay is a second
-/// canvas node over it (a float) or more ranges. Everything passed is the caller's and
-/// must outlive the frame's drawing, and a subtree `reuse` keeps draws it again as it was.
+/// `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of
+/// them the caller's until the frame is drawn. LCGF_NO_WIDGET past `customs` canvases a frame.
 uint32_t lcgf_frame_canvas(lcgf_frame *f, uint32_t id, const lcgf_style *style, const lcgf_canvas *shapes, const lcgf_canvas_options *options);
 /// A value that eases toward `target` across frames on a spring keyed by `id`. Returns this
 /// frame's position (`target` on first use). Keeps the host awake (`Output.wake` 0,

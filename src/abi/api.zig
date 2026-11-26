@@ -11,21 +11,22 @@
 //!   seam-specific one over runtime.zig's context;
 //! - `loose("lcgf_layout", "layout")`: a function of this file with no Zig counterpart.
 //!
-//! A2: this is today's runtime surface (src/abi/runtime.zig's `lcgf_rt_*`) under these names,
-//! exported beside the old ones, which A4 deletes.
+//! The seam-specific entries stand in until `Input`, `Limits` and `Output` cross in C form (A5).
 
 const std = @import("std");
 const abi = @import("abi.zig");
 const words = @import("words.zig");
 const plan = @import("plan.zig");
 const seam = @import("seam.zig");
-const runtime = @import("runtime.zig");
+const view = @import("view.zig");
+const Mono = @import("../text/protocol.zig").Mono;
 const abi_canvas = @import("canvas.zig");
 const ct = @import("ct.zig");
 const types = @import("../core/types.zig");
 const tree = @import("../core/tree.zig");
 const context = @import("../runtime/context.zig");
-const Frame = @import("../runtime/frame.zig").Frame;
+const frame_mod = @import("../runtime/frame.zig");
+const Frame = frame_mod.Frame;
 const base = @import("../widgets/base.zig");
 const values = @import("../anim/values.zig");
 const Spring = @import("../anim/anims.zig").Spring;
@@ -55,8 +56,8 @@ pub const names = .{
     .{ tree.FlatRow, "row" },
     .{ tree.Look, "look" },
     .{ tree.Extra, "extra" },
-    .{ runtime.CView, "view" },
-    .{ runtime.CLimits, "limits" },
+    .{ view.CView, "view" },
+    .{ CLimits, "limits" },
     .{ seam.CInput, "input" },
     .{ Input.Event, "key_event" },
     .{ seam.CFrame, "ui_output" },
@@ -294,6 +295,8 @@ pub const c_names = blk: {
 };
 
 pub fn exportAll() void {
+    // The canvas batch's own C functions (src/abi/canvas.zig).
+    inline for (0..abi_canvas.exports.len) |k| @export(abi_canvas.exports[k][1], .{ .name = abi_canvas.exports[k][0] ++ plan.symbol_suffix });
     inline for (exports) |E| {
         const name = E.c ++ plan.symbol_suffix;
         if (comptime isC(E.func)) @export(&E.func, .{ .name = name }) else @export(&abi.Wrap(E.func, handles).c, .{ .name = name });
@@ -310,46 +313,98 @@ pub fn isC(comptime f: anytype) bool {
 const CtxH = abi.Handle(Context);
 const FrameH = abi.Handle(Frame);
 
-fn rt(ctx: *CtxH) *runtime.Runtime {
-    return @ptrCast(@alignCast(ctx));
-}
+/// `Limits`' sizes, as C passes them (`lcgf_limits`; A5 makes it all of `Limits`).
+pub const CLimits = extern struct {
+    nodes: u32 = 4096,
+    texts: u32 = 1024,
+    customs: u32 = 64,
+    strings: u32 = 64 * 1024,
+    anims: u32 = 256,
+    depth: u32 = 64,
 
-/// The context a frame was begun on, and what runtime.zig keeps beside it.
-fn rtOf(f: *Frame) *runtime.Runtime {
-    return @fieldParentPtr("ctx", f.ctx);
+    fn limits(c: *const CLimits) context.Limits {
+        return .{ .nodes = c.nodes, .texts = c.texts, .customs = c.customs, .strings = c.strings, .anims = c.anims, .depth = c.depth };
+    }
+};
+
+/// What an `lcgf_context` is, at the start of the caller's buffer: the context, the input its
+/// frame reads until `lcgf_frame_end` (A5: `Context.begin` copies it), the font the frame is
+/// laid out with, and the palettes `lcgf_frame_canvas` makes from its options, in two
+/// generations as the canvas rows are (a reused canvas keeps last frame's).
+pub const Session = struct {
+    ctx: Context,
+    input: Input = .{},
+    font: Mono = .{},
+    palettes: []canvas.Palette = &.{},
+    palette_len: u32 = 0,
+
+    fn of(ctx: *CtxH) *Session {
+        return @ptrCast(@alignCast(ctx));
+    }
+
+    /// The session a frame was begun on.
+    fn ofFrame(f: *const Frame) *Session {
+        return @fieldParentPtr("ctx", f.ctx);
+    }
+
+    fn head() usize {
+        return std.mem.alignForward(usize, @sizeOf(Session), column_align);
+    }
+};
+
+fn frameOf(f: *FrameH) *Frame {
+    return @ptrCast(@alignCast(f));
 }
 
 /// Bytes a context of `limits` needs, its own included: the buffer `lcgf_context_init` takes.
-fn contextBytes(limits: *const runtime.CLimits) callconv(.c) usize {
-    return runtime.cLimitsBytes(limits);
+fn contextBytes(limits: *const CLimits) callconv(.c) usize {
+    return Session.head() + Context.requiredBytes(limits.limits());
 }
 
 /// Places a context of `limits` at the start of `buf` (LCGF_CONTEXT_ALIGN-aligned): `buf` is
 /// then an `lcgf_context *`. Returns an `lcgf_status`.
-fn contextInit(buf: *anyopaque, len: usize, limits: *const runtime.CLimits) callconv(.c) c_int {
-    return runtime.cInit(@ptrCast(buf), len, limits);
+fn contextInit(buf: *anyopaque, len: usize, limits: *const CLimits) callconv(.c) c_int {
+    const bytes: [*]u8 = @ptrCast(buf);
+    if (@intFromPtr(bytes) % column_align != 0) return @backingInt(seam.Status.unaligned);
+    if (len < contextBytes(limits)) return @backingInt(seam.Status.buffer_too_small);
+    const work: []align(column_align) u8 = @alignCast(bytes[Session.head()..len]);
+    const s: *Session = @ptrCast(@alignCast(bytes));
+    s.* = .{ .ctx = Context.init(work, limits.limits()) catch return @backingInt(seam.Status.buffer_too_small) };
+    return 0;
 }
 
 /// Whether `in` needs a frame: 0 when nothing would change, so the host can sleep.
 fn contextNeedsFrame(ctx: *CtxH, in: *const seam.CInput) callconv(.c) c_int {
-    return runtime.cNeedsFrame(ctx, in);
+    const input = in.input();
+    return @intFromBool(Session.of(ctx).ctx.needsFrame(&input));
 }
 
 /// Starts a frame on `in`, which the context copies: `frame` is valid until `lcgf_frame_end`.
 fn contextBegin(ctx: *CtxH, in: *const seam.CInput, frame_out: *FrameH) callconv(.c) void {
-    runtime.cBegin(ctx, in);
-    @as(*Frame, @ptrCast(@alignCast(frame_out))).* = rt(ctx).frame;
+    const s = Session.of(ctx);
+    s.input = in.input();
+    s.palette_len = 0;
+    frameOf(frame_out).* = s.ctx.begin(&s.input);
 }
 
 /// Lets frames make canvas nodes (`lcgf_frame_canvas`), in `buf`: `lcgf_context_canvas_bytes`
 /// of the caller's memory, pointer-aligned, alive as long as the context.
 fn contextEnableCanvas(ctx: *CtxH, buf: *anyopaque, len: usize) callconv(.c) c_int {
-    return runtime.cEnableCanvas(ctx, @ptrCast(buf), len);
+    const s = Session.of(ctx);
+    const bytes: [*]u8 = @ptrCast(buf);
+    const n = 2 * @as(usize, s.ctx.limits.customs);
+    if (@intFromPtr(bytes) % @alignOf(draw_list.CanvasDraw) != 0) return @backingInt(seam.Status.unaligned);
+    if (len < n * (@sizeOf(draw_list.CanvasDraw) + @sizeOf(canvas.Palette))) return @backingInt(seam.Status.buffer_too_small);
+    const rows: [*]draw_list.CanvasDraw = @ptrCast(@alignCast(bytes));
+    s.palettes = @as([*]canvas.Palette, @ptrCast(@alignCast(bytes + n * @sizeOf(draw_list.CanvasDraw))))[0..n];
+    s.ctx.enableCanvas(rows[0..n]);
+    return 0;
 }
 
-/// Bytes `lcgf_context_enable_canvas` needs for `limits`.
-fn contextCanvasBytes(limits: *const runtime.CLimits) callconv(.c) usize {
-    return runtime.cCanvasBytes(limits);
+/// Bytes `lcgf_context_enable_canvas` needs for `limits`: the canvas rows and their palettes,
+/// two generations of `customs` each.
+fn contextCanvasBytes(limits: *const CLimits) callconv(.c) usize {
+    return 2 * @as(usize, limits.customs) * (@sizeOf(draw_list.CanvasDraw) + @sizeOf(canvas.Palette));
 }
 
 fn frameOpenRow(f: *Frame, id: types.Id, row: *const tree.FlatRow) types.Node {
@@ -364,9 +419,18 @@ fn frameCustomRow(f: *Frame, id: types.Id, row: *const tree.FlatRow, data: u64) 
     return f.customRow(id, row, data);
 }
 
+/// `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of
+/// them the caller's until the frame is drawn. LCGF_NO_WIDGET past `customs` canvases a frame.
 fn frameCanvas(f: *FrameH, id: u32, style: *const abi.Words(types.Style), shapes: *const abi.Handle(canvas.Instances), options: *const abi_canvas.COptions) callconv(.c) u32 {
-    const fr: *Frame = @ptrCast(@alignCast(f));
-    return runtime.cCanvas(rtOf(fr), id, &style.w, @ptrCast(@alignCast(shapes)), options);
+    const fr = frameOf(f);
+    const s = Session.ofFrame(fr);
+    const n = s.palettes.len / 2;
+    if (s.palette_len >= n) return std.math.maxInt(u32);
+    const pal = &s.palettes[@as(usize, s.ctx.cur) * n + s.palette_len];
+    s.palette_len += 1;
+    pal.* = options.palette();
+    const o: frame_mod.CanvasOptions = .{ .camera = options.cam(), .palette = pal, .ranges = options.spans(), .overrides = options.marks() };
+    return fr.canvas(@fromBackingInt(id), words.get(types.Style, &style.w), @ptrCast(@alignCast(shapes)), o).ix();
 }
 
 fn frameAnimate(f: *Frame, id: types.Id, target: f32, spring: *const Spring) f32 {
@@ -380,20 +444,21 @@ fn frameTween(f: *Frame, id: types.Id, target: f32, seconds: f32, ease: Ease) f3
 /// Lays the frame out and paints it with the context's font: `out` holds the draw list,
 /// valid until the next frame begins.
 fn frameEnd(f: *FrameH, out: *seam.CFrame) callconv(.c) void {
-    const r = rtOf(@ptrCast(@alignCast(f)));
-    r.frame = @as(*Frame, @ptrCast(@alignCast(f))).*;
-    runtime.cEnd(r, out);
+    const fr = frameOf(f);
+    const o = fr.end(Session.ofFrame(fr).font);
+    out.* = .{ .draw = seam.cDraw(o.draw), .widget = seam.none_widget, .value = 0, .focus = seam.none_widget, .wake = o.wake };
 }
 
 /// Where this frame's rows are, for the bindings' inline push (`lcgf_view`): valid until
 /// `lcgf_frame_end`.
-fn frameView(f: *FrameH, out: *runtime.CView) callconv(.c) void {
-    runtime.cView(rtOf(@ptrCast(@alignCast(f))), out);
+fn frameView(f: *FrameH, out: *view.CView) callconv(.c) void {
+    out.* = view.of(frameOf(f));
 }
 
 /// The row the tree stores for `style` (`Template.from`): what the _row calls push as it is.
 fn templateFrom(style: *const abi.Words(types.Style), out: *tree.FlatRow) callconv(.c) void {
-    runtime.cRowFromStyle(&style.w, @ptrCast(out));
+    const st = words.get(types.Style, &style.w);
+    words.put(tree.Template, .from(&st), @as(*[words.wordsOf(tree.Template)]u32, @ptrCast(out)));
 }
 
 /// `Style`'s defaults.
@@ -418,50 +483,145 @@ comptime {
 
 const testing = std.testing;
 
-test "api: a frame through the new names draws what the old names draw" {
-    const l: runtime.CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
-    var outs: [2]seam.CFrame = undefined;
-    var bufs: [2][]align(64) u8 = undefined;
-    for (&bufs) |*b| b.* = try testing.allocator.alignedAlloc(u8, .fromByteUnits(64), contextBytes(&l));
-    defer for (bufs) |b| testing.allocator.free(b);
-    const in: seam.CInput = .{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } };
+test "api: a frame through the C calls draws what Zig draws" {
+    const l: CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const n = contextBytes(&l);
+    const cbuf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), n);
+    defer testing.allocator.free(cbuf);
+    const zbuf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), Context.requiredBytes(l.limits()));
+    defer testing.allocator.free(zbuf);
+    var in: seam.CInput = .{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } };
+    const st: types.Style = .{ .size = .{ .fill, .fill }, .pad = @splat(4), .fill = .rgb(10, 20, 30) };
     var s: abi.Words(types.Style) = undefined;
-    words.put(types.Style, .{ .size = .{ .fill, .fill }, .pad = @splat(4), .fill = .rgb(10, 20, 30) }, &s.w);
+    words.put(types.Style, st, &s.w);
     var th: base.Theme = undefined;
     themeDefault(&th);
-    const open = abi.Wrap(Frame.open, handles).c;
-    const close = abi.Wrap(Frame.close, handles).c;
-    const button = abi.Wrap(base.button, handles).c;
-    const slider = abi.Wrap(base.slider, handles).c;
-    const animate = abi.Wrap(frameAnimate, handles).c;
     const sp: Spring = .{};
+
+    // Through the C calls. The context copies the input: changing ours mid-frame changes nothing.
+    try testing.expectEqual(0, contextInit(cbuf.ptr, cbuf.len, &l));
+    var f: Frame = undefined;
+    const fh: *FrameH = @ptrCast(&f);
+    contextBegin(@ptrCast(cbuf.ptr), &in, fh);
+    in.viewport = .{ 1, 1 };
+    var v: f32 = 0.25;
+    var on = false;
+    _ = abi.Wrap(Frame.open, handles).c(fh, 1, &s);
+    _ = abi.Wrap(base.button, handles).c(fh, &th, 2, "Go", 2);
+    _ = abi.Wrap(base.checkbox, handles).c(fh, &th, 3, &on, "On", 2);
+    _ = abi.Wrap(base.slider, handles).c(fh, &th, 4, &v, 0, 1);
+    _ = abi.Wrap(frameAnimate, handles).c(fh, 5, 1, &sp);
+    abi.Wrap(Frame.close, handles).c(fh);
+    var out: seam.CFrame = undefined;
+    frameEnd(fh, &out);
+
+    // In Zig.
+    var ctx = try Context.init(zbuf, l.limits());
+    const zin = (seam.CInput{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } }).input();
+    var zf = ctx.begin(&zin);
+    var zv: f32 = 0.25;
+    var zon = false;
+    _ = zf.open(@fromBackingInt(1), st);
+    _ = base.button(&zf, &th, @fromBackingInt(2), "Go");
+    _ = base.checkbox(&zf, &th, @fromBackingInt(3), &zon, "On");
+    _ = base.slider(&zf, &th, @fromBackingInt(4), &zv, 0, 1);
+    _ = zf.animate(@fromBackingInt(5), @as(f32, 1), sp);
+    zf.close();
+    const zo = zf.end(.{});
+
+    try testing.expect(out.draw.quad_len > 0);
+    try testing.expectEqualSlices(f32, &.{ 0, 0, 300, 200 }, &out.draw.quads[0].rect);
+    try testing.expectEqual(zo.draw.quad_len, out.draw.quad_len);
+    try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(zo.draw.quads[0..zo.draw.quad_len]), std.mem.sliceAsBytes(out.draw.quads[0..out.draw.quad_len]));
+    try testing.expectEqual(zo.draw.run_len, out.draw.run_len);
+}
+
+test "api: a row pushed through the C calls is the node its style makes" {
+    const l: CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    var bufs: [2][]align(column_align) u8 = undefined;
+    for (&bufs) |*b| b.* = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), contextBytes(&l));
+    defer for (bufs) |b| testing.allocator.free(b);
+    const in: seam.CInput = .{ .viewport = .{ 300, 200 } };
+    const styles = [_]types.Style{
+        .{ .size = .{ .fill, .fill }, .pad = @splat(8), .fill = .rgb(10, 20, 30) },
+        .{ .size = .{ .px(40), .pct(0.5) }, .radius = 4, .border = 1, .border_color = .rgb(1, 2, 3), .clip = true },
+        .{ .dir = .x, .gap = 3, .opacity = 0.5, .radii = .{ 1, 2, 3, 4 } },
+    };
+    var outs: [2]seam.CFrame = undefined;
     for (bufs, &outs, 0..) |b, *out, k| {
         try testing.expectEqual(0, contextInit(b.ptr, b.len, &l));
-        var v: f32 = 0.25;
-        if (k == 0) {
-            runtime.cBegin(b.ptr, &in);
-            _ = runtime.cOpen(b.ptr, 1, &s.w);
-            _ = runtime.cButton(b.ptr, 2, "Go", 2);
-            _ = runtime.cSlider(b.ptr, 3, &v, 0, 1);
-            _ = runtime.cAnimate(b.ptr, 4, 1, 170, 26);
-            runtime.cClose(b.ptr);
-            runtime.cEnd(b.ptr, out);
-        } else {
-            var f: Frame = undefined;
-            const fh: *FrameH = @ptrCast(&f);
-            contextBegin(@ptrCast(b.ptr), &in, fh);
-            _ = open(fh, 1, &s);
-            _ = button(fh, &th, 2, "Go", 2);
-            _ = slider(fh, &th, 3, &v, 0, 1);
-            _ = animate(fh, 4, 1, &sp);
-            close(fh);
-            frameEnd(fh, out);
+        var f: Frame = undefined;
+        const fh: *FrameH = @ptrCast(&f);
+        contextBegin(@ptrCast(b.ptr), &in, fh);
+        for (styles, 0..) |st, i| {
+            var w: abi.Words(types.Style) = undefined;
+            words.put(types.Style, st, &w.w);
+            var row: tree.FlatRow = undefined;
+            templateFrom(&w, &row);
+            const id: u32 = @intCast(i + 1);
+            if (k == 0) {
+                _ = abi.Wrap(Frame.open, handles).c(fh, id, &w);
+                _ = abi.Wrap(Frame.leaf, handles).c(fh, 100 + id, &w);
+                _ = abi.Wrap(Frame.custom, handles).c(fh, 200 + id, &w, 7);
+            } else {
+                _ = abi.Wrap(frameOpenRow, handles).c(fh, id, &row);
+                _ = abi.Wrap(frameLeafRow, handles).c(fh, 100 + id, &row);
+                _ = abi.Wrap(frameCustomRow, handles).c(fh, 200 + id, &row, 7);
+            }
         }
+        for (styles) |_| abi.Wrap(Frame.close, handles).c(fh);
+        frameEnd(fh, out);
     }
     try testing.expect(outs[0].draw.quad_len > 0);
-    try testing.expectEqual(outs[0].draw.quad_len, outs[1].draw.quad_len);
     try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(outs[0].draw.quads[0..outs[0].draw.quad_len]), std.mem.sliceAsBytes(outs[1].draw.quads[0..outs[1].draw.quad_len]));
-    try testing.expectEqual(outs[0].draw.run_len, outs[1].draw.run_len);
+    try testing.expectEqual(outs[0].draw.custom_len, outs[1].draw.custom_len);
+}
+
+test "api: unchanged input needs no frame through the C calls" {
+    const l: CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const buf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), contextBytes(&l));
+    defer testing.allocator.free(buf);
+    try testing.expectEqual(0, contextInit(buf.ptr, buf.len, &l));
+    const in: seam.CInput = .{ .viewport = .{ 300, 200 }, .pointer = .{ 10, 10 } };
+    var th: base.Theme = undefined;
+    themeDefault(&th);
+    var built: u32 = 0;
+    for (0..8) |_| {
+        if (contextNeedsFrame(@ptrCast(buf.ptr), &in) == 0) continue;
+        built += 1;
+        var f: Frame = undefined;
+        const fh: *FrameH = @ptrCast(&f);
+        contextBegin(@ptrCast(buf.ptr), &in, fh);
+        _ = abi.Wrap(base.button, handles).c(fh, &th, 2, "Go", 2);
+        var out: seam.CFrame = undefined;
+        frameEnd(fh, &out);
+    }
+    try testing.expect(built < 8);
+}
+
+test "api: the words a binding passes" {
+    try testing.expectEqual(59, words.wordsOf(types.Style));
+    try testing.expectEqual(4, words.wordsOf(types.TextStyle));
+    try testing.expectEqual(66, words.wordsOf(tree.Template));
+    try testing.expectEqual(66 * 4, @sizeOf(tree.FlatRow));
+}
+
+test "api: FlatRow is a Template's words, field for field" {
+    try std.testing.expectEqual(words.wordsOf(tree.Template) * 4, @sizeOf(tree.FlatRow));
+    const st: types.Style = .{ .size = .{ .px(40), .pct(0.5) }, .pad = .{ 1, 2, 3, 4 }, .dir = .x, .cross = .end, .clip = true, .fill = .rgb(1, 2, 3), .border_color = .rgb(4, 5, 6), .radius = 7, .texture = @fromBackingInt(@intCast(9)), .material = @fromBackingInt(@intCast(11)), .params = .{ 12, 13, 14, 15 }, .role = .slider, .value = 0.25, .border = 2, .uv = .{ 0.1, 0.2, 0.3, 0.4 }, .radii = .{ 5, -1, 6, -1 }, .opacity = 0.5, .transform = .{ 2, 0, 0, 2, 3, 4 } };
+    const t: tree.Template = .from(&st);
+    var flat: tree.FlatRow = undefined;
+    words.put(tree.Template, t, @ptrCast(&flat));
+    inline for (@typeInfo(tree.Template).@"struct".field_names) |name| {
+        if (comptime std.mem.eql(u8, name, "look")) {
+            inline for (@typeInfo(@TypeOf(t.look)).@"struct".field_names) |g|
+                try std.testing.expectEqual(@as(@FieldType(tree.FlatRow, g), @field(t.look, g)), @field(flat, g));
+        } else switch (@typeInfo(@FieldType(tree.Template, name))) {
+            .int => try std.testing.expectEqual(@as(u32, @field(t, name)), @field(flat, name)),
+            .@"struct" => try std.testing.expectEqual(@as(u32, @as(u8, @bitCast(@field(t, name)))), @field(flat, name)),
+            else => try std.testing.expectEqual(@field(t, name), @field(flat, name)),
+        }
+    }
 }
 
 test "api: C names" {

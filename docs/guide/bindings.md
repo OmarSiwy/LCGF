@@ -503,7 +503,7 @@ from the `.zon` specs with the ones Zig makes at comptime, word for word, static
 src/abi/ct.zig compares the static engine's frames with `ct_layout` and `ct_paint` over 13
 UIs (the examples, bench scenes that fold, sort batches and clip, and painted regions beside a
 fold), and its templates and constant columns with theirs. src/abi/seam.zig
-replays input through `ComptimeUi` and through the seam. src/abi/runtime.zig drives the runtime
+replays input through `ComptimeUi` and through the seam. src/abi/api.zig drives the runtime
 front end through its C calls, and src/render/gpu/naga.zig holds lcgf-gen's GLSL binding patch
 to the comptime one.
 

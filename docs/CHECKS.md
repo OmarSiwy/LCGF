@@ -190,7 +190,7 @@ Frame times for each language are printed but not judged (`ci/run.sh vs-lcgf-bin
 - the tier-0 passes take min and max as selects (`simd.maxF`, `simd.minF`), so a tie or NaN gives the same bits on every target and in the C++ and Rust ports; the widget and draw goldens did not move when they changed;
 - the static engine's frames must equal `ct_layout` and `ct_paint`'s over the examples, bench scenes (folds, batch sorting, clips) and painted regions beside a fold, and its templates and constant columns theirs (`src/abi/ct.zig`). `ct_layout.Layout` and `ct_paint.Paint` make their tables with the same functions (`src/comptime/tables.zig`), and `ct-sizes`, `ct-rodata` and the two ct benches did not move when they started to;
 - the seam must match `ComptimeUi` over the reference replay and the panel (`src/abi/seam.zig`);
-- the runtime front end's C calls must keep the input alive through the frame and skip unchanged frames (`src/abi/runtime.zig`);
+- the runtime front end's C calls must keep the input alive through the frame and skip unchanged frames (`src/abi/api.zig`);
 - lcgf-gen's run-time GLSL binding patch must equal the comptime one (`src/render/gpu/naga.zig`).
 
 ## 5. API index

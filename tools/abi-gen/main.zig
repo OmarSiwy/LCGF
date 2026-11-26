@@ -294,7 +294,7 @@ fn header(src: *Sources) ![]const u8 {
     try o.print(a, "/* The layout of every type below the library reads: compare with lcgf_layout(). */\n#define LCGF_LAYOUT 0x{x:0>8}u\n", .{api.layout});
     try o.print(a, "#define LCGF_CONTEXT_ALIGN {d}\n#define LCGF_COLUMN_ALIGN {d}\n#define LCGF_NO_WIDGET 0xffffffffu\n", .{ api.column_align, api.column_align });
     try o.print(a, "/* The tables' format (lcgf_tables_check) and the static UIs' (lcgf_ct_check). */\n#define LCGF_FORMAT_VERSION {d}u\n#define LCGF_CT_FORMAT_VERSION {d}u\n#define LCGF_CT_LAYOUT 0x{x:0>8}u\n", .{ lcgf.abi_plan.version, lcgf.abi_ct.version, lcgf.abi_ct.layout_hash });
-    try o.print(a, "/* The bit of lcgf_view.status set when the stack overflowed. */\n#define LCGF_DEPTH_BIT {d}\n\n", .{lcgf.abi_runtime.depth_bit});
+    try o.print(a, "/* The bit of lcgf_view.status set when the stack overflowed. */\n#define LCGF_DEPTH_BIT {d}\n\n", .{lcgf.abi_view.depth_bit});
     try o.appendSlice(a, "/* What lcgf_context_init and the tables' calls return. */\nenum lcgf_status {\n");
     inline for (@typeInfo(lcgf.abi_seam.Status).@"enum".field_names, @typeInfo(lcgf.abi_seam.Status).@"enum".field_values) |n, v|
         try o.print(a, "    LCGF_{s} = {d},\n", .{ try upper(a, n), v });

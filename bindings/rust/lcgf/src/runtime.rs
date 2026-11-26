@@ -2,7 +2,7 @@
 //! with `ctx.begin(&in)` and `f.open(...)`. A style becomes its row here (`Row::from`, folded
 //! at compile time when the style is constant), and `open` and `leaf` store it into the frame's
 //! columns inline (`lcgf_frame_view`); the rest is one direct call each into the prebuilt liblcgf
-//! (`lcgf.h`, src/abi/runtime.zig). Your buffer holds everything.
+//! (`lcgf.h`, generated from src/abi/api.zig). Your buffer holds everything.
 //!
 //! ```ignore
 //! let mut ctx = runtime::Context::new(&mut buf, limits)?;
@@ -440,7 +440,7 @@ struct Extra {
     _paint: [f32; 11],
 }
 
-/// The frame's tree, where a row is pushed (`lcgf_view`, src/abi/runtime.zig's `CView`).
+/// The frame's tree, where a row is pushed (`lcgf_view`, src/abi/view.zig's `CView`).
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct View {
