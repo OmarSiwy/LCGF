@@ -11,6 +11,7 @@ pub const host = @import("host.zig");
 pub const program = @import("program.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
+pub const CanvasRenderer = renderer.CanvasRenderer;
 pub const es2 = @import("es2.zig");
 pub const custom = @import("custom.zig");
 /// lcgf_render.gpu on GL ES 3: WebGPU's object model projected onto this back end (gpu.zig).

@@ -52,6 +52,12 @@ pub const Desc = struct {
     /// nothing.
     canvas_rows: u32 = 0,
     canvas_verts: u32 = 0,
+    /// Distinct canvas batches a frame, canvas commands a frame, overrides a command
+    /// (src/render/gpu/canvas.zig `Capacity`): past them a canvas draws nothing and the
+    /// pipeline's `err` says which.
+    canvas_batches: u32 = 4,
+    canvas_draws: u32 = 8,
+    canvas_overrides: u32 = 64,
 };
 
 /// canvas.wgsl as MSL, for the canvas pipeline (src/render/gpu/canvas.zig).
@@ -60,18 +66,20 @@ pub const Canvas = lcgf.gpu_canvas.Canvas(gpu, struct {
     pub const msl = @embedFile("canvas_metal");
 });
 
-pub const Error = pipeline.Error || texture.Error || gpu.Error || error{BufferFailed};
+pub const Error = pipeline.Error || texture.Error || gpu.Error || lcgf.gpu_canvas.Error || error{ BufferFailed, CanvasesOff };
 
 /// The renderer over Metal's encoder.
-pub const Renderer = RendererOver(mtl.RenderEncoder);
+pub const Renderer = RendererOver(mtl.RenderEncoder, false);
+/// The renderer with the canvas pipeline (`Desc.canvas_rows`, src/render/gpu/canvas.zig).
+pub const CanvasRenderer = RendererOver(mtl.RenderEncoder, true);
 
 /// The renderer recording into `Encoder`: `mtl.RenderEncoder`, or a test's recorder with the
 /// same methods (the tests below check the call stream without a device).
-pub fn RendererOver(comptime Encoder: type) type {
+pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
     return struct {
         const Self = @This();
         /// The canvas pipeline draws through Metal's own encoder only, not a test's recorder.
-        const canvases = Encoder == mtl.RenderEncoder;
+        const canvases = with_canvas and Encoder == mtl.RenderEncoder;
 
         device: Id,
         desc: Desc,
@@ -116,10 +124,12 @@ pub fn RendererOver(comptime Encoder: type) type {
             r.white = try texture.rgba8(device, 1, 1, &.{ 255, 255, 255, 255 });
             r.sampler = try texture.sampler(device, .nearest);
             _ = r.addTexture(r.white.?, null); // Texture.white
+            if (desc.canvas_rows > 0 and !canvases) return error.CanvasesOff;
             if (canvases and desc.canvas_rows > 0) {
-                r.canvas = @as(Canvas, undefined);
+                var cv: Canvas = undefined;
                 const format: gpu.TextureFormat = if (desc.format == .rgba8_unorm) .rgba8_unorm else .bgra8_unorm;
-                try r.canvas.?.init(.wrap(device), .{ .format = format, .samples = @intCast(desc.sample_count) }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .frames = desc.frames_in_flight });
+                try cv.init(.wrap(device), .{ .format = format, .samples = @intCast(desc.sample_count) }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .batches = desc.canvas_batches, .draws = desc.canvas_draws, .overrides = desc.canvas_overrides, .frames = desc.frames_in_flight });
+                r.canvas = cv;
             }
             return r;
         }
@@ -342,8 +352,8 @@ pub const Recorder = struct {
 
 /// A renderer over `Recorder` with fake handles and `memory` as its instance buffer: what
 /// `init` would build, without a device.
-pub fn recording(memory: []u8, desc: Desc) RendererOver(*Recorder) {
-    var r: RendererOver(*Recorder) = .{ .device = Recorder.fake(1), .desc = desc, .contents = memory.ptr };
+pub fn recording(memory: []u8, desc: Desc) RendererOver(*Recorder, false) {
+    var r: RendererOver(*Recorder, false) = .{ .device = Recorder.fake(1), .desc = desc, .contents = memory.ptr };
     for (0..max_materials) |i| r.pipelines[i] = Recorder.fake(Recorder.pipeline_base * (i + 1));
     r.material_count = 1;
     r.instances = Recorder.fake(2);
@@ -399,10 +409,10 @@ test "renderer: textures register in order with their samplers, clamp past the c
     r.setTexture(atlas, Recorder.fake(3 * Recorder.texture_base));
     try testing.expectEqual(Recorder.fake(3 * Recorder.texture_base), r.textures[1]);
     try testing.expectEqual(linear, r.samplers[1]);
-    for (0..RendererOver(*Recorder).max_textures + 3) |_| _ = r.addTexture(Recorder.fake(5 * Recorder.texture_base), null);
-    try testing.expectEqual(@as(u16, RendererOver(*Recorder).max_textures), r.texture_count);
+    for (0..RendererOver(*Recorder, false).max_textures + 3) |_| _ = r.addTexture(Recorder.fake(5 * Recorder.texture_base), null);
+    try testing.expectEqual(@as(u16, RendererOver(*Recorder, false).max_textures), r.texture_count);
     r.setTexture(@fromBackingInt(0xffff), Recorder.fake(6 * Recorder.texture_base)); // stale: the last entry
-    try testing.expectEqual(Recorder.fake(6 * Recorder.texture_base), r.textures[RendererOver(*Recorder).max_textures - 1]);
+    try testing.expectEqual(Recorder.fake(6 * Recorder.texture_base), r.textures[RendererOver(*Recorder, false).max_textures - 1]);
     try testing.expectEqual(r.white.?, r.textures[0]);
 }
 

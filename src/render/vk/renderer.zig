@@ -92,6 +92,12 @@ pub const Desc = struct {
     /// bytes each, host-visible); 0 rows: no canvas pipeline, and canvases draw nothing.
     canvas_rows: u32 = 0,
     canvas_verts: u32 = 0,
+    /// Distinct canvas batches a frame, canvas commands a frame, overrides a command
+    /// (src/render/gpu/canvas.zig `Capacity`): past them a canvas draws nothing and the
+    /// pipeline's `err` says which.
+    canvas_batches: u32 = 4,
+    canvas_draws: u32 = 8,
+    canvas_overrides: u32 = 64,
 };
 
 /// Bytes kept for the globals at the start of each slot: the largest
@@ -101,283 +107,301 @@ const globals_slot = 256;
 
 pub const max_materials = quad_shader.max_materials;
 
-pub const Renderer = struct {
-    desc: Desc,
-    /// The device it was created on; must outlive it.
-    dev: *const Device,
-    /// Set 0: the globals. Set 1: a texture and its sampler. Every pipeline shares both.
-    globals_layout: c.VkDescriptorSetLayout = null,
-    texture_layout: c.VkDescriptorSetLayout = null,
-    pipeline_layout: c.VkPipelineLayout = null,
-    pipelines: [max_materials]c.VkPipeline = @splat(null),
-    material_count: u16 = 0,
-    /// One host-visible, coherent buffer, mapped once for its whole life, cut into
-    /// `desc.frames` slots of [globals | quads | glyph quads]. `prepare` writes slot `frame`
-    /// with plain memcpy: no staging copy, no map/unmap, no per-frame allocation.
-    ring: device_mod.Buffer = .{ .size = 0 },
-    slot_bytes: u64 = 0,
-    /// Offset of the slot the last `prepare` wrote.
-    base: u64 = 0,
-    /// Physical pixels: viewport * scale from the last `prepare`.
-    extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
-    scale: f32 = 1,
-    glyphs: Glyphs = .{},
-    /// Set 0 points at the ring's globals; each draw picks the slot with a dynamic offset. Set
-    /// i of `textures` is `Texture` i. All come from one pool sized once at init.
-    pool: c.VkDescriptorPool = null,
-    globals_set: c.VkDescriptorSet = null,
-    textures: [max_textures]c.VkDescriptorSet = @splat(null),
-    /// The views behind `textures`, for the canvas pipeline's glyph atlas.
-    views: [max_textures]c.VkImageView = @splat(null),
-    texture_count: u16 = 0,
-    canvas: ?Canvas = null,
-    list: ?*const DrawList = null,
+pub fn RendererOf(comptime canvases: bool) type {
+    return struct {
+        const Self = @This();
+        desc: Desc,
+        /// The device it was created on; must outlive it.
+        dev: *const Device,
+        /// Set 0: the globals. Set 1: a texture and its sampler. Every pipeline shares both.
+        globals_layout: c.VkDescriptorSetLayout = null,
+        texture_layout: c.VkDescriptorSetLayout = null,
+        pipeline_layout: c.VkPipelineLayout = null,
+        pipelines: [max_materials]c.VkPipeline = @splat(null),
+        material_count: u16 = 0,
+        /// One host-visible, coherent buffer, mapped once for its whole life, cut into
+        /// `desc.frames` slots of [globals | quads | glyph quads]. `prepare` writes slot `frame`
+        /// with plain memcpy: no staging copy, no map/unmap, no per-frame allocation.
+        ring: device_mod.Buffer = .{ .size = 0 },
+        slot_bytes: u64 = 0,
+        /// Offset of the slot the last `prepare` wrote.
+        base: u64 = 0,
+        /// Physical pixels: viewport * scale from the last `prepare`.
+        extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
+        scale: f32 = 1,
+        glyphs: Glyphs = .{},
+        /// Set 0 points at the ring's globals; each draw picks the slot with a dynamic offset. Set
+        /// i of `textures` is `Texture` i. All come from one pool sized once at init.
+        pool: c.VkDescriptorPool = null,
+        globals_set: c.VkDescriptorSet = null,
+        textures: [max_textures]c.VkDescriptorSet = @splat(null),
+        /// The views behind `textures`, for the canvas pipeline's glyph atlas.
+        views: [max_textures]c.VkImageView = @splat(null),
+        texture_count: u16 = 0,
+        canvas: if (canvases) ?Canvas else void = if (canvases) null else {},
+        list: ?*const DrawList = null,
 
-    pub const max_textures = 64;
+        pub const max_textures = 64;
 
-    /// `prepare` takes the frame slot (0 to `desc.frames - 1`): the host's frame index, whose
-    /// fence it waited on, so the GPU is done reading that slot.
-    pub const Queue = u32;
-    /// The host's command buffer, inside `pass.begin` / `pass.end`. It is the raw Vulkan
-    /// handle, not a wrapper: at a custom command (`iface.drawUntilCustom` stops there) the
-    /// host records its own vkCmd* into it, with its own pipeline, layout, descriptor sets and
-    /// push constants, then hands it back. Nothing needs restoring: the next UI draw rebinds
-    /// every piece of state it uses. `customScissor` gives the custom rect in pixels.
-    pub const Pass = c.VkCommandBuffer;
+        /// `prepare` takes the frame slot (0 to `desc.frames - 1`): the host's frame index, whose
+        /// fence it waited on, so the GPU is done reading that slot.
+        pub const Queue = u32;
+        /// The host's command buffer, inside `pass.begin` / `pass.end`. It is the raw Vulkan
+        /// handle, not a wrapper: at a custom command (`iface.drawUntilCustom` stops there) the
+        /// host records its own vkCmd* into it, with its own pipeline, layout, descriptor sets and
+        /// push constants, then hands it back. Nothing needs restoring: the next UI draw rebinds
+        /// every piece of state it uses. `customScissor` gives the custom rect in pixels.
+        pub const Pass = c.VkCommandBuffer;
 
-    /// `white` is a 1x1 opaque white image view; it becomes `Texture.white`.
-    pub fn init(d: *const Device, desc: Desc, white: c.VkImageView, sampler: c.VkSampler) gpu.Error!Renderer {
-        var r: Renderer = .{ .desc = desc, .dev = d };
-        errdefer r.deinit(d);
-        const globals_binding: c.VkDescriptorSetLayoutBinding = .{
-            .binding = 0,
-            .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .descriptorCount = 1,
-            .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
-        };
-        try check(d.fns.vkCreateDescriptorSetLayout.?(d.handle, &.{
-            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = 1,
-            .pBindings = &globals_binding,
-        }, null, &r.globals_layout));
-        const texture_bindings = [_]c.VkDescriptorSetLayoutBinding{
-            .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-            .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
-        };
-        try check(d.fns.vkCreateDescriptorSetLayout.?(d.handle, &.{
-            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = texture_bindings.len,
-            .pBindings = &texture_bindings,
-        }, null, &r.texture_layout));
-        const set_layouts = [_]c.VkDescriptorSetLayout{ r.globals_layout, r.texture_layout };
-        try check(d.fns.vkCreatePipelineLayout.?(d.handle, &.{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = set_layouts.len,
-            .pSetLayouts = &set_layouts,
-        }, null, &r.pipeline_layout));
-        _ = try r.addMaterial(d, stock_spv); // Material.solid
-        r.slot_bytes = std.mem.alignForward(u64, globals_slot + (@as(u64, desc.max_quads) + desc.max_glyphs) * quad_shader.stride, globals_slot);
-        r.ring = try d.createBuffer(r.slot_bytes * desc.frames, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+        /// `white` is a 1x1 opaque white image view; it becomes `Texture.white`.
+        pub fn init(d: *const Device, desc: Desc, white: c.VkImageView, sampler: c.VkSampler) (gpu.Error || lcgf.gpu_canvas.Error || error{CanvasesOff})!Self {
+            var r: Self = .{ .desc = desc, .dev = d };
+            errdefer r.deinit(d);
+            const globals_binding: c.VkDescriptorSetLayoutBinding = .{
+                .binding = 0,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                .descriptorCount = 1,
+                .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
+            };
+            try check(d.fns.vkCreateDescriptorSetLayout.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .bindingCount = 1,
+                .pBindings = &globals_binding,
+            }, null, &r.globals_layout));
+            const texture_bindings = [_]c.VkDescriptorSetLayoutBinding{
+                .{ .binding = 0, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+                .{ .binding = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = 1, .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT },
+            };
+            try check(d.fns.vkCreateDescriptorSetLayout.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .bindingCount = texture_bindings.len,
+                .pBindings = &texture_bindings,
+            }, null, &r.texture_layout));
+            const set_layouts = [_]c.VkDescriptorSetLayout{ r.globals_layout, r.texture_layout };
+            try check(d.fns.vkCreatePipelineLayout.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                .setLayoutCount = set_layouts.len,
+                .pSetLayouts = &set_layouts,
+            }, null, &r.pipeline_layout));
+            _ = try r.addMaterial(d, stock_spv); // Material.solid
+            r.slot_bytes = std.mem.alignForward(u64, globals_slot + (@as(u64, desc.max_quads) + desc.max_glyphs) * quad_shader.stride, globals_slot);
+            r.ring = try d.createBuffer(r.slot_bytes * desc.frames, c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
 
-        const sizes = [_]c.VkDescriptorPoolSize{
-            .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 1 },
-            .{ .type = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = max_textures },
-            .{ .type = c.VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = max_textures },
-        };
-        try check(d.fns.vkCreateDescriptorPool.?(d.handle, &.{
-            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .maxSets = 1 + max_textures,
-            .poolSizeCount = sizes.len,
-            .pPoolSizes = &sizes,
-        }, null, &r.pool));
-        r.globals_set = try r.allocateSet(d, r.globals_layout);
-        const globals_info: c.VkDescriptorBufferInfo = .{ .buffer = r.ring.handle, .offset = 0, .range = @sizeOf(Globals) };
-        d.fns.vkUpdateDescriptorSets.?(d.handle, 1, &.{
-            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = r.globals_set,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .pBufferInfo = &globals_info,
-        }, 0, null);
-        _ = try r.addTexture(d, white, sampler); // Texture.white
-        if (desc.canvas_rows > 0) {
-            r.canvas = @as(Canvas, undefined);
-            try r.canvas.?.init(.wrap(d), .{ .format = gpu.fromVkFormat(desc.format), .samples = desc.samples }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .frames = desc.frames });
+            const sizes = [_]c.VkDescriptorPoolSize{
+                .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 1 },
+                .{ .type = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = max_textures },
+                .{ .type = c.VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = max_textures },
+            };
+            try check(d.fns.vkCreateDescriptorPool.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                .maxSets = 1 + max_textures,
+                .poolSizeCount = sizes.len,
+                .pPoolSizes = &sizes,
+            }, null, &r.pool));
+            r.globals_set = try r.allocateSet(d, r.globals_layout);
+            const globals_info: c.VkDescriptorBufferInfo = .{ .buffer = r.ring.handle, .offset = 0, .range = @sizeOf(Globals) };
+            d.fns.vkUpdateDescriptorSets.?(d.handle, 1, &.{
+                .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = r.globals_set,
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                .pBufferInfo = &globals_info,
+            }, 0, null);
+            _ = try r.addTexture(d, white, sampler); // Texture.white
+            if (desc.canvas_rows > 0) {
+                if (!canvases) return error.CanvasesOff;
+                if (canvases) {
+                    var cv: Canvas = undefined;
+                    try cv.init(.wrap(d), .{ .format = gpu.fromVkFormat(desc.format), .samples = desc.samples }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .batches = desc.canvas_batches, .draws = desc.canvas_draws, .overrides = desc.canvas_overrides, .frames = desc.frames });
+                    r.canvas = cv;
+                }
+            }
+            return r;
         }
-        return r;
-    }
 
-    pub fn deinit(r: *Renderer, d: *const Device) void {
-        if (r.canvas) |*cv| cv.deinit(.wrap(d));
-        r.canvas = null;
-        if (r.pool != null) d.fns.vkDestroyDescriptorPool.?(d.handle, r.pool, null); // frees the sets
-        r.pool = null;
-        r.texture_count = 0;
-        if (r.ring.handle != null) d.destroyBuffer(&r.ring);
-        for (r.pipelines[0..r.material_count]) |p| d.fns.vkDestroyPipeline.?(d.handle, p, null);
-        r.material_count = 0;
-        if (r.pipeline_layout != null) d.fns.vkDestroyPipelineLayout.?(d.handle, r.pipeline_layout, null);
-        if (r.texture_layout != null) d.fns.vkDestroyDescriptorSetLayout.?(d.handle, r.texture_layout, null);
-        if (r.globals_layout != null) d.fns.vkDestroyDescriptorSetLayout.?(d.handle, r.globals_layout, null);
-        r.pipeline_layout = null;
-        r.texture_layout = null;
-        r.globals_layout = null;
-    }
-
-    /// A quad pipeline with your fragment logic: `quad_shader.shader(your_wgsl_fn)` translated
-    /// to SPIR-V (src/render/shaders/translate.sh does it for the shipped variants). Past
-    /// `max_materials` the last entry is replaced, as the prototype does.
-    pub fn addMaterial(r: *Renderer, d: *const Device, spirv: []const u32) Error!types.Material {
-        const i: u16 = @min(r.material_count, max_materials - 1);
-        const pipeline = try createPipeline(d, r.pipeline_layout, spirv, r.desc);
-        if (i < r.material_count) d.fns.vkDestroyPipeline.?(d.handle, r.pipelines[i], null);
-        r.pipelines[i] = pipeline;
-        r.material_count = i + 1;
-        return @fromBackingInt(i);
-    }
-
-    fn allocateSet(r: *const Renderer, d: *const Device, layout: c.VkDescriptorSetLayout) Error!c.VkDescriptorSet {
-        var set: c.VkDescriptorSet = null;
-        try check(d.fns.vkAllocateDescriptorSets.?(d.handle, &.{
-            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = r.pool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &layout,
-        }, &set));
-        return set;
-    }
-
-    fn writeTexture(d: *const Device, set: c.VkDescriptorSet, view: c.VkImageView, sampler: c.VkSampler) void {
-        const image: c.VkDescriptorImageInfo = .{ .imageView = view, .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        const samp: c.VkDescriptorImageInfo = .{ .sampler = sampler };
-        const writes = [_]c.VkWriteDescriptorSet{
-            .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 0, .descriptorCount = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = &image },
-            .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 1, .descriptorCount = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo = &samp },
-        };
-        d.fns.vkUpdateDescriptorSets.?(d.handle, writes.len, &writes, 0, null);
-    }
-
-    /// Texture in: makes an image view (in SHADER_READ_ONLY_OPTIMAL) usable as `Style.texture`.
-    /// The image, view and sampler stay yours, alive while a frame may sample them. Handles are
-    /// indices in registration order; `Texture.white` is 0. Past `max_textures` the last entry
-    /// is rewritten, as the prototype does; rewriting a set needs every frame that used it
-    /// finished (Vulkan forbids updating a set a pending command buffer uses).
-    pub fn addTexture(r: *Renderer, d: *const Device, view: c.VkImageView, sampler: c.VkSampler) Error!types.Texture {
-        const i: u16 = @min(r.texture_count, max_textures - 1);
-        if (i == r.texture_count) r.textures[i] = try r.allocateSet(d, r.texture_layout);
-        writeTexture(d, r.textures[i], view, sampler);
-        r.views[i] = view;
-        r.texture_count = i + 1;
-        return @fromBackingInt(i);
-    }
-
-    /// Points an existing handle at another view (a target recreated at a new size, an atlas
-    /// that grew); nodes keep their `Style.texture`. Same rule as `addTexture`: no frame that
-    /// samples the old set may still be pending. A stale handle clamps to the last entry.
-    pub fn setTexture(r: *Renderer, d: *const Device, texture: types.Texture, view: c.VkImageView, sampler: c.VkSampler) void {
-        const i = @min(@backingInt(texture), r.texture_count - 1);
-        writeTexture(d, r.textures[i], view, sampler);
-        r.views[i] = view;
-    }
-
-    /// Full state, every draw (iface.zig, "Full state rebinding"): pipeline, both sets, the
-    /// instance buffer at this frame's slot, viewport and scissor. Handles are clamped rather
-    /// than checked: a stale handle draws with the last valid entry.
-    fn bind(r: *const Renderer, d: *const Device, cmd: c.VkCommandBuffer, material: types.Material, texture: types.Texture, at: u64) void {
-        d.fns.vkCmdBindPipeline.?(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, r.pipelines[@min(@backingInt(material), r.material_count - 1)]);
-        const sets = [_]c.VkDescriptorSet{ r.globals_set, r.textures[@min(@backingInt(texture), r.texture_count - 1)] };
-        const dynamic_offset: u32 = @intCast(r.base);
-        d.fns.vkCmdBindDescriptorSets.?(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, r.pipeline_layout, 0, sets.len, &sets, 1, &dynamic_offset);
-        const offset: c.VkDeviceSize = r.base + at;
-        d.fns.vkCmdBindVertexBuffers.?(cmd, 0, 1, &r.ring.handle, &offset);
-        d.fns.vkCmdSetViewport.?(cmd, 0, 1, &.{ .width = @floatFromInt(r.extent.width), .height = @floatFromInt(r.extent.height), .minDepth = 0, .maxDepth = 1 });
-        d.fns.vkCmdSetScissor.?(cmd, 0, 1, &.{ .extent = r.extent });
-    }
-
-    /// Offsets inside a slot.
-    fn quadsAt(r: *const Renderer) u64 {
-        _ = r;
-        return globals_slot;
-    }
-    fn glyphsAt(r: *const Renderer) u64 {
-        return globals_slot + @as(u64, r.desc.max_quads) * quad_shader.stride;
-    }
-
-    /// Uploads the frame into ring slot `frame`: three memcpy into mapped memory. Quads past
-    /// `max_quads` (glyphs past `max_glyphs`) are dropped, as the wgpu back end does. Call before
-    /// recording the frame's draws.
-    pub fn prepare(r: *Renderer, frame: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
-        r.base = @as(u64, frame % r.desc.frames) * r.slot_bytes;
-        const slot = r.ring.mapped[@intCast(r.base)..][0..@intCast(r.slot_bytes)];
-        const g: Globals = .{ .viewport = viewport, .scale = scale };
-        @memcpy(slot[0..@sizeOf(Globals)], std.mem.asBytes(&g));
-        const quad_bytes = draw.quadBytes();
-        const qn = @min(quad_bytes.len, @as(usize, r.desc.max_quads) * quad_shader.stride);
-        @memcpy(slot[@intCast(r.quadsAt())..][0..qn], quad_bytes[0..qn]);
-        const glyph_bytes = std.mem.sliceAsBytes(glyphs.quads);
-        const gn = @min(glyph_bytes.len, @as(usize, r.desc.max_glyphs) * quad_shader.stride);
-        @memcpy(slot[@intCast(r.glyphsAt())..][0..gn], glyph_bytes[0..gn]);
-        r.glyphs = glyphs;
-        r.scale = scale;
-        r.extent = .{ .width = @intFromFloat(@round(viewport[0] * scale)), .height = @intFromFloat(@round(viewport[1] * scale)) };
-        r.list = draw;
-        if (r.canvas) |*cv| {
-            const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
-            cv.prepare(.wrap(r.dev), null, draw, frame, scale, .{ r.extent.width, r.extent.height }, .{ .view = r.views[atlas], .image = null, .width = 0, .height = 0 }, atlas);
+        pub fn deinit(r: *Self, d: *const Device) void {
+            if (canvases) {
+                if (r.canvas) |*cv| cv.deinit(.wrap(d));
+                r.canvas = null;
+            }
+            if (r.pool != null) d.fns.vkDestroyDescriptorPool.?(d.handle, r.pool, null); // frees the sets
+            r.pool = null;
+            r.texture_count = 0;
+            if (r.ring.handle != null) d.destroyBuffer(&r.ring);
+            for (r.pipelines[0..r.material_count]) |p| d.fns.vkDestroyPipeline.?(d.handle, p, null);
+            r.material_count = 0;
+            if (r.pipeline_layout != null) d.fns.vkDestroyPipelineLayout.?(d.handle, r.pipeline_layout, null);
+            if (r.texture_layout != null) d.fns.vkDestroyDescriptorSetLayout.?(d.handle, r.texture_layout, null);
+            if (r.globals_layout != null) d.fns.vkDestroyDescriptorSetLayout.?(d.handle, r.globals_layout, null);
+            r.pipeline_layout = null;
+            r.texture_layout = null;
+            r.globals_layout = null;
         }
-    }
 
-    /// Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the canvas
-    /// pipeline, scissored to the node. Needs `Desc.canvas_rows`; the host calls
-    /// `Instances.clearDirty` after `prepare` (src/render/gpu/canvas.zig).
-    pub fn drawCanvas(r: *const Renderer, cmd: Pass, k: u32) void {
-        const cv = if (r.canvas) |*cv| cv else return;
-        var pass = gpu.RenderPass.wrap(.wrap(r.dev), cmd, r.extent.width, r.extent.height);
-        cv.draw(&pass, r.list.?, k);
-    }
+        /// A quad pipeline with your fragment logic: `quad_shader.shader(your_wgsl_fn)` translated
+        /// to SPIR-V (src/render/shaders/translate.sh does it for the shipped variants). Past
+        /// `max_materials` the last entry is replaced, as the prototype does.
+        pub fn addMaterial(r: *Self, d: *const Device, spirv: []const u32) Error!types.Material {
+            const i: u16 = @min(r.material_count, max_materials - 1);
+            const pipeline = try createPipeline(d, r.pipeline_layout, spirv, r.desc);
+            if (i < r.material_count) d.fns.vkDestroyPipeline.?(d.handle, r.pipelines[i], null);
+            r.pipelines[i] = pipeline;
+            r.material_count = i + 1;
+            return @fromBackingInt(i);
+        }
 
-    /// One instanced draw for a run of quads. `Pass` carries no device, so the renderer keeps
-    /// the function table it was created with.
-    pub fn drawBatch(r: *const Renderer, cmd: Pass, batch: draw_list.Batch) void {
-        r.bind(r.dev, cmd, batch.material, batch.texture, r.quadsAt());
-        r.dev.fns.vkCmdDraw.?(cmd, 4, batch.count, 0, batch.first);
-    }
+        fn allocateSet(r: *const Self, d: *const Device, layout: c.VkDescriptorSetLayout) Error!c.VkDescriptorSet {
+            var set: c.VkDescriptorSet = null;
+            try check(d.fns.vkAllocateDescriptorSets.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = r.pool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &layout,
+            }, &set));
+            return set;
+        }
 
-    /// One instanced draw for a text run's glyphs.
-    pub fn drawText(r: *const Renderer, cmd: Pass, run: u32) void {
-        r.drawGlyphSpan(cmd, r.glyphs.span(run));
-    }
+        fn writeTexture(d: *const Device, set: c.VkDescriptorSet, view: c.VkImageView, sampler: c.VkSampler) void {
+            const image: c.VkDescriptorImageInfo = .{ .imageView = view, .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            const samp: c.VkDescriptorImageInfo = .{ .sampler = sampler };
+            const writes = [_]c.VkWriteDescriptorSet{
+                .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 0, .descriptorCount = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = &image },
+                .{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 1, .descriptorCount = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo = &samp },
+            };
+            d.fns.vkUpdateDescriptorSets.?(d.handle, writes.len, &writes, 0, null);
+        }
 
-    /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
-    /// draw (`iface.drawUntilCustom`).
-    pub fn drawGlyphSpan(r: *const Renderer, cmd: Pass, span: [2]u32) void {
-        r.bind(r.dev, cmd, .solid, r.glyphs.texture, r.glyphsAt());
-        r.dev.fns.vkCmdDraw.?(cmd, 4, span[1], 0, span[0]);
-    }
+        /// Texture in: makes an image view (in SHADER_READ_ONLY_OPTIMAL) usable as `Style.texture`.
+        /// The image, view and sampler stay yours, alive while a frame may sample them. Handles are
+        /// indices in registration order; `Texture.white` is 0. Past `max_textures` the last entry
+        /// is rewritten, as the prototype does; rewriting a set needs every frame that used it
+        /// finished (Vulkan forbids updating a set a pending command buffer uses).
+        pub fn addTexture(r: *Self, d: *const Device, view: c.VkImageView, sampler: c.VkSampler) Error!types.Texture {
+            const i: u16 = @min(r.texture_count, max_textures - 1);
+            if (i == r.texture_count) r.textures[i] = try r.allocateSet(d, r.texture_layout);
+            writeTexture(d, r.textures[i], view, sampler);
+            r.views[i] = view;
+            r.texture_count = i + 1;
+            return @fromBackingInt(i);
+        }
 
-    /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
-    /// physical pixels of the last `prepare`, inside the target. Pixels a quad would cover
-    /// partly are included (floor the start, ceil the end); an empty result has zero extent.
-    pub fn customScissor(r: *const Renderer, custom: draw_list.CustomDraw) c.VkRect2D {
-        const w: f32 = @floatFromInt(r.extent.width);
-        const h: f32 = @floatFromInt(r.extent.height);
-        const x0 = std.math.clamp(@floor(@max(custom.rect[0], custom.clip[0]) * r.scale), 0, w);
-        const y0 = std.math.clamp(@floor(@max(custom.rect[1], custom.clip[1]) * r.scale), 0, h);
-        const x1 = std.math.clamp(@ceil(@min(custom.rect[2], custom.clip[2]) * r.scale), x0, w);
-        const y1 = std.math.clamp(@ceil(@min(custom.rect[3], custom.clip[3]) * r.scale), y0, h);
-        return .{
-            .offset = .{ .x = @intFromFloat(x0), .y = @intFromFloat(y0) },
-            .extent = .{ .width = @intFromFloat(x1 - x0), .height = @intFromFloat(y1 - y0) },
-        };
-    }
+        /// Points an existing handle at another view (a target recreated at a new size, an atlas
+        /// that grew); nodes keep their `Style.texture`. Same rule as `addTexture`: no frame that
+        /// samples the old set may still be pending. A stale handle clamps to the last entry.
+        pub fn setTexture(r: *Self, d: *const Device, texture: types.Texture, view: c.VkImageView, sampler: c.VkSampler) void {
+            const i = @min(@backingInt(texture), r.texture_count - 1);
+            writeTexture(d, r.textures[i], view, sampler);
+            r.views[i] = view;
+        }
 
-    /// Diagonal: the whole list, skipping custom draws. With custom draws, loop with
-    /// `iface.drawUntilCustom` and draw each one yourself.
-    pub fn render(r: *const Renderer, cmd: Pass, draw: *const DrawList) void {
-        iface.render(r, cmd, draw);
-    }
-};
+        /// Full state, every draw (iface.zig, "Full state rebinding"): pipeline, both sets, the
+        /// instance buffer at this frame's slot, viewport and scissor. Handles are clamped rather
+        /// than checked: a stale handle draws with the last valid entry.
+        fn bind(r: *const Self, d: *const Device, cmd: c.VkCommandBuffer, material: types.Material, texture: types.Texture, at: u64) void {
+            d.fns.vkCmdBindPipeline.?(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, r.pipelines[@min(@backingInt(material), r.material_count - 1)]);
+            const sets = [_]c.VkDescriptorSet{ r.globals_set, r.textures[@min(@backingInt(texture), r.texture_count - 1)] };
+            const dynamic_offset: u32 = @intCast(r.base);
+            d.fns.vkCmdBindDescriptorSets.?(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, r.pipeline_layout, 0, sets.len, &sets, 1, &dynamic_offset);
+            const offset: c.VkDeviceSize = r.base + at;
+            d.fns.vkCmdBindVertexBuffers.?(cmd, 0, 1, &r.ring.handle, &offset);
+            d.fns.vkCmdSetViewport.?(cmd, 0, 1, &.{ .width = @floatFromInt(r.extent.width), .height = @floatFromInt(r.extent.height), .minDepth = 0, .maxDepth = 1 });
+            d.fns.vkCmdSetScissor.?(cmd, 0, 1, &.{ .extent = r.extent });
+        }
+
+        /// Offsets inside a slot.
+        fn quadsAt(r: *const Self) u64 {
+            _ = r;
+            return globals_slot;
+        }
+        fn glyphsAt(r: *const Self) u64 {
+            return globals_slot + @as(u64, r.desc.max_quads) * quad_shader.stride;
+        }
+
+        /// Uploads the frame into ring slot `frame`: three memcpy into mapped memory. Quads past
+        /// `max_quads` (glyphs past `max_glyphs`) are dropped, as the wgpu back end does. Call before
+        /// recording the frame's draws.
+        pub fn prepare(r: *Self, frame: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
+            r.base = @as(u64, frame % r.desc.frames) * r.slot_bytes;
+            const slot = r.ring.mapped[@intCast(r.base)..][0..@intCast(r.slot_bytes)];
+            const g: Globals = .{ .viewport = viewport, .scale = scale };
+            @memcpy(slot[0..@sizeOf(Globals)], std.mem.asBytes(&g));
+            const quad_bytes = draw.quadBytes();
+            const qn = @min(quad_bytes.len, @as(usize, r.desc.max_quads) * quad_shader.stride);
+            @memcpy(slot[@intCast(r.quadsAt())..][0..qn], quad_bytes[0..qn]);
+            const glyph_bytes = std.mem.sliceAsBytes(glyphs.quads);
+            const gn = @min(glyph_bytes.len, @as(usize, r.desc.max_glyphs) * quad_shader.stride);
+            @memcpy(slot[@intCast(r.glyphsAt())..][0..gn], glyph_bytes[0..gn]);
+            r.glyphs = glyphs;
+            r.scale = scale;
+            r.extent = .{ .width = @intFromFloat(@round(viewport[0] * scale)), .height = @intFromFloat(@round(viewport[1] * scale)) };
+            r.list = draw;
+            if (canvases) if (r.canvas) |*cv| {
+                const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+                cv.prepare(.wrap(r.dev), null, draw, frame, scale, .{ r.extent.width, r.extent.height }, .{ .view = r.views[atlas], .image = null, .width = 0, .height = 0 }, atlas);
+            };
+        }
+
+        /// Canvas command `k` (`iface.drawsCanvas`): one instanced draw per range, with the canvas
+        /// pipeline, scissored to the node. Needs `Desc.canvas_rows`; the host calls
+        /// `Instances.clearDirty` after `prepare` (src/render/gpu/canvas.zig).
+        pub fn drawCanvas(r: *const Self, cmd: Pass, k: u32) void {
+            if (!canvases) return;
+            if (canvases) {
+                const cv = if (r.canvas) |*cv| cv else return;
+                var pass = gpu.RenderPass.wrap(.wrap(r.dev), cmd, r.extent.width, r.extent.height);
+                cv.draw(&pass, r.list.?, k);
+            }
+        }
+
+        /// One instanced draw for a run of quads. `Pass` carries no device, so the renderer keeps
+        /// the function table it was created with.
+        pub fn drawBatch(r: *const Self, cmd: Pass, batch: draw_list.Batch) void {
+            r.bind(r.dev, cmd, batch.material, batch.texture, r.quadsAt());
+            r.dev.fns.vkCmdDraw.?(cmd, 4, batch.count, 0, batch.first);
+        }
+
+        /// One instanced draw for a text run's glyphs.
+        pub fn drawText(r: *const Self, cmd: Pass, run: u32) void {
+            r.drawGlyphSpan(cmd, r.glyphs.span(run));
+        }
+
+        /// The `span[1]` glyph quads from `span[0]`: consecutive text runs in one
+        /// draw (`iface.drawUntilCustom`).
+        pub fn drawGlyphSpan(r: *const Self, cmd: Pass, span: [2]u32) void {
+            r.bind(r.dev, cmd, .solid, r.glyphs.texture, r.glyphsAt());
+            r.dev.fns.vkCmdDraw.?(cmd, 4, span[1], 0, span[0]);
+        }
+
+        /// The scissor for an inline custom draw: `custom.rect` cut by `custom.clip`, in the
+        /// physical pixels of the last `prepare`, inside the target. Pixels a quad would cover
+        /// partly are included (floor the start, ceil the end); an empty result has zero extent.
+        pub fn customScissor(r: *const Self, custom: draw_list.CustomDraw) c.VkRect2D {
+            const w: f32 = @floatFromInt(r.extent.width);
+            const h: f32 = @floatFromInt(r.extent.height);
+            const x0 = std.math.clamp(@floor(@max(custom.rect[0], custom.clip[0]) * r.scale), 0, w);
+            const y0 = std.math.clamp(@floor(@max(custom.rect[1], custom.clip[1]) * r.scale), 0, h);
+            const x1 = std.math.clamp(@ceil(@min(custom.rect[2], custom.clip[2]) * r.scale), x0, w);
+            const y1 = std.math.clamp(@ceil(@min(custom.rect[3], custom.clip[3]) * r.scale), y0, h);
+            return .{
+                .offset = .{ .x = @intFromFloat(x0), .y = @intFromFloat(y0) },
+                .extent = .{ .width = @intFromFloat(x1 - x0), .height = @intFromFloat(y1 - y0) },
+            };
+        }
+
+        /// Diagonal: the whole list, skipping custom draws. With custom draws, loop with
+        /// `iface.drawUntilCustom` and draw each one yourself.
+        pub fn render(r: *const Self, cmd: Pass, draw: *const DrawList) void {
+            iface.render(r, cmd, draw);
+        }
+    };
+}
+
+/// The renderer without the canvas pipeline: no code of it in the binary, and canvas commands
+/// draw nothing (`Desc.canvas_rows` must be 0).
+pub const Renderer = RendererOf(false);
+/// The renderer with the canvas pipeline (`Desc.canvas_rows`, src/render/gpu/canvas.zig).
+pub const CanvasRenderer = RendererOf(true);
 
 comptime {
     iface.check(Renderer);
@@ -505,7 +529,7 @@ test "renderer: a canvas uploads its rows once, then only dirty rows; each ring 
     const sampler = try host.nearestSampler(&h.device);
     defer h.device.fns.vkDestroySampler.?(h.device.handle, sampler, null);
     const sc = conformance.canvas_scene;
-    var r = try Renderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, white.view, sampler);
+    var r = try CanvasRenderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, white.view, sampler);
     defer r.deinit(&h.device);
     const st = try testing.allocator.create(conformance.CanvasStorage);
     defer testing.allocator.destroy(st);
@@ -541,6 +565,35 @@ test "renderer: a canvas uploads its rows once, then only dirty rows; each ring 
     try testing.expectEqual(uniforms, cv.uploaded);
 }
 
+test "renderer: a canvas past the Desc limits draws nothing and says which limit" {
+    var h: host.Host = undefined;
+    try h.init();
+    defer h.deinit();
+    var white = try h.sampled(1, 1, &.{ 255, 255, 255, 255 });
+    defer h.device.destroyImage(&white);
+    const sampler = try host.nearestSampler(&h.device);
+    defer h.device.fns.vkDestroySampler.?(h.device.handle, sampler, null);
+    const sc = conformance.canvas_scene;
+    const st = try testing.allocator.create(conformance.CanvasStorage);
+    defer testing.allocator.destroy(st);
+    st.load();
+    // The scene's first canvas has one override, its second none: with none allowed, only the
+    // second draws.
+    var r = try CanvasRenderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .canvas_rows = sc.rows, .canvas_verts = sc.verts, .canvas_overrides = 0 }, white.view, sampler);
+    r.prepare(0, &st.draw, .{}, sc.viewport, 1);
+    try testing.expectEqual(@as(?lcgf.gpu_canvas.Error, error.CanvasOverrides), r.canvas.?.err);
+    try testing.expectEqual(1, r.canvas.?.draw_len);
+    r.deinit(&h.device);
+    // One canvas command a frame: the second is past it.
+    r = try CanvasRenderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .canvas_rows = sc.rows, .canvas_verts = sc.verts, .canvas_draws = 1 }, white.view, sampler);
+    defer r.deinit(&h.device);
+    r.prepare(0, &st.draw, .{}, sc.viewport, 1);
+    try testing.expectEqual(@as(?lcgf.gpu_canvas.Error, error.CanvasDraws), r.canvas.?.err);
+    try testing.expectEqual(1, r.canvas.?.draw_len);
+    try testing.expectError(error.CanvasDraws, CanvasRenderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .canvas_rows = 4, .canvas_draws = 1000 }, white.view, sampler));
+    try testing.expectError(error.CanvasesOff, Renderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .canvas_rows = 4 }, white.view, sampler));
+}
+
 test "renderer: a canvas batch that no longer fits starts the buffers over with this frame's" {
     var h: host.Host = undefined;
     try h.init();
@@ -549,7 +602,7 @@ test "renderer: a canvas batch that no longer fits starts the buffers over with 
     defer h.device.destroyImage(&white);
     const sampler = try host.nearestSampler(&h.device);
     defer h.device.fns.vkDestroySampler.?(h.device.handle, sampler, null);
-    var r = try Renderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .frames = 1, .canvas_rows = 90 }, white.view, sampler);
+    var r = try CanvasRenderer.init(&h.device, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .frames = 1, .canvas_rows = 90 }, white.view, sampler);
     defer r.deinit(&h.device);
     const canvas = lcgf.canvas;
     const B = struct {

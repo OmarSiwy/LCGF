@@ -14,6 +14,7 @@ pub const host = @import("host.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
+pub const CanvasRenderer = renderer.CanvasRenderer;
 pub const frame = @import("frame.zig");
 /// lcgf_render.gpu on Direct3D 12: WebGPU's object model projected onto this back end (gpu.zig).
 pub const gpu = @import("gpu.zig");

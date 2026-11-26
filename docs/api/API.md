@@ -3078,7 +3078,7 @@ The canvas shader (canvas.wgsl) and the uniforms it reads, for every GPU back en
 ### Top level
 
 - `verts_width = 2048`: Texels a row of `wgsl_es`'s vertex texture.
-- `max_overrides = 64`: Overrides one draw applies; past these, the first ones are dropped.
+- `max_overrides = 512`: The most overrides a draw can apply: the uniform array's length, 8 KB, so the whole uniform stays within GL ES 3.0's 16 KB.
 - `max_layers = 256`
 - `fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, target: [2]f32, row_base: u32, vert_base: u32) bool`: Fills the head, palette and overrides of canvas command `k` of `list` at `scale` physical pixels per logical one, on a `target` of physical pixels; the batch starts at `row_base` and `vert_base` in the GPU buffers.
 
@@ -3310,19 +3310,19 @@ The canvas batch on a GPU, written once against `lcgf_render.gpu`: every GPU bac
 
 ### Top level
 
-- `max_batches = 4`
-- `max_draws = 8`
+- `max_batches = 32`: Ceilings of `Capacity.batches` and `draws` (what the fixed arrays hold), and of `frames`.
+- `max_draws = 64`
 - `max_frames = 3`
 - `fn Canvas(comptime gpu: type, comptime source: type) type`
 
 ### `Capacity` (struct)
 
-Fields: `rows`, `verts`, `frames`
+Fields: `rows`, `verts`, `frames`, `batches`, `draws`, `overrides`
 
 
 ### `Canvas(..)` (generic struct)
 
-Fields: `arena`, `pipeline`, `cap`, `slots`, `row`, `row_written`, `atlas`, `atlas_len`, `batches`, `next_row`, `next_vert`, `frame`, `slot`, `draws`, `draw_len`, `atlas_group`, `size`, `scale`, `uploaded`
+Fields: `arena`, `pipeline`, `cap`, `slots`, `row`, `row_written`, `atlas`, `atlas_len`, `batches`, `next_row`, `next_vert`, `frame`, `slot`, `draws`, `draw_len`, `atlas_group`, `size`, `scale`, `uploaded`, `err`
 
 - `Shader = gpu.Shader(source)`
 - `fn init(cv: *C, dev: gpu.Device, target: desc.Target, cap: Capacity) !void`: Fills `cv` in place (its arena must not move).
@@ -6798,7 +6798,9 @@ The wgpu back end: draws a `DrawList` with wgpu.
 - `quad_stride: u32 = quad_shader.stride`: Per-instance vertex layout of `Quad`, from src/render/shaders/quad.zig `attrs` so the shader, the dumpers and this back end cannot drift.
 - `Globals = @import("../null.zig").Globals`: Group 0, binding 0.
 - `Glyphs = iface.Glyphs`
-- `fn Renderer(comptime gpu: type) type`
+- `fn Renderer(comptime gpu: type) type`: The renderer without the canvas pipeline: none of its code in the binary, and canvas commands draw nothing (`Desc.canvas_rows` must be 0).
+- `fn CanvasRenderer(comptime gpu: type) type`: The renderer with the canvas pipeline, for a binding that names its lcgf_render.gpu (`Binding`, `canvas`).
+- `fn RendererWith(comptime gpu: type, comptime with_canvas: bool) type`
 
 ### `Binding` (struct)
 The functions and types `Renderer(gpu)` uses.
@@ -6807,6 +6809,14 @@ The functions and types `Renderer(gpu)` uses.
 - `functions = [_][]const u8{ "createBuffer", "destroyBuffer", "writeBuffer", "createPipeline", "globalsBindGroup", "textureBindGroup", "releaseBindGroup", "set…`
 
 ### `Renderer(..)` (generic struct)
+The renderer without the canvas pipeline: none of its code in the binary, and canvas commands draw nothing (`Desc.canvas_rows` must be 0).
+
+
+### `CanvasRenderer(..)` (generic struct)
+The renderer with the canvas pipeline, for a binding that names its lcgf_render.gpu (`Binding`, `canvas`).
+
+
+### `RendererWith(..)` (generic struct)
 
 Fields: `desc`, `quads`, `glyph_quads`, `globals`, `globals_group`, `pipelines`, `material_count`, `textures`, `views`, `texture_count`, `glyphs`, `canvas`, `device`, `list`, `extent`
 
@@ -6828,15 +6838,9 @@ Fields: `desc`, `quads`, `glyph_quads`, `globals`, `globals_group`, `pipelines`,
 - `fn drawGlyphSpan(self: *const Self, pass: gpu.RenderPass, span: [2]u32) void`: The `span[1]` glyph quads from `span[0]`: consecutive text runs in one draw (`iface.drawUntilCustom`).
 - `fn render(self: *const Self, pass: gpu.RenderPass, draw: *const DrawList) void`: Diagonal: the whole list, skipping custom draws.
 
-### `Renderer(..).Desc` (struct)
+### `RendererWith(..).Desc` (struct)
 
-Fields: `format`, `sample_count`, `max_quads`, `max_glyphs`, `canvas_rows`, `canvas_verts`
-
-
-### `Renderer(..).PipelineDesc` (struct)
-Plain description the binding turns into a wgpu pipeline.
-
-Fields: `wgsl`, `vertex_entry`, `fragment_entry`, `format`, `sample_count`, `instance_stride`, `attrs`
+Fields: `format`, `sample_count`, `max_quads`, `max_glyphs`, `canvas_rows`, `canvas_verts`, `canvas_batches`, `canvas_draws`, `canvas_overrides`
 
 
 ## `lcgf.text_buffer` (src/text/edit/buffer.zig)

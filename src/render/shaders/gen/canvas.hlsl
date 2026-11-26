@@ -25,7 +25,7 @@ struct Draw {
     uint rounded;
     int _pad24_0;
     uint4 palette[256];
-    uint4 marks[64];
+    uint4 marks[512];
 };
 
 struct Row {
@@ -121,7 +121,7 @@ uint override_of(uint i, uint colour_1)
         loop_init = false;
         uint _e5 = j;
         uint _e8 = u.overrides;
-        if ((_e5 < min(_e8, 64u))) {
+        if ((_e5 < min(_e8, 512u))) {
         } else {
             break;
         }

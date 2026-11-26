@@ -161,7 +161,7 @@ pub const Player = struct {
     pub fn drawCanvas(p: *Player, st: *const conformance.CanvasStorage, px: []u8) !void {
         const d = &p.h.device;
         const sc = conformance.canvas_scene;
-        var gfx = try Renderer.init(d, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .samples = p.samples, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, p.white.view, p.sampler);
+        var gfx = try @import("renderer.zig").CanvasRenderer.init(d, .{ .format = c.VK_FORMAT_R8G8B8A8_UNORM, .samples = p.samples, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, p.white.view, p.sampler);
         defer gfx.deinit(d);
         const atlas = try gfx.addTexture(d, p.atlas.view, p.sampler);
         var target = try host.Target.init(d, canvas_size.width, canvas_size.height, p.samples);

@@ -84,7 +84,7 @@ export fn lcgf_scene_draw(pass: u32) void {
 // renderer of its own with the canvas pipeline: init once, prepare before the pass, draw in it.
 
 var canvas_scene: conformance.CanvasStorage = undefined;
-var canvas_gfx: webgpu.Renderer = undefined;
+var canvas_gfx: webgpu.CanvasRenderer = undefined;
 var canvas_atlas: lcgf.types.Texture = .white;
 
 /// `white`, `sampler` and `atlas_view` as for `lcgf_webgpu_init`. Returns the scene's size

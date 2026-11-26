@@ -100,7 +100,7 @@ pub fn main(init: std.process.Init) !void {
     // pipeline.
     const sc = conformance.canvas_scene;
     canvas.load();
-    var cgfx = try metal.Renderer.init(dev.device, .{ .format = .rgba8_unorm, .frames_in_flight = 1, .canvas_rows = sc.rows, .canvas_verts = sc.verts });
+    var cgfx = try metal.CanvasRenderer.init(dev.device, .{ .format = .rgba8_unorm, .frames_in_flight = 1, .canvas_rows = sc.rows, .canvas_verts = sc.verts });
     defer cgfx.deinit();
     const catlas = cgfx.addTexture(atlas, null);
     const w: u32 = @intFromFloat(sc.viewport[0]);

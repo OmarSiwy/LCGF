@@ -105,7 +105,7 @@ pub fn main(init: std.process.Init) !void {
     // pipeline.
     const sc = conformance.canvas_scene;
     canvas.load();
-    var cgfx = native.Renderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm, .sample_count = samples, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, white.view, sampler);
+    var cgfx = native.CanvasRenderer.init(&ctx, .{ .format = c.WGPUTextureFormat_RGBA8Unorm, .sample_count = samples, .canvas_rows = sc.rows, .canvas_verts = sc.verts }, white.view, sampler);
     defer cgfx.deinit();
     if (cgfx.canvas == null) return error.CanvasPipeline;
     const catlas = cgfx.addTexture(&ctx, atlas_tex.view, sampler);

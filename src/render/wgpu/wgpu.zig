@@ -89,7 +89,19 @@ pub const Binding = struct {
     pub const functions = [_][]const u8{ "createBuffer", "destroyBuffer", "writeBuffer", "createPipeline", "globalsBindGroup", "textureBindGroup", "releaseBindGroup", "setPipeline", "setBindGroup", "setVertexBuffer", "draw" };
 };
 
+/// The renderer without the canvas pipeline: none of its code in the binary, and canvas
+/// commands draw nothing (`Desc.canvas_rows` must be 0).
 pub fn Renderer(comptime gpu: type) type {
+    return RendererWith(gpu, false);
+}
+
+/// The renderer with the canvas pipeline, for a binding that names its lcgf_render.gpu
+/// (`Binding`, `canvas`).
+pub fn CanvasRenderer(comptime gpu: type) type {
+    return RendererWith(gpu, true);
+}
+
+pub fn RendererWith(comptime gpu: type, comptime with_canvas: bool) type {
     comptime {
         for (Binding.types ++ Binding.functions) |name| {
             if (!@hasDecl(gpu, name)) @compileError("wgpu binding is missing `" ++ name ++ "`; see render/wgpu/wgpu.zig Binding");
@@ -99,7 +111,7 @@ pub fn Renderer(comptime gpu: type) type {
     return struct {
         const Self = @This();
         /// The canvas pipeline, through the binding's lcgf_render.gpu (src/render/gpu/canvas.zig).
-        const cb = if (@hasDecl(gpu, "canvas")) gpu.canvas else null;
+        const cb = if (with_canvas) gpu.canvas else null;
         pub const Canvas = if (@TypeOf(cb) == @TypeOf(null)) void else canvas_pipeline.Canvas(cb.projection, struct {
             pub const wgsl = canvas_shader.wgsl;
         });
@@ -121,10 +133,16 @@ pub fn Renderer(comptime gpu: type) type {
             /// `canvas` (see `Binding`).
             canvas_rows: u32 = 0,
             canvas_verts: u32 = 0,
+            /// Distinct canvas batches a frame, canvas commands a frame, overrides a command
+            /// (src/render/gpu/canvas.zig `Capacity`): past them a canvas draws nothing and the
+            /// pipeline's `err` says which.
+            canvas_batches: u32 = 4,
+            canvas_draws: u32 = 8,
+            canvas_overrides: u32 = 64,
         };
 
-        /// Plain description the binding turns into a wgpu pipeline.
-        pub const PipelineDesc = struct {
+        /// Plain description the binding turns into a wgpu pipeline: one type for both forms.
+        pub const PipelineDesc = if (with_canvas) RendererWith(gpu, false).PipelineDesc else struct {
             wgsl: [:0]const u8,
             vertex_entry: [:0]const u8 = "vs",
             fragment_entry: [:0]const u8 = "fs",
@@ -169,11 +187,13 @@ pub fn Renderer(comptime gpu: type) type {
             };
             _ = self.addMaterial(device, quad_shader.stockFor(use)); // Material.solid
             _ = self.addTexture(device, white, sampler); // Texture.white
+            // `Desc.canvas_rows` needs `CanvasRenderer`.
+            std.debug.assert(with_canvas or desc.canvas_rows == 0);
             if (Canvas != void and desc.canvas_rows > 0) {
                 // ponytail: a canvas pipeline that fails to build leaves canvases undrawn, as
                 // init has no error to return.
                 var cv: Canvas = undefined;
-                if (cv.init(cb.device(device, null), .{ .format = cb.format(desc.format), .samples = desc.sample_count }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts })) |_| {
+                if (cv.init(cb.device(device, null), .{ .format = cb.format(desc.format), .samples = desc.sample_count }, .{ .rows = desc.canvas_rows, .verts = desc.canvas_verts, .batches = desc.canvas_batches, .draws = desc.canvas_draws, .overrides = desc.canvas_overrides })) |_| {
                     self.canvas = cv;
                 } else |_| {}
             }

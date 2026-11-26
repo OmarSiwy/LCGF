@@ -12,7 +12,7 @@ struct type_6 {
     metal::uint4 inner[256];
 };
 struct type_7 {
-    metal::uint4 inner[64];
+    metal::uint4 inner[512];
 };
 struct Draw {
     metal::int2 origin;
@@ -119,7 +119,7 @@ uint override_of(
         loop_init = false;
         uint _e5 = j;
         uint _e8 = u.overrides;
-        if (_e5 < metal::min(_e8, 64u)) {
+        if (_e5 < metal::min(_e8, 512u)) {
         } else {
             break;
         }

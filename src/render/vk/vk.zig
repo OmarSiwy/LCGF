@@ -17,6 +17,7 @@ pub const frame = @import("frame.zig");
 pub const host = @import("host.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
+pub const CanvasRenderer = renderer.CanvasRenderer;
 /// lcgf_render.gpu on Vulkan: WebGPU's object model projected onto this back end (gpu.zig).
 pub const gpu = @import("gpu.zig");
 pub const setup = @import("setup.zig");

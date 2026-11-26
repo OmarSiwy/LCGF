@@ -165,7 +165,7 @@ pub const Player = struct {
         const sc = conformance.canvas_scene;
         const w: u32 = @intFromFloat(sc.viewport[0]);
         const h: u32 = @intFromFloat(sc.viewport[1]);
-        var gfx = try Renderer.init(&p.d, .{ .canvas_rows = sc.rows, .canvas_verts = sc.verts }, p.white);
+        var gfx = try @import("renderer.zig").CanvasRenderer.init(&p.d, .{ .canvas_rows = sc.rows, .canvas_verts = sc.verts }, p.white);
         defer gfx.deinit();
         const atlas = gfx.addTexture(&p.d, p.atlas);
         var target = try host.Target.init(&p.d, w, h);

@@ -23,8 +23,10 @@
 //!     the rows a frame dirties are queued for every other slot, which writes them when its turn
 //!     comes, so each slot catches up without a full upload.
 //!
-//! Up to `max_batches` distinct `Instances` per frame (a schematic and its overlay), up to
-//! `max_draws` canvas commands per frame; past them a canvas draws nothing. A batch's rows
+//! Up to `Capacity.batches` distinct `Instances` per frame (a schematic and its overlays),
+//! `Capacity.draws` canvas commands per frame and `Capacity.overrides` overrides a command,
+//! all set by the caller (the renderer's `Desc`). Past them a canvas draws nothing, `err` says
+//! which limit it met (no log: the pipeline runs in freestanding wasm too). A batch's rows
 //! sit at a fixed place in the row buffers while it keeps being drawn every frame; one missing
 //! for a frame (its dirty list may have been cleared unseen) or one that no longer fits is
 //! uploaded whole.
@@ -37,9 +39,20 @@ const desc = @import("desc.zig");
 const Instances = canvas.Instances;
 const Range = canvas.Range;
 
-pub const max_batches = 4;
-pub const max_draws = 8;
+/// Ceilings of `Capacity.batches` and `draws` (what the fixed arrays hold), and of `frames`.
+pub const max_batches = 32;
+pub const max_draws = 64;
 pub const max_frames = 3;
+
+/// A limit a frame's canvases met: that canvas drew nothing.
+pub const Error = error{
+    /// More distinct batches than `Capacity.batches`, or more rows or vertices than fit.
+    CanvasBatches,
+    /// More canvas commands than `Capacity.draws`.
+    CanvasDraws,
+    /// A command with more overrides than `Capacity.overrides`.
+    CanvasOverrides,
+};
 /// Rows a slot remembers to catch up on, per batch; past it, the batch is uploaded whole.
 const pending_cap = 32;
 
@@ -49,6 +62,13 @@ pub const Capacity = struct {
     verts: u32 = 0,
     /// Copies (ring slots); more than 1 needs mapped memory.
     frames: u32 = 1,
+    /// Distinct batches a frame (at most `max_batches`), canvas commands a frame (at most
+    /// `max_draws`), overrides a command (at most `shaders/canvas.zig` `max_overrides`). Each
+    /// draw costs a uniform buffer of `@sizeOf(Uniforms)` per frame in flight; the overrides
+    /// are a loop over them per vertex.
+    batches: u32 = 4,
+    draws: u32 = 8,
+    overrides: u32 = 64,
 };
 
 /// What one slot still owes a batch: rows dirtied while another slot was being written.
@@ -121,17 +141,22 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
         scale: f32 = 1,
         /// Bytes the last `prepare` wrote: rows, vertices and uniforms.
         uploaded: usize = 0,
+        /// The limit the last `prepare` met, if any: a canvas past it drew nothing.
+        err: ?Error = null,
 
         /// Fills `cv` in place (its arena must not move). `target` is the pass's format and
         /// sample count.
         pub fn init(cv: *C, dev: gpu.Device, target: desc.Target, cap: Capacity) !void {
             std.debug.assert(cap.frames >= 1 and cap.frames <= max_frames and cap.rows > 0);
+            if (cap.batches == 0 or cap.batches > max_batches) return error.CanvasBatches;
+            if (cap.draws == 0 or cap.draws > max_draws) return error.CanvasDraws;
+            if (cap.overrides > shader.max_overrides) return error.CanvasOverrides;
             const rows: u64 = cap.rows;
-            const verts: u64 = @max(cap.verts, 1) + if (es) max_batches * shader.verts_width / 2 else 0;
+            const verts: u64 = @max(cap.verts, 1) + if (es) cap.batches * shader.verts_width / 2 else 0;
             const uni = std.mem.alignForward(u64, @sizeOf(shader.Uniforms), 256);
-            const per_slot = 32 * rows + 8 * verts + max_draws * uni;
+            const per_slot = 32 * rows + 8 * verts + cap.draws * uni;
             cv.* = .{ .arena = undefined, .pipeline = undefined, .cap = cap, .slots = undefined, .row = undefined };
-            cv.arena = try .init(dev, .{ .bytes = cap.frames * (per_slot + 64 * 1024) + 4 * rows + 64 * 1024, .memory = .host, .bind_groups = max_frames * max_draws + cv.atlas.len });
+            cv.arena = try .init(dev, .{ .bytes = cap.frames * (per_slot + 64 * 1024) + 4 * rows + 64 * 1024, .memory = .host, .bind_groups = cap.frames * cap.draws + @as(u32, cv.atlas.len) });
             errdefer cv.arena.deinit();
             cv.pipeline = try dev.createRenderPipeline(Shader, .{
                 .vertex = .{ .buffers = &.{
@@ -153,7 +178,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                     try dev.createTexture(&cv.arena, .{ .size = .{ .width = shader.verts_width, .height = (2 * @as(u32, @intCast(verts)) + shader.verts_width - 1) / shader.verts_width }, .format = .r32_uint, .usage = .{ .texture_binding = true, .copy_dst = true } })
                 else
                     try dev.createBuffer(&cv.arena, .{ .size = 8 * verts, .usage = .{ .storage = true, .copy_dst = true } });
-                for (&s.uniforms, &s.groups) |*b, *g| {
+                for (s.uniforms[0..cap.draws], s.groups[0..cap.draws]) |*b, *g| {
                     b.* = try dev.createBuffer(&cv.arena, .{ .size = @sizeOf(shader.Uniforms), .usage = .{ .uniform = true, .copy_dst = true } });
                     g.* = try dev.createBindGroup(&cv.arena, cv.pipeline, 0, .{ .u = b.*, .verts = if (es) s.verts.createView() else s.verts });
                 }
@@ -166,7 +191,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
 
         pub fn deinit(cv: *C, dev: gpu.Device) void {
             for (cv.slots[0..cv.cap.frames]) |s| {
-                for (s.uniforms) |b| dev.destroyBuffer(b);
+                for (s.uniforms[0..cv.cap.draws]) |b| dev.destroyBuffer(b);
                 if (es) dev.destroyTexture(s.verts) else dev.destroyBuffer(s.verts);
                 dev.destroyBuffer(s.look);
                 dev.destroyBuffer(s.pos);
@@ -187,6 +212,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             cv.scale = scale;
             cv.draw_len = 0;
             cv.uploaded = 0;
+            cv.err = null;
             if (!cv.row_written) {
                 var iota: [1024]u32 = undefined;
                 var at: u32 = 0;
@@ -206,9 +232,19 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                     .canvas => |k| k,
                     else => continue,
                 };
-                if (cv.draw_len == max_draws) break;
+                if (cv.draw_len == cv.cap.draws) {
+                    cv.err = error.CanvasDraws;
+                    break;
+                }
                 const shapes = list.canvases[k].instances;
-                const b = cv.find(shapes) orelse continue;
+                const b = cv.find(shapes) orelse {
+                    cv.err = error.CanvasBatches;
+                    continue;
+                };
+                if (list.canvases[k].overrides.len > cv.cap.overrides) {
+                    cv.err = error.CanvasOverrides;
+                    continue;
+                }
                 if (cv.batches[b].seen != cv.frame) cv.uploadBatch(up, b);
                 cv.batches[b].seen = cv.frame;
                 const j = cv.draw_len;
@@ -306,7 +342,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                     .canvas => |k| k,
                     else => continue,
                 };
-                if (draws == max_draws) break;
+                if (draws == cv.cap.draws) break;
                 draws += 1;
                 const shapes = list.canvases[k].instances;
                 if (std.mem.indexOfScalar(*const Instances, need[0..n], shapes) == null) {
@@ -324,7 +360,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             };
             if (new == 0) return;
             var free: u32 = 0;
-            for (cv.batches) |b| free += @intFromBool(!live(b, need[0..n]));
+            for (cv.batches[0..cv.cap.batches]) |b| free += @intFromBool(!live(b, need[0..n]));
             if (rows > cv.cap.rows or verts > cv.vertCap() or new > free) {
                 cv.batches = @splat(.{});
                 cv.next_row = 0;
@@ -333,7 +369,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             for (need[0..n]) |shapes| {
                 if (cv.find(shapes) != null) continue;
                 if (cv.next_row + shapes.cap > cv.cap.rows or vertAt(cv.next_vert) + shapes.vert_cap > cv.vertCap()) continue;
-                for (&cv.batches) |*b| if (!live(b.*, need[0..n])) {
+                for (cv.batches[0..cv.cap.batches]) |*b| if (!live(b.*, need[0..n])) {
                     cv.place(b, shapes);
                     break;
                 };
@@ -352,7 +388,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
         }
 
         fn vertCap(cv: *const C) u32 {
-            return @max(cv.cap.verts, 1) + if (es) max_batches * shader.verts_width / 2 else 0;
+            return @max(cv.cap.verts, 1) + if (es) cv.cap.batches * shader.verts_width / 2 else 0;
         }
 
         fn place(cv: *C, b: *Batch, shapes: *const Instances) void {

@@ -21,6 +21,8 @@ const wgpu = lcgf.render_wgpu;
 
 /// The wgpu back end over wgpu-native.
 pub const Renderer = wgpu.Renderer(@This());
+/// With the canvas pipeline.
+pub const CanvasRenderer = wgpu.CanvasRenderer(@This());
 
 pub const Device = *const Context;
 pub const Queue = c.WGPUQueue;

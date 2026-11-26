@@ -97,6 +97,8 @@ pub const Binding = struct {
 };
 
 pub const Renderer = wgpu.Renderer(Binding);
+/// With the canvas pipeline.
+pub const CanvasRenderer = wgpu.CanvasRenderer(Binding);
 
 comptime {
     lcgf.render_iface.check(Renderer);

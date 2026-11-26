@@ -186,7 +186,7 @@ if any(l[0] == "canvas" for l in lines):
                          1.0, 1.0, int(any(r > 0 for r in radii)), 0)
         pal = b"".join(struct.pack("<IIfI", int(l[0]), int(l[1]), float(l[2]), int(l[3])) for l in layers)
         u += pal + bytes(16 * (256 - len(layers)))
-        u += b"".join(struct.pack("<4I", x, y, z, 0) for x, y, z in marks) + bytes(16 * (64 - len(marks)))
+        u += b"".join(struct.pack("<4I", x, y, z, 0) for x, y, z in marks) + bytes(16 * (512 - len(marks)))
         uni = buf(u, wgpu.BufferUsage.UNIFORM)
         cg0 = device.create_bind_group(layout=cbgl0, entries=[{"binding": 0, "resource": {"buffer": uni, "offset": 0, "size": len(u)}},
                                                               {"binding": 1, "resource": {"buffer": vert_buf, "offset": 0, "size": vert_buf.size}}])

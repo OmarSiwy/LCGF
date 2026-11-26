@@ -29,7 +29,7 @@ struct Draw {
     float inv_scale;
     uint rounded;
     uvec4 palette[256];
-    uvec4 marks[64];
+    uvec4 marks[512];
 };
 struct Row {
     ivec4 pos;
@@ -98,7 +98,7 @@ uint override_of(uint i, uint colour_1) {
         loop_init = false;
         uint _e5 = j;
         uint _e8 = _group_0_binding_0_vs.overrides;
-        if ((_e5 < min(_e8, 64u))) {
+        if ((_e5 < min(_e8, 512u))) {
         } else {
             break;
         }

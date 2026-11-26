@@ -16,6 +16,7 @@ pub const present = @import("present.zig");
 pub const gpu = @import("gpu.zig");
 pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
+pub const CanvasRenderer = renderer.CanvasRenderer;
 pub const setup = @import("setup.zig");
 pub const Setup = setup.Setup;
 

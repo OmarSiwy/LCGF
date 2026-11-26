@@ -67,7 +67,7 @@ pub fn main(init: std.process.Init) !void {
 fn drawCanvas(io: std.Io, gpa: std.mem.Allocator, out: std.Io.Dir, h: *host.Host, atlas: gl.Uint) !void {
     const sc = conformance.canvas_scene;
     canvas.load();
-    var gfx = try gles.Renderer.init(&h.gl, &h.gl3, .{ .canvas_rows = sc.rows, .canvas_verts = sc.verts });
+    var gfx = try gles.CanvasRenderer.init(&h.gl, &h.gl3, .{ .canvas_rows = sc.rows, .canvas_verts = sc.verts });
     defer gfx.deinit();
     const handle = gfx.addTexture(atlas);
     const w: u32 = @intFromFloat(sc.viewport[0]);

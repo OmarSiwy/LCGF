@@ -33,9 +33,10 @@ pub const wgsl_es: [:0]const u8 = body ++
     \\
 ;
 
-/// Overrides one draw applies; past these, the first ones are dropped.
-/// ponytail: a fixed uniform array; a storage buffer when selections outgrow it.
-pub const max_overrides = 64;
+/// The most overrides a draw can apply: the uniform array's length, 8 KB, so the whole uniform
+/// stays within GL ES 3.0's 16 KB. The renderer's `Desc` sets how many it takes, up to this.
+/// ponytail: a loop over them per vertex; a per-row colour column when selections outgrow it.
+pub const max_overrides = 512;
 pub const max_layers = 256;
 
 /// canvas.wgsl's `Draw`.
@@ -70,7 +71,7 @@ pub const Uniforms = extern struct {
 };
 
 comptime {
-    std.debug.assert(@offsetOf(Uniforms, "rect") == 32 and @offsetOf(Uniforms, "inv") == 96 and @offsetOf(Uniforms, "palette") == 192 and @sizeOf(Uniforms) == 192 + 4096 + 1024);
+    std.debug.assert(@offsetOf(Uniforms, "rect") == 32 and @offsetOf(Uniforms, "inv") == 96 and @offsetOf(Uniforms, "palette") == 192 and @sizeOf(Uniforms) == 192 + 4096 + 16 * max_overrides);
 }
 
 /// Fills the head, palette and overrides of canvas command `k` of `list` at `scale` physical
@@ -96,7 +97,7 @@ pub fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, t
     const c = list.canvases[k];
     const s: @Vector(4, f32) = @splat(scale);
     const layers: u32 = @intCast(@min(c.palette.layers.len, max_layers));
-    const marks = c.overrides[c.overrides.len - @min(c.overrides.len, max_overrides) ..];
+    const marks = c.overrides[0..@min(c.overrides.len, max_overrides)];
     u.view = canvas.View.of(c.camera, c.palette, .{ node.rect[0], node.rect[1] }, scale);
     u.rect = @as(@Vector(4, f32), node.rect) * s;
     u.clip = @as(@Vector(4, f32), node.clip) * s;
