@@ -304,8 +304,14 @@ pub const Emit = struct {
                 e.write(")");
             },
             .button, .link => {
-                e.print("{s}.ct.{s}(theme, .{f}, ", .{ e.use(@tagName(n.kind)), @tagName(n.kind), std.zig.fmtId(n.id) });
+                // Text CSS on a <button> draws its caption.
+                const ts = n.kind == .button and !std.meta.eql(n.text_style, n.base_text);
+                e.print("{s}.ct.{s}(theme, .{f}, ", .{ e.use(@tagName(n.kind)), if (ts) "buttonStyled" else @tagName(n.kind), std.zig.fmtId(n.id) });
                 e.caption(n.text_kind, n.text);
+                if (ts) {
+                    e.write(", ");
+                    e.structure(n.text_style, types.TextStyle{});
+                }
                 e.write(")");
             },
             .checkbox, .@"switch", .toggle => {
@@ -805,10 +811,15 @@ pub const Emit = struct {
             .button, .link => {
                 const h = e.clickHandler(n.id);
                 const face = e.rtFace(n);
-                e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), e.faced(@tagName(n.kind), face), e.rtId(n.id, list_depth) });
+                const ts = n.kind == .button and !std.meta.eql(n.text_style, n.base_text);
+                const name = if (face.len > 0) e.faced(@tagName(n.kind), face) else if (ts) "buttonStyled" else @tagName(n.kind);
+                e.print("{s}{s}.{s}(f, &theme, {s}, ", .{ if (h != null) "if (" else "_ = ", e.use(@tagName(n.kind)), name, e.rtId(n.id, list_depth) });
                 e.rtCaption(n.text_kind, n.text);
-                // A button's Face takes its caption's text style first.
-                if (face.len > 0 and n.kind == .button) e.print(", {s}.labelText(&theme)", .{e.use("label")});
+                // A button's Face and buttonStyled take its caption's text style.
+                if (ts) {
+                    e.write(", ");
+                    e.structure(n.text_style, types.TextStyle{});
+                } else if (face.len > 0 and n.kind == .button) e.print(", {s}.labelText(&theme)", .{e.use("label")});
                 e.write(face);
                 if (h == null) e.write(");") else if (e.eachOf(i) != none)
                     e.print(").clicked) {s}.{f} = @intCast(copy0);", .{ e.events_var, std.zig.fmtId(n.id) })

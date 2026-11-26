@@ -176,6 +176,9 @@ shows the CSS border colour, in both frontends. A box-shadow or an outline on on
 works there too: its column of floating nodes is built around the restyled widget. Margins and
 the other flex item rules on a widget or a component go on the row it pushes first, its root.
 A margin, gradient, box-shadow or outline on a `<summary>` is an error.
+Text CSS (color, font, line-height, …) on a `<button>` draws its caption, in both frontends; a
+button does not inherit its parent's, as in a browser. On any other control, or on the
+`<label>` that wraps one, text CSS is an error: the control draws its text in the theme's style.
 
 A page with `lcgf-each` regions takes the items in both, as `Ui.build(ui, frame, data)` and
 `Page(H).frame(p, ctx, h, input, data)`.

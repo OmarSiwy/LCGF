@@ -39,6 +39,8 @@ pub const Lowerer = struct {
     /// (element << 32 | declaration) pairs the lowering read (`declared`): an author
     /// declaration that wins on an element and is never read there is reported (`checkUnread`).
     reads: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// Text declarations `textUnlowered` reported.
+    text_noted: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// Per declaration: already reported by `checkDeclarations` (unknown or refused).
     noted: []bool = &.{},
     /// Token table index of a value token that a `var(--t-*)` produced.
@@ -2532,7 +2534,33 @@ pub const Lowerer = struct {
             else => false,
         };
         if (node.name.len == 0 and captionless) node.name = l.controlCaption(n);
+        // A control draws its text in the theme's style: text CSS on it, or on the <label> that
+        // wraps it for its caption, is an error. A button's caption takes it; a dialog's and a
+        // section's content inherit it.
+        switch (node.kind) {
+            .button, .dialog, .section => {},
+            else => {
+                l.textUnlowered(n);
+                const p = l.doc.nodes.items(.parent)[n];
+                if (p != none and l.doc.nodes.items(.kind)[p] == .element and std.mem.eql(u8, l.tag(p), "label")) l.textUnlowered(p);
+            },
+        }
     }
+
+    /// The text properties of element `n` that it draws no text with: an error at each
+    /// declaration, once.
+    fn textUnlowered(l: *Lowerer, n: u32) void {
+        for (text_props) |p| {
+            const e = l.k.get(n, p);
+            if (e.decl == none or l.text_noted.contains(e.decl)) continue;
+            if (l.c.rules.items(.origin)[l.c.decls.items(.rule)[e.decl]] == .ua) continue;
+            ok(l.text_noted.put(l.arena, e.decl, {}));
+            l.ds.err(l.c.decls.items(.loc)[e.decl], "'{s}' on <{s}> is not lowered: the control draws its text in the theme's style", .{ l.c.decls.items(.name)[e.decl], l.tag(n) });
+        }
+    }
+
+    /// What `computeText` reads on every element: the text style and the paragraph style.
+    const text_props = [_]Prop{ .color, .@"font-size", .@"font-family", .@"font-weight", .@"font-style", .@"white-space", .@"line-height", .@"letter-spacing", .@"word-spacing", .@"text-overflow" };
 
     fn button(l: *Lowerer, n: u32, parent: u32) void {
         const th = l.page.theme;
@@ -2557,8 +2585,18 @@ pub const Lowerer = struct {
         };
         const base_style = lcgf.widgets_button.buttonStyle(&th);
         l.widgetStyle(n, parent, base_style, &node);
-        node.text_style = l.text[n];
+        // Text CSS on the <button> draws its caption (buttonStyled); as in a browser, a
+        // button does not inherit its parent's. Paragraph styles do not apply to a caption.
         node.base_text = lcgf.widgets_label.labelText(&th);
+        node.text_style = node.base_text;
+        for (text_props) |p| if (l.k.get(n, p).decl != none) {
+            node.text_style = l.text[n];
+            break;
+        };
+        if (node.text_style.wrap != node.base_text.wrap) node.text_style.wrap = node.base_text.wrap;
+        if (l.paragraphOf(n) != null) for ([_]Prop{ .@"line-height", .@"letter-spacing", .@"word-spacing", .@"text-overflow" }) |p| {
+            if (l.k.get(n, p).decl != none) l.ds.err(l.declared(n, p).?.loc, "'{s}' on a <button> is not lowered: its caption is one line", .{@tagName(p)});
+        };
         l.handlers(n, node.id, "", null);
         l.skip[n] = true; // its text is the caption
         l.ir_of[n] = l.addNode(node);

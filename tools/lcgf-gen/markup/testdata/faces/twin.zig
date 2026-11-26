@@ -29,6 +29,8 @@ const red: lcgf.types.Color = .rgb(192, 48, 48);
 const body: Style = .{ .size = .{ .fill, .fill }, .fill = theme.panel };
 /// `button { width: 120px; border: 2px solid #c03030 }` over the button's own style.
 const face: Style = .{ .dir = .x, .size = .{ .px(120), .fit }, .pad = @splat(theme.pad), .main = .center, .cross = .center, .border_color = red, .border = 2, .radius = theme.radius, .role = .button };
+/// `#go { color: #ffcc00; font-size: 16px }`: the caption's text style.
+const go_text: lcgf.types.TextStyle = .{ .px = 16, .color = .rgb(255, 204, 0) };
 const done_row: Style = .{ .dir = .x, .size = .{ .px(200), .fit }, .gap = 6, .cross = .center, .role = .checkbox };
 const wifi_row: Style = .{ .dir = .x, .size = .{ .px(200), .fit }, .gap = 6, .cross = .center };
 /// `#lit`: box-shadow and outline wrap the button in a column with a floating shadow and ring.
@@ -57,7 +59,7 @@ const target: Style = blk: {
 const track: Style = .{ .dir = .x, .size = .{ .px(160), .px(12) }, .min = .{ 40, 0 }, .fill = theme.control, .radius = theme.radius, .role = .slider };
 
 pub const spec = s.col(body, .{
-    s.styled(button.ct.button(theme, .go, "Go"), face),
+    s.styled(button.ct.buttonStyled(theme, .go, "Go", go_text), face),
     s.flexed(s.styled(toggle.ct.toggle(theme, .bold, .bold, "Bold"), face), .{ .margin = .{ 8, 4, 8, 4 } }),
     s.styled(checkbox.ct.checkbox(theme, .done, .done, "Done"), done_row),
     s.styled(switch_.ct.@"switch"(theme, .wifi, .wifi, ""), wifi_row),
@@ -112,7 +114,7 @@ pub const App = struct {
             app.flex = lcgf.flex.Flex.init(&carver, limits.nodes);
         }
         _ = f.open(.none, body);
-        _ = button.buttonFace(f, &theme, .from("go"), "Go", label.labelText(&theme), face);
+        _ = button.buttonFace(f, &theme, .from("go"), "Go", go_text, face);
         app.flex.?.set(f.tree().len, &.{ .margin = .{ 8, 4, 8, 4 } });
         _ = toggle.toggleFace(f, &theme, .from("bold"), &app.bold, "Bold", face);
         _ = checkbox.checkboxFace(f, &theme, .from("done"), &app.done, "Done", done_row);
