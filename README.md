@@ -9,7 +9,6 @@ A Zig GUI framework with runtime and comptime front ends over shared layout, int
 | Run or copy a standalone sample application | [Example projects](examples/README.md) |
 | Add the package and select a renderer | [Package options](docs/release/package.md) |
 | Build a UI | [Runtime guide](docs/guide/runtime.md), [comptime guide](docs/guide/comptime.md) |
-| Compile HTML and CSS to native widgets | [Decomposer guide and feature inventory](tools/decomposer/README.md) |
 | Integrate a renderer, platform or custom drawing | [Backends](docs/guide/backends.md), [porting](docs/guide/porting.md), [custom rendering](docs/guide/custom.md) |
 | Work with text or diagnose a compile error | [Text guide](docs/guide/text.md), [compiler errors](docs/guide/errors.md) |
 | Look up a declaration | [Public API index](docs/api/API.md), [ownership and API review](docs/release/api-review.md) |
