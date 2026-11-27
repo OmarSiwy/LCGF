@@ -56,6 +56,12 @@ pub const BarState = struct {
     down: bool = false,
     /// The menu the item in `menu.chosen` was chosen from this frame, or `menu.no_item`.
     from: u8 = no_item,
+
+    /// Which menu's list is shown, past the last when none: what `spec.choice` over this
+    /// field selects by (`ct.menus`).
+    pub fn alternative(s: BarState) u32 {
+        return s.open;
+    }
 };
 
 /// `null` if `State` can hold menu bar `def` bound to `field`, else the compile error.
@@ -378,6 +384,141 @@ fn buildItem(f: *Frame, th: *const Theme, comptime mid: []const u8, comptime m: 
     f.close();
 }
 
+// ---- comptime front end in base.ComptimeUi ----------------------------------------------------
+
+pub const ct = struct {
+    /// The bar of menu bar `name` (menus `def`, buttons captioned by `texts`), bound to the
+    /// `BarState` field `field`, in the page's flow; `spec.styled` and `spec.textStyled`
+    /// restyle it as `barFace` does. Put `ct.menus` last in the page's root. Its runtime twin
+    /// is `bar`.
+    pub fn bar(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime def: BarDef, comptime texts: []const []const u8) Spec {
+        const id = @tagName(name);
+        if (texts.len != def.names.len) @compileError("menu bar '" ++ id ++ "': one text per button");
+        var buttons: [def.names.len]Spec = undefined;
+        for (&buttons, def.names, texts) |*b, n, caption| {
+            b.* = spec_zig.row(buttonStyle(&th, false, false), .{Spec{ .kind = .label, .text = caption, .style = .{ .role = .label } }});
+            b.id = partName(id, n);
+            b.widget = base.FocusStop;
+        }
+        var r = spec_zig.row(barStyle(&th), buttons);
+        r.id = partName(id, "bar");
+        r.widget = Comptime(th, id, @tagName(field), def).Bar;
+        return r;
+    }
+
+    /// The open menu's list of menu bar `name`, its items captioned by `items` (one slice per
+    /// menu), floating below its button; put it last in the page's root. Menus without a
+    /// submenu. Its runtime twin is `menus`.
+    pub fn menus(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime def: BarDef, comptime items: []const []const []const u8) Spec {
+        return ct.menusFace(th, name, field, def, items, menu.listStyle(&th, .{}), base.labelText(&th));
+    }
+
+    /// `menus` with the lists laid out by `face` instead of `menu.listStyle` and the items'
+    /// text in `text`, as `menusFace` does.
+    pub fn menusFace(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime def: BarDef, comptime items: []const []const []const u8, comptime face: Style, comptime text: types.TextStyle) Spec {
+        const id = @tagName(name);
+        if (items.len != def.menus.len) @compileError("menu bar '" ++ id ++ "': one list of texts per menu");
+        var panels: [def.menus.len]Spec = undefined;
+        for (&panels, def.names, def.menus, items) |*p, n, m, captions| {
+            if (m.sub.len != 0 or m.sub_at != null) @compileError("menu bar '" ++ id ++ "': ct.menus takes menus without a submenu");
+            if (captions.len != m.items.len) @compileError("menu bar '" ++ id ++ "': one text per item");
+            const mid = partName(id, n);
+            var rows: [m.items.len]Spec = undefined;
+            for (&rows, m.items, captions) |*r, item, caption| {
+                r.* = spec_zig.row(.{}, .{Spec{ .kind = .label, .text = caption }});
+                r.id = partName(mid, item);
+            }
+            p.* = spec_zig.col(face, rows);
+            p.id = partName(mid, "panel");
+            p.text_style = text;
+        }
+        var s = spec_zig.choice(field, layerStyle(), panels);
+        s.widget = Comptime(th, id, @tagName(field), def).Menus;
+        return s;
+    }
+};
+
+/// The custom widgets (`Spec.widget`) of `ct.bar` and `ct.menus`: the bar's `step` reads its
+/// own, its buttons', the lists' and the items' responses and the keys through `advance`, as
+/// `bar` does at run time, and keeps the open menu's button rect for the lists' `push`.
+pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime field: []const u8, comptime def: BarDef) type {
+    return struct {
+        pub const Bar = struct {
+            pub fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8 {
+                return base.fieldError(State, "menu bar '" ++ name ++ "'", bound, BarState);
+            }
+
+            fn rowOf(comptime U: type, comptime id: []const u8) u32 {
+                return @backingInt(@field(U.Events.Widget, id));
+            }
+
+            pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+                const U = @TypeOf(ui.*);
+                const bs: BarState = @field(ui.signals.state, field);
+                var hits: BarHits = .{ .inside = base.ctResponse(ui, row, event, in).pressed };
+                inline for (def.names, def.menus, 0..) |mn, m, i| {
+                    const mid = comptime partName(name, mn);
+                    hits.addButton(i, base.ctResponse(ui, comptime rowOf(U, mid), event, in));
+                    hits.inside = hits.inside or base.ctResponse(ui, comptime rowOf(U, partName(mid, "panel")), event, in).pressed;
+                    inline for (m.items, 0..) |item, k| hits.addItem(bs.open == i, k, base.ctResponse(ui, comptime rowOf(U, partName(mid, item)), event, in));
+                }
+                const next = advance(def, bs, hits, in);
+                ui.signals.set(comptime U.field(field), next);
+                // Where the open menu's list floats: below its button, as last frame laid it out.
+                inline for (def.names, 0..) |mn, i| if (next.open == i) {
+                    const at = ui.lastRect(comptime rowOf(U, partName(name, mn)));
+                    ui.keep(Bar).* = .{ at.x0, at.y0, at.x1, at.y1 };
+                };
+            }
+
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                const tb = &ui.tables;
+                const t = &tb.t;
+                const bs: BarState = @field(ui.signals.state, field);
+                const b = t.push(parent, .hash(partName(name, "bar")), &n.style);
+                t.c.role[b] = @backingInt(a11y.Role.menu_bar);
+                next.* += 1;
+                inline for (n.children, 0..) |button, i| {
+                    const st = buttonStyle(&th, bs.open == i, ui.response(next.*, in).hovered);
+                    const r = t.push(b, .hash(button.id.?), &st);
+                    t.c.role[r] = @backingInt(a11y.Role.menu_item);
+                    next.* += 1;
+                    ui.push(comptime spec_zig.inheritText(button.children[0], n.text_style), r, next, in);
+                    t.seal(r);
+                }
+                t.seal(b);
+            }
+        };
+
+        pub const Menus = struct {
+            pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+                _ = in;
+                const tb = &ui.tables;
+                const t = &tb.t;
+                const bs: BarState = @field(ui.signals.state, field);
+                const layer = t.push(parent, .none, &n.style);
+                inline for (def.names, def.menus, n.children, 0..) |mn, m, panel, i| if (bs.open == i) {
+                    const mid = comptime partName(name, mn);
+                    const k4 = ui.keep(Bar).*;
+                    const l = t.push(layer, .hash(panel.id.?), &popover.anchored(panel.style, menu.listStyle(&th, .{ .x0 = k4[0], .y0 = k4[1], .x1 = k4[2], .y1 = k4[3] })));
+                    t.c.role[l] = @backingInt(a11y.Role.menu);
+                    inline for (m.items, panel.children, 0..) |item, row_spec, k| {
+                        const r = t.push(l, .hash(partName(mid, item)), &menu.itemStyle(&th, menu.highlighted(m, bs.menu, k)));
+                        t.c.role[r] = @backingInt(a11y.Role.menu_item);
+                        const label = t.push(r, .none, &.{ .role = .label });
+                        t.c.text[label] = tb.tx.push(label, tb.strings.add(row_spec.children[0].text.?), &(comptime panel.text_style orelse base.labelText(&th)));
+                        t.seal(label);
+                        t.seal(r);
+                    }
+                    t.seal(l);
+                };
+                t.seal(layer);
+                next.* += comptime @import("../comptime/flatten.zig").count(n);
+            }
+        };
+    };
+}
+
 // ---- example page, replay and golden frames ---------------------------------------------------
 
 /// The example's bar: File (menu.zig's example menu) and Edit (Undo, Redo).
@@ -491,6 +632,77 @@ test "MenuBar: the page agrees in both front ends, closed and with each menu ope
     t = try setBar(h, .{ .open = 1, .menu = .{ .open = true } });
     try testing.expectEqual(@as(u32, 9 + 1 + 4), t.len);
     try testing.expectEqual(t.rect(t.find(.from("main_edit"))).x0, t.rect(t.find(.from("main_edit_panel"))).x0);
+}
+
+/// A menu bar without submenus restyled as a page does from data: `barFace` and `menusFace`
+/// against `ct.bar` (with `spec.styled` and `spec.textStyled`) and `ct.menusFace`.
+const restyled = struct {
+    const th: Theme = .default;
+    const view_menu: menu.Def = .{ .items = &.{ "zoom", "fit" } };
+    const def: BarDef = .{ .names = &.{ "edit", "view" }, .menus = &.{ edit_menu, view_menu } };
+    const texts = [_][]const u8{ "Edit", "View" };
+    const items = [_][]const []const u8{ &.{ "Undo", "Redo" }, &.{ "Zoom", "Fit" } };
+    const bar_face: Style = blk: {
+        var st = barStyle(&th);
+        st.pad = @splat(6);
+        st.fill = .rgb(20, 40, 60);
+        break :blk st;
+    };
+    const list_face: Style = blk: {
+        var st = menu.listStyle(&th, .{});
+        st.pad = @splat(9);
+        st.fill = .rgb(60, 40, 20);
+        break :blk st;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const App = struct {
+        bar: BarState = .{},
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, .{ .size = .{ .fill, .fill } });
+            barFace(f, &th, "main", def, &app.bar, &texts, bar_face, text);
+            menusFace(f, &th, "main", def, &app.bar, &items, list_face, text);
+            f.close();
+        }
+    };
+    const State = struct { bar: BarState = .{} };
+    const spec = spec_zig.col(.{ .size = .{ .fill, .fill } }, .{
+        spec_zig.styled(spec_zig.textStyled(ct.bar(th, .main, .bar, def, &texts), text), bar_face),
+        ct.menusFace(th, .main, .bar, def, &items, list_face, text),
+    });
+    var h: base.Harness(App, base.ComptimeUi(State, spec, th), .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 }) = .{};
+};
+
+test "ct.bar, ct.menusFace restyled: the same frames as barFace and menusFace" {
+    const h = &restyled.h;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    var t = (try h.frame(&in)).runtime.tree;
+    const at = struct {
+        fn f(tr: *const Tree, comptime id: []const u8) [2]f32 {
+            const r = tr.rect(tr.find(.from(id)));
+            return .{ (r.x0 + r.x1) * 0.5, (r.y0 + r.y1) * 0.5 };
+        }
+    }.f;
+    // Click Edit: its list opens below it.
+    in.pointer = at(t, "main_edit");
+    in.buttons.left = true;
+    _ = try h.frame(&in);
+    in.buttons.left = false;
+    t = (try h.frame(&in)).runtime.tree;
+    try testing.expectEqual(@as(u8, 0), h.app.bar.open);
+    // The pointer moves to View: its list replaces Edit's.
+    in.pointer = at(t, "main_view");
+    t = (try h.frame(&in)).runtime.tree;
+    try testing.expectEqual(@as(u8, 1), h.app.bar.open);
+    // Down, Down, Enter chooses Fit; Escape on a closed bar does nothing.
+    const ev = [_]Input.Event{ .{ .kind = .press, .code = popover.keys.down }, .{ .kind = .press, .code = popover.keys.down }, .{ .kind = .press, .code = popover.keys.enter } };
+    in.events = &ev;
+    _ = try h.frame(&in);
+    in.events = &.{};
+    try testing.expectEqual(no_item, h.app.bar.open);
+    try testing.expectEqual(@as(u8, 1), h.app.bar.from);
+    _ = try h.frame(&in);
+    try testing.expectEqual(h.app.bar, h.ui.signals.state.bar);
 }
 
 test "barStyle, buttonStyle: the theme's tokens" {

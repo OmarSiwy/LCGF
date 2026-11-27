@@ -227,14 +227,15 @@ pub inline fn maskRegion(m: anytype, kind: RegionKind, row: u32, end: u32, strid
 }
 
 /// A bound selector field as a number: integers saturate into u32, a bool is 0 or 1, a
-/// widget state struct its `visible()`.
+/// widget state struct its `alternative()` if it has one (which of a choice's alternatives it
+/// shows: a menu bar's open menu), else its `visible()`.
 fn number(v: anytype) u32 {
     return switch (@typeInfo(@TypeOf(v))) {
         .int => std.math.cast(u32, v) orelse if (v < 0) 0 else std.math.maxInt(u32),
         .bool => @intFromBool(v),
         .@"enum" => std.math.cast(u32, @backingInt(v)) orelse std.math.maxInt(u32),
         // A widget's state (an overlay's open flag inside it) says itself: `pub fn visible`.
-        .@"struct" => @intFromBool(v.visible()),
+        .@"struct" => if (comptime @hasDecl(@TypeOf(v), "alternative")) v.alternative() else @intFromBool(v.visible()),
         else => @compileError("a region selects by an integer or bool field, not " ++ @typeName(@TypeOf(v))),
     };
 }

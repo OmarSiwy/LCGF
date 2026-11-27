@@ -5920,6 +5920,7 @@ Menu bar (tier 2): a row of buttons, each opening a menu, the WAI-ARIA APG menub
 - `fn barFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *BarState, texts: []const []const u8, face: Style, text: types.T…`: `bar` laid out by `face` instead of `barStyle(th)`, its buttons' text drawn in `text`; the buttons' fill still follows the open menu and the pointer.
 - `fn menus(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *const BarState, texts: []const []const []const u8) void`: The open menu's list (and submenu) of bar `name`, `texts` holding each menu's labels in menu.zig's one sequence.
 - `fn menusFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *const BarState, texts: []const []const []const u8, face: Styl…`: `menus` with the lists laid out by `face` instead of `menu.listStyle` and the items' text drawn in `text`, as `menu.showFace`; the lists still float below their buttons.
+- `fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime field: []const u8, comptime def: BarDef) type`: The custom widgets (`Spec.widget`) of `ct.bar` and `ct.menus`: the bar's `step` reads its own, its buttons', the lists' and the items' responses and the keys through `advance`, as `bar` does at run time, and keeps the open menu's button rect for the lists' `push`.
 - `fn Example(comptime th: Theme) type`: The example page: the bar above a status label, and its menus, in both front ends, in theme `th`.
 
 ### `BarDef` (struct)
@@ -5933,6 +5934,7 @@ A menu bar's state, owned by the application.
 
 Fields: `open`, `menu`, `hover`, `down`, `from`
 
+- `fn alternative(s: BarState) u32`: Which menu's list is shown, past the last when none: what `spec.choice` over this field selects by (`ct.menus`).
 
 ### `MenuBar(..)` (generic struct)
 Menu bar `name` with menus `def`, bound to the `BarState` field `field`, in theme `th`: its spec builders and the hooks `popover.ComptimePage` calls.
@@ -5950,6 +5952,26 @@ Fields: `clicked`, `hovered`, `inside`, `menu`
 
 - `fn addButton(h: *BarHits, i: u8, r: Response) void`: Notes button `i`'s response.
 - `fn addItem(h: *BarHits, open: bool, k: u8, r: Response) void`: Notes the response of item `k` of a menu, which is the open one when `open`.
+
+### `ct` (struct)
+
+- `fn bar(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime def: BarDef, comptime texts: []const []const u8) Spec`: The bar of menu bar `name` (menus `def`, buttons captioned by `texts`), bound to the `BarState` field `field`, in the page's flow; `spec.styled` and `spec.textStyled` restyle it as `barFace` does.
+- `fn menus(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime def: BarDef, comptime items: []const []const []const u8)…`: The open menu's list of menu bar `name`, its items captioned by `items` (one slice per menu), floating below its button; put it last in the page's root.
+- `fn menusFace(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime def: BarDef, comptime items: []const []const []const…`: `menus` with the lists laid out by `face` instead of `menu.listStyle` and the items' text in `text`, as `menusFace` does.
+
+### `Comptime(..)` (generic struct)
+The custom widgets (`Spec.widget`) of `ct.bar` and `ct.menus`: the bar's `step` reads its own, its buttons', the lists' and the items' responses and the keys through `advance`, as `bar` does at run time, and keeps the open menu's button rect for the lists' `push`.
+
+
+### `Comptime(..).Bar` (struct)
+
+- `fn bindError(comptime State: type, comptime bound: []const u8) ?[]const u8`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
+
+### `Comptime(..).Menus` (struct)
+
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
 ### `Example(..)` (generic struct)
 The example page: the bar above a status label, and its menus, in both front ends, in theme `th`.
