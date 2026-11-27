@@ -22,19 +22,21 @@ pub const Scene = struct {
 
 pub const rows = @import("rows.zig");
 
-/// The default scene first.
-pub const all = [_]Scene{
-    rows.scene,
+/// The scenes of the comparison (bench/vs/harness.h), in its order. Named on their own, not cut
+/// from `all`: a program that takes only these must not compile the others (the data scenes
+/// bring the text tables with them, which the comparison driver is built without).
+pub const vs = [_]Scene{
     @import("form.zig").scene,
     @import("list.zig").scene,
     @import("text.zig").scene,
     @import("springs.zig").scene,
     @import("resize.zig").scene,
     @import("idle.zig").scene,
+};
+
+/// The default scene first.
+pub const all = [_]Scene{rows.scene} ++ vs ++ [_]Scene{
     @import("data.zig").scene,
     @import("data.zig").idle,
     @import("data.zig").mixed,
 };
-
-/// The scenes of the comparison (bench/vs/harness.h), in its order.
-pub const vs = all[1..7].*;
