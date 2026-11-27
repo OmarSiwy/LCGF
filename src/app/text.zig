@@ -568,6 +568,35 @@ pub const Text = struct {
 
 const Context = lcgf.context.Context;
 
+/// `Window` when the service can ever serve (it has font files, or the build can ask the
+/// system for faces), else `Bitmap`: then no code of the service is in the program.
+pub fn WindowOf(comptime serves: bool) type {
+    return if (serves) Window else Bitmap;
+}
+
+/// A window's text in the bundled bitmap font: `Window`'s calls, none of the service's code.
+pub const Bitmap = struct {
+    pub fn open(_: []u8, _: Options, files: []const File, _: bool, _: Allocator, _: Io) !Bitmap {
+        std.debug.assert(files.len == 0);
+        return .{};
+    }
+
+    pub fn close(_: *Bitmap) void {}
+
+    pub fn on(_: *const Bitmap) bool {
+        return false;
+    }
+
+    pub fn end(_: *Bitmap, f: *lcgf.frame.Frame) lcgf.context.Output {
+        return f.end(.{});
+    }
+
+    /// Never called: `on` is false.
+    pub fn glyphs(_: *Bitmap, _: *Context, _: *const lcgf.context.Output, _: f32) Frame {
+        unreachable;
+    }
+};
+
 /// The text of a window `lcgf_app` runs: the service over the application's font files, else
 /// over the system's default faces where the build can ask for them (`can_discover`), else
 /// none, and the window draws with the bundled bitmap font as before. Each frame, `end`

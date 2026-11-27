@@ -106,7 +106,8 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     // The macOS shell draws its own text with the bitmap font, on Metal: no service there yet.
     const mac = builtin.os.tag == .macos;
     const fonts: []const text.File = if (mac) &.{} else options.fonts;
-    var tw = try text.Window.open(&B.service, textOptions(options), fonts, !mac, init.gpa, init.io);
+    const TextWindow = text.WindowOf(serves(options));
+    var tw = try TextWindow.open(&B.service, textOptions(options), fonts, !mac, init.gpa, init.io);
     defer tw.close();
     if (has_gpu) switch (try runGpu(App, app, gpuEnv(init), options, clock, &ctx, &tw)) {
         .done => return,
@@ -305,6 +306,12 @@ fn limitsOf(comptime options: Options) context.Limits {
     return limits;
 }
 
+/// Whether the text service can ever draw a window of `options`: it has font files, or the
+/// build can ask the system for faces. Else the program carries none of its code.
+fn serves(comptime options: Options) bool {
+    return builtin.os.tag != .macos and (options.fonts.len > 0 or text.can_discover);
+}
+
 /// `options.text` for the frame's runs.
 fn textOptions(comptime options: Options) text.Options {
     var o = options.text;
@@ -401,7 +408,10 @@ fn Buffers(comptime options: Options) type {
         var glyphs: [4096]Quad = undefined;
         var first: [options.limits.texts]u32 = undefined;
         var count: [options.limits.texts]u32 = undefined;
-        const service_bytes = TextService.requiredBytes(textOptions(options));
+        const service_bytes = if (serves(options))
+            TextService.requiredBytes(textOptions(options))
+        else
+            0;
         var service: [service_bytes]u8 align(lcgf.mem.column_align) = undefined;
         var text: [512]u8 = undefined;
         var events: [128]Event = undefined;
@@ -439,7 +449,7 @@ fn loop(
     ctx: *context.Context,
     clock: Clock,
     glyphs: Glyphs,
-    tw: *text.Window,
+    tw: anytype,
 ) !void {
     const follows = @hasField(App, "theme") and @FieldType(App, "theme") == lcgf.widgets_base.Theme;
     var styled: ?lcgf.input.Input.Appearance = null;
@@ -711,6 +721,7 @@ test "app on X11 with a font file: text as the reference draws it, a change send
 }
 
 const font_options: Options = .{
+    .fonts = &font_files,
     .limits = .{ .nodes = 16, .texts = 4 },
     .text = .{
         .atlas = .{ 256, 256 },
