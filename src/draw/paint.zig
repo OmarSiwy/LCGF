@@ -257,9 +257,14 @@ inline fn nodeOps(
         // row 0.
         if (!small and (c.extra[i] | c.scope[i] | c.scope[parent]) == 0) {
             vis = @intFromBool(geometry.nodeShown(t, i));
-            const rect: [4]f32 = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] };
-            quads[q] = plainQuad(rect, look, @as(V4, c.child_clip[parent]) * sign);
-            checkPlain(t, i, &quads[q]);
+            // A node with neither colour paints nothing, and about half the nodes of a form
+            // or a list are such (containers, text leaves): its quad is not written. One jump,
+            // where the 136 bytes were written and then left behind.
+            if (((look.fill | look.border_color) >> 24) != 0) {
+                const rect: [4]f32 = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] };
+                quads[q] = plainQuad(rect, look, @as(V4, c.child_clip[parent]) * sign);
+                checkPlain(t, i, &quads[q]);
+            }
         } else {
             const paints = t.participation(@intCast(i)).paint;
             vis = @intFromBool(geometry.nodeShown(t, i)) & @intFromBool(paints);
@@ -350,6 +355,9 @@ fn encodeOps(d: *DrawList, long: bool) void {
 
 /// `color` (rgba8, alpha in the top byte) with its alpha times `alpha`, rounded. Exact for 1.
 pub inline fn fade(color: u32, alpha: f32) u32 {
+    // Nearly every node is opaque, and 1 gives the colour back: one jump on that, where the
+    // rounding was a call per text run.
+    if (alpha == 1) return color;
     const a: f32 = @floatFromInt(color >> 24);
     const scaled: u32 = @intFromFloat(@round(a * std.math.clamp(alpha, 0, 1)));
     return (color & 0x00ff_ffff) | (scaled << 24);

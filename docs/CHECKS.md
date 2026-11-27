@@ -160,6 +160,15 @@ jump those merges added was removed). Each remaining jump was read in the disass
   springs, 6.6 -> 6.0 on list, 8.0 -> 7.3 on resize, and a built frame of form 10.0 -> 9.4;
   instructions a frame 406,217 -> 382,354, 102,948 -> 99,837, 127,638 -> 123,128 and
   49,593 -> 48,267, with the reset's fills of the lean columns counted.
+- `p_paint` jcc 53 -> 59, short_fwd 2 -> 7; `p_paint_layered` 23 -> 27, short_fwd 0 -> 1:
+  sweep 1 no longer writes the quad of a plain node with neither colour (a container, a text
+  leaf: about half the nodes of a form or a list), where it wrote 136 bytes and left them
+  behind, and `fade` returns an opaque node's colour without rounding it. Each is a short jump
+  over the work, one per form of the sweep and per use of `fade`. On bench/vs/lcgf
+  (x86_64_v3, 3,000 polls) list took 97,561 instead of 99,837 instructions a frame, resize
+  115,996 instead of 123,128, form 47,408 instead of 48,267, and springs, every node of which
+  is painted, 381,975 instead of 382,354; median frame 6.0 -> 5.9 us on list and 7.3 -> 7.0
+  on resize.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.
