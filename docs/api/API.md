@@ -5363,6 +5363,57 @@ The custom widget (`Spec.widget`) of `ct.dock`: its `step` moves the splits and 
 - `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
 - `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
+## `lcgf.widgets_records` (src/widgets/records.zig)
+
+Records (tier 2): a frame built from a node table, as an application that keeps its UI as data (Schemify's `ui.records`) builds it every frame through the runtime front end.
+
+### Top level
+
+- `kind_count = @typeInfo(Kind).@"enum".field_names.len`
+- `Look = struct { style: Style = .{}, text: TextStyle = .{} }`: One look: a node's style and, where it draws text, the text's.
+- `Field = textfield.Text(32)`: The text field each `field` row edits.
+- `TreeState = tree.State(tree_labels.len)`: The tree view each `tree` row shows: `tree_labels` at `tree_depths`.
+- `list_items = [_][]const u8{ "Resistor", "Capacitor", "Inductor", "Diode" }`
+- `tree_labels = [_][]const u8{ "top", "amp", "bias", "out" }`
+- `tree_depths = [_]u8{ 0, 1, 2, 1 }`
+- `radio_captions = [_][]const u8{ "DC", "AC", "Transient" }`
+- `tool_titles = [_][]const u8{ "Wire", "Probe", "Run" }`
+- `menu_def: menu.Def = .{ .items = &.{ "copy", "paste", "delete" } }`
+- `menu_texts = [_][]const u8{ "Copy", "Paste", "Delete" }`
+- `bar_def: menubar.BarDef = .{ .names = &.{ "file", "edit" }, .menus = &.{ menu.file_menu, menubar.edit_menu } }`
+- `bar_texts = [_][]const u8{ "File", "Edit" }`
+- `bar_items = [_][]const []const u8{ &menu.file_texts, &.{ "Undo", "Redo" } }`
+- `max_depth = 32`: The deepest nesting `build` follows.
+- `fn kindLooks(th: *const Theme) [kind_count]Look`: Each kind's look in theme `th`: the style and text its theme function uses.
+- `fn build(f: *Frame, th: *const Theme, id: Id, t: Table, looks: []const Look, st: State) void`: Builds the table's rows into `f`, at the depth `f` is open at (the page's root, so the overlays float over everything): one pass over the rows, then one over the overlays.
+- `fn SceneState(comptime n: usize) type`: State for `scene`, in static memory (the scene's rows, at their defaults; splits at half).
+
+### `Kind` (enum)
+What a row builds.
+
+- `fn container(k: Kind) bool`: Whether rows deeper than this one are its children.
+
+### `Table` (struct)
+The node table, one row per node in depth-first order.
+
+Fields: `kind`, `depth`, `text`, `look`
+
+- `fn len(t: Table) u32`
+- `fn subtreeEnd(t: Table, r: u32) u32`: The row after the last of row `r`'s descendants.
+
+### `State` (struct)
+Per-row state, each column as long as the table (a row uses the columns its kind reads): `on` for a toggle, checkbox, switch, dialog or popup; `value` for a slider, progress bar or split; `sel` for a list, radio group, tab set or toolbar.
+
+Fields: `on`, `value`, `sel`, `fields`, `trees`, `docks`, `menu`, `bar`
+
+
+### `SceneState(..)` (generic struct)
+State for `scene`, in static memory (the scene's rows, at their defaults; splits at half).
+
+Fields: `on`, `value`, `sel`, `fields`, `trees`, `docks`, `menu`, `bar`
+
+- `fn state(s: *@This()) State`
+
 ## `lcgf.widgets_scroll` (src/widgets/scroll.zig)
 
 Scroll area (tier 2): a viewport that clips its content and shows the part at a vertical offset.
