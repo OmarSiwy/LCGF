@@ -3,7 +3,7 @@
 // lib.rs as `sys` (`include!`). The lane-named frames are lib.rs's (lcgf_lanes.h).
 
 /// The layout of every type here the library reads: compare with `lcgf_layout()`.
-pub const LCGF_LAYOUT: u32 = 0x6affb337;
+pub const LCGF_LAYOUT: u32 = 0xd5ac2371;
 pub const LCGF_CONTEXT_ALIGN: usize = 64;
 pub const LCGF_COLUMN_ALIGN: usize = 64;
 pub const LCGF_NO_WIDGET: u32 = 0xffff_ffff;
@@ -45,9 +45,22 @@ pub struct lcgf_limits {
     pub customs: u32,
     pub strings: u32,
     pub anims: u32,
+    pub tweens: u32,
+    pub flips: u32,
+    pub signals: u32,
     pub depth: u32,
+    pub timers: u32,
+    pub memos: u32,
+    pub damage: u32,
 }
-const _: () = assert!(core::mem::size_of::<lcgf_limits>() == 24);
+const _: () = assert!(core::mem::size_of::<lcgf_limits>() == 12 * 4);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lcgf_keys {
+    pub bits: [u64; 4],
+}
+const _: () = assert!(core::mem::size_of::<lcgf_keys>() == 32);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -63,17 +76,50 @@ const _: () = assert!(core::mem::size_of::<lcgf_key_event>() == 12);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct lcgf_input {
-    pub viewport: [f32; 2],
-    pub pointer: [f32; 2],
-    pub dt: f32,
-    pub scale: f32,
-    pub buttons: u32,
-    pub mods: u32,
-    pub events: *const lcgf_key_event,
-    pub events_len: u32,
+pub struct lcgf_contact {
+    pub id: u32,
+    pub kind: u8,
+    pub down: bool,
+    pub _pad: [u8; 2],
+    pub pos: [f32; 2],
+    pub pressure: f32,
+    pub tilt: [f32; 2],
 }
-const _: () = assert!(core::mem::size_of::<lcgf_input>() == 48);
+const _: () = assert!(core::mem::size_of::<lcgf_contact>() == 28);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lcgf_appearance {
+    pub dark: u32,
+    pub accent: u32,
+}
+const _: () = assert!(core::mem::size_of::<lcgf_appearance>() == 2 * 4);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lcgf_input {
+    pub time: f64,
+    pub dt: f32,
+    pub viewport: [f32; 2],
+    pub scale: f32,
+    pub pointer: [f32; 2],
+    pub buttons: u8,
+    pub wheel: [f32; 2],
+    pub scroll: [f32; 2],
+    pub mods: u8,
+    pub keys: lcgf_keys,
+    pub text: *const u8,
+    pub text_len: usize,
+    pub events: *const lcgf_key_event,
+    pub events_len: usize,
+    pub contacts: *const lcgf_contact,
+    pub contacts_len: usize,
+    pub safe_area: [f32; 4],
+    pub appearance: lcgf_appearance,
+    pub primary_pointer: u8,
+    pub redraw: bool,
+}
+const _: () = assert!(core::mem::size_of::<lcgf_input>() == 168);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -472,6 +518,11 @@ pub struct lcgf_canvas_text_style {
     pub pad: [u8; 2],
 }
 const _: () = assert!(core::mem::size_of::<lcgf_canvas_text_style>() == 8);
+
+/// `input`'s defaults in C form.
+pub const LCGF_INPUT_DEFAULT: lcgf_input = lcgf_input { time: 0.0, dt: 0.016666668, viewport: [800.0, 600.0], scale: 1.0, pointer: [-1.0, -1.0], buttons: 0, wheel: [0.0, 0.0], scroll: [0.0, 0.0], mods: 0, keys: lcgf_keys { bits: [0, 0, 0, 0] }, text: core::ptr::null(), text_len: 0, events: core::ptr::null(), events_len: 0, contacts: core::ptr::null(), contacts_len: 0, safe_area: [0.0, 0.0, 0.0, 0.0], appearance: lcgf_appearance { dark: 0, accent: 0 }, primary_pointer: 255, redraw: false };
+/// `limits`'s defaults in C form.
+pub const LCGF_LIMITS_DEFAULT: lcgf_limits = lcgf_limits { nodes: 4096, texts: 1024, customs: 64, strings: 65536, anims: 256, tweens: 128, flips: 64, signals: 256, depth: 64, timers: 32, memos: 128, damage: 0 };
 
 unsafe extern "C" {
     /// Bytes a context of `limits` needs, its own included: the buffer `lcgf_context_init` takes.

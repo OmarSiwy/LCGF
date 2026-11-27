@@ -95,4 +95,9 @@ struct Spring {
 };
 static_assert(sizeof(Spring) == sizeof(lcgf_spring) && sizeof(Spring) == 2 * 4);
 
+/// `input`'s defaults in C form.
+inline constexpr lcgf_input input_default = {0, 0.016666668f, {800, 600}, 1, {-1, -1}, 0, {0, 0}, {0, 0}, 0, {{0, 0, 0, 0}}, nullptr, 0, nullptr, 0, nullptr, 0, {0, 0, 0, 0}, {0, 0}, 255, false};
+/// `limits`'s defaults in C form.
+inline constexpr lcgf_limits limits_default = {4096, 1024, 64, 65536, 256, 128, 64, 256, 64, 32, 128, 0};
+
 } // namespace lcgf

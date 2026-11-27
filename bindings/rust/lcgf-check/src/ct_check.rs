@@ -116,7 +116,7 @@ fn tab_of(f: u32) -> [KeyEvent; 1] {
         kind: 0,
         mods: if f % 15 == 5 { Input::SHIFT as u8 } else { 0 },
         code: Input::TAB,
-        pad: 0,
+        _pad: 0,
         at: 0,
         len: 0,
     }]

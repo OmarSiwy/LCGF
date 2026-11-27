@@ -31,7 +31,136 @@ pub fn Words(comptime T: type) type {
     return extern struct {
         w: [words.wordsOf(T)]u32,
         pub const Zig = T;
+        pub const words_form = true;
     };
+}
+
+/// Whether `T` crosses as words: floats, ints of 32 bits or fewer, bools, enums, bitpacks,
+/// optional enums, and arrays and structs of them.
+pub fn wordable(comptime T: type) bool {
+    return comptime wordableIn(T);
+}
+
+fn wordableIn(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .float => |f| f.bits == 32,
+        .int => |i| i.bits <= 32,
+        .bool, .@"enum" => true,
+        .optional => |o| @typeInfo(o.child) == .@"enum",
+        .array => |a| wordableIn(a.child),
+        .@"struct" => |s| s.backing_integer != null or blk: {
+            for (s.field_types) |F| if (!wordableIn(F)) break :blk false;
+            break :blk true;
+        },
+        else => false,
+    };
+}
+
+/// The C form of a struct of no C layout that cannot be words (`Input`): an extern struct of
+/// its fields in order, each in its C form: a slice is a pointer (null when empty) and a `_len`,
+/// a nested struct its own C form, a bitpack its backing integer, an enum its tag.
+pub fn CForm(comptime T: type) type {
+    return extern struct {
+        f: Fields(T),
+        pub const Zig = T;
+        pub const c_form = true;
+    };
+}
+
+/// The C type of a field of type `F`, and the C fields it becomes.
+fn cField(comptime F: type) []const type {
+    return switch (@typeInfo(F)) {
+        .pointer => |p| if (p.size == .slice) &.{ ?[*]const p.child, usize } else &.{F},
+        .@"struct" => |s| if (s.backing_integer) |B| &.{B} else if (s.layout == .@"extern") &.{F} else &.{Form(F)},
+        .@"enum" => |e| &.{e.tag_type},
+        // An optional enum is its tag, all ones for null (as in words).
+        .optional => |o| if (@typeInfo(o.child) == .@"enum") &.{@typeInfo(o.child).@"enum".tag_type} else &.{F},
+        .array => |a| if (isDirect(a.child)) &.{F} else &.{[a.len]cField(a.child)[0]},
+        else => &.{F},
+    };
+}
+
+pub fn Fields(comptime T: type) type {
+    const s = @typeInfo(T).@"struct";
+    var names: []const []const u8 = &.{};
+    var field_types: []const type = &.{};
+    for (s.field_names, s.field_types) |n, F| {
+        const C = cField(F);
+        names = names ++ &[_][]const u8{n};
+        field_types = field_types ++ &[_]type{C[0]};
+        if (C.len == 2) {
+            names = names ++ &[_][]const u8{n ++ "_len"};
+            field_types = field_types ++ &[_]type{C[1]};
+        }
+    }
+    const na: [names.len][]const u8 = names[0..names.len].*;
+    const ta: [field_types.len]type = field_types[0..field_types.len].*;
+    return @Struct(.@"extern", null, &na, &ta, &@splat(.{}));
+}
+
+/// `T`'s C form (words or `CForm`).
+pub fn Form(comptime T: type) type {
+    return if (wordable(T)) Words(T) else CForm(T);
+}
+
+/// `T` from its C form.
+pub fn decode(comptime T: type, c: *const Form(T)) T {
+    if (comptime wordable(T)) return words.get(T, &c.w);
+    var v: T = undefined;
+    inline for (@typeInfo(T).@"struct".field_names) |n| @field(v, n) = fromField(@FieldType(T, n), c.f, n);
+    return v;
+}
+
+/// `T`'s C form of `v`.
+pub fn encode(comptime T: type, v: T, out: *Form(T)) void {
+    if (comptime wordable(T)) return words.put(T, v, &out.w);
+    inline for (@typeInfo(T).@"struct".field_names) |n| toField(@FieldType(T, n), @field(v, n), &out.f, n);
+}
+
+fn fromField(comptime F: type, c: anytype, comptime n: []const u8) F {
+    const x = @field(c, n);
+    return switch (@typeInfo(F)) {
+        .pointer => |p| if (p.size == .slice) (if (x) |ptr| ptr[0..@field(c, n ++ "_len")] else &.{}) else x,
+        .@"struct" => |s| if (s.backing_integer != null) @bitCast(x) else if (s.layout == .@"extern") x else decode(F, &x),
+        .@"enum" => fromC(F, .{}, .{@as(u32, x)}, 0),
+        .optional => |o| if (@typeInfo(o.child) == .@"enum") (if (x == std.math.maxInt(@TypeOf(x))) null else fromC(o.child, .{}, .{@as(u32, x)}, 0)) else x,
+        .array => |a| if (comptime isDirect(a.child)) x else blk: {
+            var out: F = undefined;
+            for (&out, x) |*o, e| o.* = fromField(a.child, .{ .e = e }, "e");
+            break :blk out;
+        },
+        else => x,
+    };
+}
+
+fn toField(comptime F: type, v: F, c: anytype, comptime n: []const u8) void {
+    switch (@typeInfo(F)) {
+        .pointer => |p| if (p.size == .slice) {
+            @field(c, n) = if (v.len == 0) null else v.ptr;
+            @field(c, n ++ "_len") = v.len;
+        } else {
+            @field(c, n) = v;
+        },
+        .@"struct" => |s| if (s.backing_integer != null) {
+            @field(c, n) = @bitCast(v);
+        } else if (s.layout == .@"extern") {
+            @field(c, n) = v;
+        } else encode(F, v, &@field(c, n)),
+        .@"enum" => @field(c, n) = @backingInt(v),
+        .optional => |o| if (@typeInfo(o.child) == .@"enum") {
+            @field(c, n) = if (v) |e| @backingInt(e) else std.math.maxInt(@typeInfo(o.child).@"enum".tag_type);
+        } else {
+            @field(c, n) = v;
+        },
+        .array => |a| if (comptime isDirect(a.child)) {
+            @field(c, n) = v;
+        } else for (&@field(c, n), v) |*o, e| {
+            var t: struct { e: cField(a.child)[0] } = undefined;
+            toField(a.child, e, &t, "e");
+            o.* = t.e;
+        },
+        else => @field(c, n) = v,
+    }
 }
 
 /// A type the mapping passes through as it is: C has the same thing.
@@ -53,11 +182,11 @@ pub fn CParams(comptime T: type, comptime handles: anytype) []const type {
     if (isDirect(T)) return &.{T};
     return switch (@typeInfo(T)) {
         .@"enum" => &.{u32},
-        .@"struct" => |s| if (s.backing_integer) |B| &.{B} else &.{*const Words(T)},
+        .@"struct" => |s| if (s.backing_integer) |B| &.{B} else &.{*const Form(T)},
         .pointer => |p| if (p.size == .slice)
             &.{ [*]const p.child, usize }
         else if (p.attrs.@"const" and @typeInfo(p.child) == .@"struct")
-            &.{*const Words(p.child)}
+            &.{*const Form(p.child)}
         else
             @compileError("abi: no C form for " ++ @typeName(T)),
         else => @compileError("abi: no C form for " ++ @typeName(T)),
@@ -104,7 +233,7 @@ pub fn cParamsOf(comptime F: type, comptime handles: anytype) []const type {
     for (info.param_types) |P| out = out ++ CParams(P.?, handles);
     const R = info.return_type.?;
     if (isSlice(R)) out = out ++ &[_]type{*usize};
-    if (isWordsResult(R)) out = out ++ &[_]type{*Words(R)};
+    if (isWordsResult(R)) out = out ++ &[_]type{*Form(R)};
     return out;
 }
 
@@ -119,7 +248,7 @@ pub fn fromC(comptime T: type, comptime handles: anytype, c: anytype, comptime a
             inline for (e.field_values) |v| if (c[at] == v) return @fromBackingInt(@as(e.tag_type, v));
             return @fromBackingInt(@as(e.tag_type, e.field_values[0]));
         },
-        .@"struct" => |s| return if (s.backing_integer != null) @bitCast(c[at]) else words.get(T, &c[at].w),
+        .@"struct" => |s| return if (s.backing_integer != null) @bitCast(c[at]) else decode(T, c[at]),
         // A `*const T` of words is decoded by `invoke`, into room the call can point at.
         .pointer => return c[at][0..c[at + 1]],
         else => comptime unreachable,
@@ -152,14 +281,14 @@ fn invoke(comptime f: anytype, comptime handles: anytype, c: anytype) CResult(@t
         if (ptr) {
             const Child = @typeInfo(P.?).pointer.child;
             const name = std.fmt.comptimePrint("{d}", .{k});
-            @field(scratch, name) = words.get(Child, &c[at].w);
+            @field(scratch, name) = decode(Child, c[at]);
             args[k] = &@field(scratch, name);
         } else args[k] = fromC(P.?, handles, c, at);
         at += n;
     }
     const r = @call(.always_inline, f, args);
     if (comptime isSlice(R)) c[at].* = r.len;
-    if (comptime isWordsResult(R)) return words.put(R, r, &c[at].w);
+    if (comptime isWordsResult(R)) return encode(R, r, c[at]);
     return toC(R, r);
 }
 
@@ -274,4 +403,18 @@ test "abi: a wrapper decodes, calls and encodes" {
     var len: usize = 0;
     const p = Wrap(S.room, .{S.H}).c(@ptrCast(&h), &len);
     try testing.expectEqualStrings("r", p[0..len]);
+}
+
+test "abi: a struct with slices crosses as its C form and back" {
+    const Input = @import("../core/input.zig").Input;
+    const ev = [_]Input.Event{.{ .kind = .press, .code = 0x2b }};
+    const in: Input = .{ .time = 1.5, .viewport = .{ 300, 200 }, .buttons = .{ .left = true }, .text = "hi", .events = &ev, .appearance = .{ .dark = true } };
+    var c: Form(Input) = undefined;
+    encode(Input, in, &c);
+    try testing.expectEqual(2, c.f.text_len);
+    try testing.expectEqual(null, c.f.contacts);
+    const back = decode(Input, &c);
+    try testing.expectEqualDeep(in, back);
+    try testing.expect(!wordable(Input));
+    try testing.expect(wordable(types.Style));
 }

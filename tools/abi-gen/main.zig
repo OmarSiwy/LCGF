@@ -462,21 +462,29 @@ fn typesOf(a: std.mem.Allocator, o: *std.ArrayList(u8), done: *Emitted, comptime
                 inline for (s.field_names) |n| if (n[0] != '_') try o.print(a, " {s}", .{n});
                 return o.print(a, ". */\ntypedef {s} {s};\n\n", .{ comptime spell(B), comptime nameOf(T) });
             }
-            if (@hasDecl(T, "Zig")) return wordsStruct(a, o, done, T.Zig);
+            if (@hasDecl(T, "words_form")) return wordsStruct(a, o, done, T.Zig);
+            if (@hasDecl(T, "c_form")) return externC(a, o, done, @FieldType(T, "f"), comptime nameOf(T.Zig), @sizeOf(T));
             if (s.layout != .@"extern") return;
-            if (done.contains(comptime nameOf(T))) return;
-            inline for (s.field_types) |F| try typesOf(a, o, done, F);
-            try done.put(a, comptime nameOf(T), {});
-            try o.print(a, "typedef struct {{\n", .{});
-            inline for (s.field_names, s.field_types, 0..) |n, F, k| {
-                // Bytes with a length after them (`strings`, `strings_len`) are text.
-                const text = F == [*]const u8 and k + 1 < s.field_names.len and std.mem.eql(u8, s.field_names[k + 1], n ++ "_len");
-                try o.print(a, "    {s};\n", .{if (text) "const char *" ++ n else comptime declare(F, n, false)});
-            }
-            try o.print(a, "}} {s};\nLCGF_STATIC_ASSERT(sizeof({s}) == {d}, \"{s}\");\n\n", .{ comptime nameOf(T), comptime nameOf(T), @sizeOf(T), comptime nameOf(T) });
+            return externC(a, o, done, T, comptime nameOf(T), @sizeOf(T));
         },
         else => {},
     }
+}
+
+/// Extern struct `T` as a C typedef named `name`, its field types first.
+fn externC(a: std.mem.Allocator, o: *std.ArrayList(u8), done: *Emitted, comptime T: type, comptime name: []const u8, comptime size: usize) !void {
+    const s = @typeInfo(T).@"struct";
+    if (done.contains(name)) return;
+    inline for (s.field_types) |F| try typesOf(a, o, done, F);
+    try done.put(a, name, {});
+    try o.print(a, "typedef struct {{\n", .{});
+    inline for (s.field_names, s.field_types, 0..) |n, F, k| {
+        // Bytes with a length after them (`strings`, `strings_len`; `text`, `text_len`) are text.
+        const bytes = F == [*]const u8 or F == ?[*]const u8;
+        const text = bytes and k + 1 < s.field_names.len and std.mem.eql(u8, s.field_names[k + 1], n ++ "_len");
+        try o.print(a, "    {s};\n", .{if (text) "const char *" ++ n else comptime declare(F, n, false)});
+    }
+    try o.print(a, "}} {s};\nLCGF_STATIC_ASSERT(sizeof({s}) == {d}, \"{s}\");\n\n", .{ name, name, size, name });
 }
 
 /// `T`'s words as a C struct: a nested struct of no C layout is its own words struct.
@@ -809,7 +817,8 @@ fn typesCpp(a: std.mem.Allocator) ![]const u8 {
         try o.print(a, "    const {s}* raw() const {{ return reinterpret_cast<const {s}*>(this); }}\n}};\n", .{ comptime nameOf(T), comptime nameOf(T) });
         try o.print(a, "static_assert(sizeof({s}) == sizeof({s}) && sizeof({s}) == {d} * 4);\n\n", .{ e[1], comptime nameOf(T), e[1], words.wordsOf(T) });
     }
-    try o.appendSlice(a, "} // namespace lcgf\n");
+    try o.appendSlice(a, try defaultsOf(a, .cpp));
+    try o.appendSlice(a, "\n} // namespace lcgf\n");
     return o.items;
 }
 
@@ -912,17 +921,23 @@ fn sysTypes(a: std.mem.Allocator, o: *std.ArrayList(u8), done: *Emitted, comptim
                 try done.put(a, comptime nameOf(T), {});
                 return o.print(a, "pub type {s} = {s};\n\n", .{ comptime nameOf(T), comptime rs(B) });
             }
-            if (@hasDecl(T, "Zig")) return sysWords(a, o, done, T.Zig);
+            if (@hasDecl(T, "words_form")) return sysWords(a, o, done, T.Zig);
+            if (@hasDecl(T, "c_form")) return sysExtern(a, o, done, @FieldType(T, "f"), comptime nameOf(T.Zig), @sizeOf(T));
             if (st.layout != .@"extern") return;
-            if (done.contains(comptime nameOf(T))) return;
-            inline for (st.field_types) |F| try sysTypes(a, o, done, F);
-            try done.put(a, comptime nameOf(T), {});
-            try o.print(a, "#[repr(C)]\n#[derive(Clone, Copy)]\npub struct {s} {{\n", .{comptime nameOf(T)});
-            inline for (st.field_names, st.field_types) |n, F| try o.print(a, "    pub {s}: {s},\n", .{ try rustName(a, n), comptime rs(F) });
-            try o.print(a, "}}\nconst _: () = assert!(core::mem::size_of::<{s}>() == {d});\n\n", .{ comptime nameOf(T), @sizeOf(T) });
+            return sysExtern(a, o, done, T, comptime nameOf(T), @sizeOf(T));
         },
         else => {},
     }
+}
+
+fn sysExtern(a: std.mem.Allocator, o: *std.ArrayList(u8), done: *Emitted, comptime T: type, comptime name: []const u8, comptime size: usize) !void {
+    const st = @typeInfo(T).@"struct";
+    if (done.contains(name)) return;
+    inline for (st.field_types) |F| try sysTypes(a, o, done, F);
+    try done.put(a, name, {});
+    try o.print(a, "#[repr(C)]\n#[derive(Clone, Copy)]\npub struct {s} {{\n", .{name});
+    inline for (st.field_names, st.field_types) |n, F| try o.print(a, "    pub {s}: {s},\n", .{ try rustName(a, n), comptime rs(F) });
+    try o.print(a, "}}\nconst _: () = assert!(core::mem::size_of::<{s}>() == {d});\n\n", .{ name, size });
 }
 
 fn sysWords(a: std.mem.Allocator, o: *std.ArrayList(u8), done: *Emitted, comptime T: type) !void {
@@ -1001,7 +1016,8 @@ fn sysRust(src: *Sources) ![]const u8 {
         inline for (@typeInfo(F).@"fn".param_types) |P| try sysTypes(a, &o, &done, P.?);
         try sysTypes(a, &o, &done, @typeInfo(F).@"fn".return_type.?);
     };
-    try o.appendSlice(a, "unsafe extern \"C\" {\n");
+    try o.appendSlice(a, try defaultsOf(a, .rust));
+    try o.appendSlice(a, "\nunsafe extern \"C\" {\n");
     inline for (api.exports) |E| {
         const impl = try src.find(E.impl);
         const doc = if (impl.doc.len != 0) impl.doc else if (E.api) |l| (try src.find(l)).doc else "";
@@ -1015,5 +1031,87 @@ fn sysRust(src: *Sources) ![]const u8 {
         }
     };
     try o.appendSlice(a, "}\n");
+    return o.items;
+}
+
+// ---- defaults of C structs -------------------------------------------------------------------
+
+/// C value `v` of C type `T` as `lang` writes it (C++ aggregate, Rust struct literal).
+fn cLiteral(a: std.mem.Allocator, comptime T: type, v: T, comptime lang: Lang) ![]const u8 {
+    switch (@typeInfo(T)) {
+        .float => return float(a, @floatCast(v), lang),
+        .int => return std.fmt.allocPrint(a, "{d}", .{v}),
+        .bool => return if (v) "true" else "false",
+        .pointer, .optional => {
+            std.debug.assert(@intFromPtr(@as(?*const anyopaque, @ptrCast(v))) == 0);
+            return if (lang == .cpp) "nullptr" else "core::ptr::null()";
+        },
+        .array => |x| {
+            var out: std.ArrayList(u8) = .empty;
+            try out.append(a, if (lang == .cpp) '{' else '[');
+            for (v, 0..) |e, k| {
+                if (k != 0) try out.appendSlice(a, ", ");
+                try out.appendSlice(a, try cLiteral(a, x.child, e, lang));
+            }
+            try out.append(a, if (lang == .cpp) '}' else ']');
+            return out.items;
+        },
+        .@"struct" => |st| {
+            if (st.backing_integer) |B| return std.fmt.allocPrint(a, "{d}", .{@as(B, @bitCast(v))});
+            if (@hasDecl(T, "words_form")) return wordsValue(a, T.Zig, words.get(T.Zig, &v.w), lang);
+            if (@hasDecl(T, "c_form")) return fieldsValue(a, @FieldType(T, "f"), v.f, comptime nameOf(T.Zig), lang);
+            return fieldsValue(a, T, v, comptime nameOf(T), lang);
+        },
+        .@"enum" => return std.fmt.allocPrint(a, "{d}", .{@backingInt(v)}),
+        else => @compileError("abi-gen: no C value for " ++ @typeName(T)),
+    }
+}
+
+fn fieldsValue(a: std.mem.Allocator, comptime T: type, v: T, comptime name: []const u8, comptime lang: Lang) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(a, if (lang == .cpp) "{" else name ++ " { ");
+    inline for (@typeInfo(T).@"struct".field_names, 0..) |n, k| {
+        if (k != 0) try out.appendSlice(a, ", ");
+        if (lang == .rust) try out.print(a, "{s}: ", .{try rustName(a, n)});
+        try out.appendSlice(a, try cLiteral(a, @FieldType(T, n), @field(v, n), lang));
+    }
+    try out.appendSlice(a, if (lang == .cpp) "}" else " }");
+    return out.items;
+}
+
+/// A words struct's value: each Zig field as its word (a float, else a u32).
+fn wordsValue(a: std.mem.Allocator, comptime Z: type, v: Z, comptime lang: Lang) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(a, if (lang == .cpp) "{" else comptime nameOf(Z) ++ " { ");
+    inline for (@typeInfo(Z).@"struct".field_names, 0..) |n, k| {
+        if (k != 0) try out.appendSlice(a, ", ");
+        if (lang == .rust) try out.print(a, "{s}: ", .{try rustName(a, comptime fieldName(n))});
+        const F = @FieldType(Z, n);
+        if (F == f32) {
+            try out.appendSlice(a, try float(a, @field(v, n), lang));
+        } else if (@typeInfo(F) == .@"struct" and @typeInfo(F).@"struct".backing_integer == null) {
+            try out.appendSlice(a, try wordsValue(a, F, @field(v, n), lang));
+        } else {
+            var w: [words.wordsOf(F)]u32 = undefined;
+            words.put(F, @field(v, n), &w);
+            if (w.len == 1) try out.print(a, "{d}", .{w[0]}) else try out.appendSlice(a, try cLiteral(a, [w.len]u32, w, lang));
+        }
+    }
+    try out.appendSlice(a, if (lang == .cpp) "}" else " }");
+    return out.items;
+}
+
+fn defaultsOf(a: std.mem.Allocator, comptime lang: Lang) ![]const u8 {
+    var o: std.ArrayList(u8) = .empty;
+    inline for (api.defaults) |d| {
+        const T = d[0];
+        var c: abi.Form(T) = undefined;
+        abi.encode(T, .{}, &c);
+        const v = try cLiteral(a, abi.Form(T), c, lang);
+        if (lang == .cpp)
+            try o.print(a, "/// `{s}`'s defaults in C form.\ninline constexpr {s} {s}_default = {s};\n", .{ d[1], comptime nameOf(T), d[1], v })
+        else
+            try o.print(a, "/// `{s}`'s defaults in C form.\npub const LCGF_{s}_DEFAULT: {s} = {s};\n", .{ d[1], try upper(a, d[1]), comptime nameOf(T), v });
+    }
     return o.items;
 }

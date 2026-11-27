@@ -12,6 +12,7 @@
 //! coordinate type and the lane count, as in `lcgf_frame_u32_f32_l8`.
 
 const std = @import("std");
+const abi = @import("abi.zig");
 const fmt = @import("../core/fmt.zig");
 const plan = @import("plan.zig");
 const types = @import("../core/types.zig");
@@ -424,32 +425,8 @@ pub const Ui = struct {
 
 // ---- the C seam (src/abi/lcgf.h) ------------------------------------------------------------
 
-/// The input a host passes: the fields the reference widgets read.
-pub const CInput = extern struct {
-    viewport: [2]f32 = .{ 800, 600 },
-    pointer: [2]f32 = Input.outside,
-    dt: f32 = 1.0 / 60.0,
-    scale: f32 = 1,
-    /// Bit 0 left, 1 right, 2 middle.
-    buttons: u32 = 0,
-    /// Bit 0 shift, 1 ctrl, 2 alt, 3 cmd.
-    mods: u32 = 0,
-    /// Key presses this frame, in order (`Input.Event`, 12 bytes each); Tab moves focus.
-    events: ?[*]const Input.Event = null,
-    events_len: u32 = 0,
-
-    pub fn input(c: *const CInput) Input {
-        return .{
-            .viewport = c.viewport,
-            .pointer = c.pointer,
-            .dt = c.dt,
-            .scale = c.scale,
-            .buttons = @bitCast(@as(u8, @truncate(c.buttons))),
-            .mods = @bitCast(@as(u8, @truncate(c.mods))),
-            .events = if (c.events) |e| e[0..c.events_len] else &.{},
-        };
-    }
-};
+/// The input a host passes: all of `Input`, in its C form (`lcgf_input`, src/abi/abi.zig).
+pub const CInput = abi.Form(Input);
 
 /// A frame's draw list as columns, for C, C++ and Rust to read in place.
 pub const CDraw = extern struct {
@@ -548,7 +525,7 @@ fn cUiInit(words: [*]const u32, len: usize, buf: *anyopaque, buf_len: usize) cal
 
 fn cFrame(buf: *anyopaque, state: *anyopaque, in: *const CInput, out: *CFrame) callconv(.c) void {
     const ui: *Ui = @ptrCast(@alignCast(buf));
-    const input = in.input();
+    const input = abi.decode(Input, in);
     const o = ui.frame(@ptrCast(state), &input);
     out.* = .{ .draw = cDraw(o.draw), .widget = o.widget, .value = o.value, .focus = o.focus, .wake = o.wake };
 }

@@ -1,6 +1,6 @@
 //! The canvas batch behind the C seam (lcgf.h `lcgf_canvas_*`): `canvas.Instances` in the
 //! caller's memory, its builders, `kill`, `clearDirty` and `hit`, for C, C++ (lcgf/runtime.hpp
-//! `lcgf::Canvas`) and Rust (`lcgf::runtime::Canvas`). `lcgf_rt_canvas` (runtime.zig) puts one
+//! `lcgf::Canvas`) and Rust (`lcgf::runtime::Canvas`). `lcgf_frame_canvas` (api.zig) puts one
 //! in a frame.
 //!
 //! An `lcgf_canvas` is the `Instances` itself, at the start of the caller's buffer, its columns

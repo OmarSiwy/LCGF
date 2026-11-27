@@ -97,7 +97,7 @@ static TAB: [lcgf::KeyEvent; 1] = [lcgf::KeyEvent {
     kind: 0,
     mods: 0,
     code: lcgf::Input::TAB,
-    pad: 0,
+    _pad: 0,
     at: 0,
     len: 0,
 }];

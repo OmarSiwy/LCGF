@@ -124,6 +124,12 @@ if frame.events.clicked(mixer::Widget::Mute) { /* ... */ }
 The draw list borrows the UI, so it cannot outlive the next frame. String fields are
 `&'static str`, so a frame cannot show freed bytes.
 
+The crate is at 0.1 and its API may still break until the C ABI settles. From A5,
+`lcgf::Input` is `lcgf::sys::lcgf_input`, all of Zig's `Input`: `buttons` and `mods` are `u8`,
+`events_len` is a `usize`, and `Input { pointer, ..Input::default() }` fills the rest.
+`Limits` is `sys::lcgf_limits`, all of Zig's `Limits`: write `Limits { nodes: 256,
+..Limits::default() }`.
+
 ## Runtime UIs
 
 A UI built in code each frame, as a Zig program does with `ctx.begin` and `f.open`, uses

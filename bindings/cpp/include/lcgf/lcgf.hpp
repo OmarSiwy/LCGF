@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include <lcgf.h>
+#include <lcgf/types.hpp>
 
 namespace lcgf {
 
@@ -47,10 +48,10 @@ struct Input : lcgf_input {
     static constexpr std::uint32_t left = 1, right = 2, middle = 4;
     static constexpr std::uint32_t shift = 1, ctrl = 2, alt = 4, cmd = 8;
     static constexpr std::uint8_t tab = 0x2b;
-    constexpr Input() : lcgf_input{{800, 600}, {-1, -1}, 1.0f / 60.0f, 1, 0, 0, nullptr, 0} {}
+    constexpr Input() : lcgf_input(input_default) {}
     void keys(std::span<const lcgf_key_event> e) {
         events = e.data();
-        events_len = static_cast<std::uint32_t>(e.size());
+        events_len = e.size();
     }
 };
 

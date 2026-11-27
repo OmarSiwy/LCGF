@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 /* The layout of every type below the library reads: compare with lcgf_layout(). */
-#define LCGF_LAYOUT 0x6affb337u
+#define LCGF_LAYOUT 0xd5ac2371u
 #define LCGF_CONTEXT_ALIGN 64
 #define LCGF_COLUMN_ALIGN 64
 #define LCGF_NO_WIDGET 0xffffffffu
@@ -55,9 +55,20 @@ typedef struct {
     uint32_t customs;
     uint32_t strings;
     uint32_t anims;
+    uint32_t tweens;
+    uint32_t flips;
+    uint32_t signals;
     uint32_t depth;
+    uint32_t timers;
+    uint32_t memos;
+    uint32_t damage;
 } lcgf_limits;
-LCGF_STATIC_ASSERT(sizeof(lcgf_limits) == 24, "lcgf_limits");
+LCGF_STATIC_ASSERT(sizeof(lcgf_limits) == 12 * 4, "lcgf_limits: words");
+
+typedef struct {
+    uint64_t bits[4];
+} lcgf_keys;
+LCGF_STATIC_ASSERT(sizeof(lcgf_keys) == 32, "lcgf_keys");
 
 typedef struct {
     uint8_t kind;
@@ -70,16 +81,45 @@ typedef struct {
 LCGF_STATIC_ASSERT(sizeof(lcgf_key_event) == 12, "lcgf_key_event");
 
 typedef struct {
-    float viewport[2];
-    float pointer[2];
+    uint32_t id;
+    uint8_t kind;
+    bool down;
+    uint8_t _pad[2];
+    float pos[2];
+    float pressure;
+    float tilt[2];
+} lcgf_contact;
+LCGF_STATIC_ASSERT(sizeof(lcgf_contact) == 28, "lcgf_contact");
+
+typedef struct {
+    uint32_t dark;
+    uint32_t accent;
+} lcgf_appearance;
+LCGF_STATIC_ASSERT(sizeof(lcgf_appearance) == 2 * 4, "lcgf_appearance: words");
+
+typedef struct {
+    double time;
     float dt;
+    float viewport[2];
     float scale;
-    uint32_t buttons;
-    uint32_t mods;
+    float pointer[2];
+    uint8_t buttons;
+    float wheel[2];
+    float scroll[2];
+    uint8_t mods;
+    lcgf_keys keys;
+    const char *text;
+    size_t text_len;
     const lcgf_key_event *events;
-    uint32_t events_len;
+    size_t events_len;
+    const lcgf_contact *contacts;
+    size_t contacts_len;
+    float safe_area[4];
+    lcgf_appearance appearance;
+    uint8_t primary_pointer;
+    bool redraw;
 } lcgf_input;
-LCGF_STATIC_ASSERT(sizeof(lcgf_input) == 48, "lcgf_input");
+LCGF_STATIC_ASSERT(sizeof(lcgf_input) == 168, "lcgf_input");
 
 typedef struct {
     uint32_t kind;

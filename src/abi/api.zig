@@ -57,9 +57,12 @@ pub const names = .{
     .{ tree.Look, "look" },
     .{ tree.Extra, "extra" },
     .{ view.CView, "view" },
-    .{ CLimits, "limits" },
-    .{ seam.CInput, "input" },
+    .{ context.Limits, "limits" },
+    .{ Input, "input" },
+    .{ Input.Keys, "keys" },
+    .{ Input.Appearance, "appearance" },
     .{ Input.Event, "key_event" },
+    .{ Input.Contact, "contact" },
     .{ seam.CFrame, "ui_output" },
     .{ seam.CDraw, "draw" },
     .{ draw_list.Quad, "quad" },
@@ -93,6 +96,9 @@ pub const column_align = @import("../core/mem.zig").column_align;
 /// types.hpp, bindings/rust/lcgf/src/types.rs, by tools/abi-gen): the enums by name, and the
 /// structs field for field with Zig's defaults, laid out as their words (`lcgf_style`).
 pub const idiom_enums = .{ .{ types.Axis, "Dir" }, .{ types.Align, "Align" }, .{ types.Role, "Role" }, .{ Ease, "Ease" } };
+/// The C structs whose defaults the bindings get as constants (`lcgf::input_default`,
+/// `sys::LCGF_INPUT_DEFAULT`): Zig's defaults in C form.
+pub const defaults = .{ .{ Input, "input" }, .{ context.Limits, "limits" } };
 pub const idiom_structs = .{ .{ types.Size, "Size" }, .{ types.Style, "Style" }, .{ types.TextStyle, "TextStyle" }, .{ base.Theme, "Theme" }, .{ Spring, "Spring" } };
 
 /// Field names C, C++ or Rust cannot take, and what they are called there.
@@ -319,23 +325,13 @@ pub fn isC(comptime f: anytype) bool {
 const CtxH = abi.Handle(Context);
 const FrameH = abi.Handle(Frame);
 
-/// `Limits`' sizes, as C passes them (`lcgf_limits`; A5 makes it all of `Limits`).
-pub const CLimits = extern struct {
-    nodes: u32 = 4096,
-    texts: u32 = 1024,
-    customs: u32 = 64,
-    strings: u32 = 64 * 1024,
-    anims: u32 = 256,
-    depth: u32 = 64,
-
-    fn limits(c: *const CLimits) context.Limits {
-        return .{ .nodes = c.nodes, .texts = c.texts, .customs = c.customs, .strings = c.strings, .anims = c.anims, .depth = c.depth };
-    }
-};
+const CLimits = abi.Form(context.Limits);
+const CInput = abi.Form(Input);
 
 /// What an `lcgf_context` is, at the start of the caller's buffer: the context, the input its
-/// frame reads until `lcgf_frame_end` (A5: `Context.begin` copies it), the font the frame is
-/// laid out with, and the palettes `lcgf_frame_canvas` makes from its options, in two
+/// frame reads until `lcgf_frame_end` (decoded from the caller's `lcgf_input`, so that may be a
+/// temporary), the font the frame is laid out with, and the palettes
+/// `lcgf_frame_canvas` makes from its options, in two
 /// generations as the canvas rows are (a reused canvas keeps last frame's).
 pub const Session = struct {
     ctx: Context,
@@ -364,7 +360,7 @@ fn frameOf(f: *FrameH) *Frame {
 
 /// Bytes a context of `limits` needs, its own included: the buffer `lcgf_context_init` takes.
 fn contextBytes(limits: *const CLimits) callconv(.c) usize {
-    return Session.head() + Context.requiredBytes(limits.limits());
+    return Session.head() + Context.requiredBytes(abi.decode(context.Limits, limits));
 }
 
 /// Places a context of `limits` at the start of `buf` (LCGF_CONTEXT_ALIGN-aligned): `buf` is
@@ -375,21 +371,21 @@ fn contextInit(buf: *anyopaque, len: usize, limits: *const CLimits) callconv(.c)
     if (len < contextBytes(limits)) return @backingInt(seam.Status.buffer_too_small);
     const work: []align(column_align) u8 = @alignCast(bytes[Session.head()..len]);
     const s: *Session = @ptrCast(@alignCast(bytes));
-    s.* = .{ .ctx = Context.init(work, limits.limits()) catch return @backingInt(seam.Status.buffer_too_small) };
+    s.* = .{ .ctx = Context.init(work, abi.decode(context.Limits, limits)) catch return @backingInt(seam.Status.buffer_too_small) };
     return 0;
 }
 
 /// Whether `in` needs a frame: 0 when nothing would change, so the host can sleep.
-fn contextNeedsFrame(ctx: *CtxH, in: *const seam.CInput) callconv(.c) c_int {
-    const input = in.input();
+fn contextNeedsFrame(ctx: *CtxH, in: *const CInput) callconv(.c) c_int {
+    const input = abi.decode(Input, in);
     return @intFromBool(Session.of(ctx).ctx.needsFrame(&input));
 }
 
 /// Starts a frame on `in`, which the context copies: `frame` is valid until `lcgf_frame_end`.
-fn contextBegin(ctx: *CtxH, in: *const seam.CInput, frame_out: *FrameH) callconv(.c) void {
+fn contextBegin(ctx: *CtxH, in: *const CInput, frame_out: *FrameH) callconv(.c) void {
     const s = Session.of(ctx);
-    s.input = in.input();
     s.palette_len = 0;
+    s.input = abi.decode(Input, in);
     frameOf(frame_out).* = s.ctx.begin(&s.input);
 }
 
@@ -410,7 +406,7 @@ fn contextEnableCanvas(ctx: *CtxH, buf: *anyopaque, len: usize) callconv(.c) c_i
 /// Bytes `lcgf_context_enable_canvas` needs for `limits`: the canvas rows and their palettes,
 /// two generations of `customs` each.
 fn contextCanvasBytes(limits: *const CLimits) callconv(.c) usize {
-    return 2 * @as(usize, limits.customs) * (@sizeOf(draw_list.CanvasDraw) + @sizeOf(canvas.Palette));
+    return 2 * @as(usize, abi.decode(context.Limits, limits).customs) * (@sizeOf(draw_list.CanvasDraw) + @sizeOf(canvas.Palette));
 }
 
 fn frameOpenRow(f: *Frame, id: types.Id, row: *const tree.FlatRow) types.Node {
@@ -489,14 +485,21 @@ comptime {
 
 const testing = std.testing;
 
+fn cOf(comptime T: type, v: T) abi.Form(T) {
+    var c: abi.Form(T) = undefined;
+    abi.encode(T, v, &c);
+    return c;
+}
+
 test "api: a frame through the C calls draws what Zig draws" {
-    const l: CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const zl: context.Limits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const l = cOf(context.Limits, zl);
     const n = contextBytes(&l);
     const cbuf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), n);
     defer testing.allocator.free(cbuf);
-    const zbuf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), Context.requiredBytes(l.limits()));
+    const zbuf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), Context.requiredBytes(zl));
     defer testing.allocator.free(zbuf);
-    var in: seam.CInput = .{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } };
+    var in = cOf(Input, .{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } });
     const st: types.Style = .{ .size = .{ .fill, .fill }, .pad = @splat(4), .fill = .rgb(10, 20, 30) };
     var s: abi.Words(types.Style) = undefined;
     words.put(types.Style, st, &s.w);
@@ -509,7 +512,7 @@ test "api: a frame through the C calls draws what Zig draws" {
     var f: Frame = undefined;
     const fh: *FrameH = @ptrCast(&f);
     contextBegin(@ptrCast(cbuf.ptr), &in, fh);
-    in.viewport = .{ 1, 1 };
+    in.f.viewport = .{ 1, 1 };
     var v: f32 = 0.25;
     var on = false;
     _ = abi.Wrap(Frame.open, handles).c(fh, 1, &s);
@@ -522,8 +525,8 @@ test "api: a frame through the C calls draws what Zig draws" {
     frameEnd(fh, &out);
 
     // In Zig.
-    var ctx = try Context.init(zbuf, l.limits());
-    const zin = (seam.CInput{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } }).input();
+    var ctx = try Context.init(zbuf, zl);
+    const zin: Input = .{ .viewport = .{ 300, 200 }, .pointer = .{ 20, 20 } };
     var zf = ctx.begin(&zin);
     var zv: f32 = 0.25;
     var zon = false;
@@ -543,11 +546,12 @@ test "api: a frame through the C calls draws what Zig draws" {
 }
 
 test "api: a row pushed through the C calls is the node its style makes" {
-    const l: CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const zl: context.Limits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const l = cOf(context.Limits, zl);
     var bufs: [2][]align(column_align) u8 = undefined;
     for (&bufs) |*b| b.* = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), contextBytes(&l));
     defer for (bufs) |b| testing.allocator.free(b);
-    const in: seam.CInput = .{ .viewport = .{ 300, 200 } };
+    const in = cOf(Input, .{ .viewport = .{ 300, 200 } });
     const styles = [_]types.Style{
         .{ .size = .{ .fill, .fill }, .pad = @splat(8), .fill = .rgb(10, 20, 30) },
         .{ .size = .{ .px(40), .pct(0.5) }, .radius = 4, .border = 1, .border_color = .rgb(1, 2, 3), .clip = true },
@@ -584,11 +588,12 @@ test "api: a row pushed through the C calls is the node its style makes" {
 }
 
 test "api: unchanged input needs no frame through the C calls" {
-    const l: CLimits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const zl: context.Limits = .{ .nodes = 64, .texts = 64, .strings = 4096, .anims = 16 };
+    const l = cOf(context.Limits, zl);
     const buf = try testing.allocator.alignedAlloc(u8, .fromByteUnits(column_align), contextBytes(&l));
     defer testing.allocator.free(buf);
     try testing.expectEqual(0, contextInit(buf.ptr, buf.len, &l));
-    const in: seam.CInput = .{ .viewport = .{ 300, 200 }, .pointer = .{ 10, 10 } };
+    const in = cOf(Input, .{ .viewport = .{ 300, 200 }, .pointer = .{ 10, 10 } });
     var th: base.Theme = undefined;
     themeDefault(&th);
     var built: u32 = 0;

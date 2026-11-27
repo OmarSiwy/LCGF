@@ -536,6 +536,7 @@ That is about 4,380 hand-written lines against 4,891 today, while the exported s
 
 ### 6.5 Zig-side changes this needs
 - **`Context.begin` copies the Input** into the context (`ctx.input = in.*`), so `Frame.in` never points at caller memory. That removes runtime.zig's shadow, and a Zig footgun. Cost: one ≈200-byte copy per frame. This is an open question for the user.
+  - **Changed in A5 (2026-11-26):** the copy is made in the seam, not in `Context.begin`. Done in the core, it grew every embedded app's flash: cortex-m7 38,012 → 38,204 bytes (+192), rv32imac 58,064 → 58,302 (+238), the same with `@memcpy`; apps that do not use a feature must not grow. api.zig's `Session` holds the input decoded from the caller's `lcgf_input`, so C, C++ and Rust callers get the same guarantee (a temporary `lcgf_input` is fine) at no cost to Zig or embedded. Zig callers keep `Frame.in` pointing at their own `Input`, alive until `end`.
 - **Name collision:** the tables UI's `lcgf_frame_u32_f32_l8` sits inside the new `lcgf_frame_*` namespace. It is renamed `lcgf_ui_frame_u32_f32_l8` (ComptimeUi ↔ `lcgf_ui`); the static frame becomes `lcgf_static_ui_frame_…`.
 - **No declaration enumeration:** api.zig names each method explicitly (`@field(Frame, "open")`). It does not rely on `@typeInfo(..).decls`, which is unverified in 0.17: docs/ZIG_0_17_1.md lists only field reflection, and nothing in the repo uses it.
 - **Tripwire:** a `zig build test` check that fails when a `pub fn` on any container api.zig lists appears in neither api.zig's export list nor its skip list (each skipped entry has a reason). It reads the names from the source with `std.zig.Ast`, which abi-gen already parses for doc comments. Without it, the bindings can fall silently behind the Zig API. Lands in step A2.
@@ -549,7 +550,7 @@ That is about 4,380 hand-written lines against 4,891 today, while the exported s
 | A2 | api.zig exports today's runtime surface under the new names, next to the old symbols; abi-gen emits the new header; the old lcgf.h stays; the tripwire test lands | gate unchanged; tripwire test |
 | A3 | Rust and C++ switch to the generated header and externs and the new names | gate byte-identical; parity.sh unchanged |
 | A4 | Delete runtime.zig and the old names; auto.zig reads api.zig | gate, including auto lanes |
-| A5 | Mechanical Input, Limits, DrawList and Output replace CInput, CLimits, CDraw and CFrame (hash bump); `Context.begin` copies the Input; bindings in lockstep | gate, with inputs.py extended (time, wheel, text) |
+| A5 | Mechanical Input, Limits, DrawList and Output replace CInput, CLimits, CDraw and CFrame (hash bump); the seam copies the Input (not `Context.begin`, §6.5); bindings in lockstep | gate, with inputs.py extended (time, wheel, text) |
 | A6 | Renames and moves (seam.zig → tables_ui.zig, plan.zig → tables.zig, ct.zig → static.zig); lcgf-gen updated | gate |
 | A7 | api.zig grows to the full Context, Frame and widget surface, in batches; each batch adds names and a gate scene | gate per batch |
 | A8 | (optional) `TablesUi` shared with ComptimeUi, or S2 (open question 10) | gate; tables parity against comptime |

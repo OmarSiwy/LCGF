@@ -1,7 +1,7 @@
 //! The root of liblcgf_auto.a (`zig build abi`, x86-64 ELF): one archive for a program shipped
 //! to machines it does not know. It holds three copies of liblcgf, each built for a CPU level
 //! with the lane count that level suits (4 lanes for x86-64, 8 for x86-64-v3, 16 for
-//! x86-64-v4) and its C names suffixed (`lcgf_rt_begin__l8`), and this dispatcher, which
+//! x86-64-v4) and its C names suffixed (`lcgf_frame_open__l8`), and this dispatcher, which
 //! exports lcgf.h's names.
 //!
 //! Each name is one `jmp` through a table. The table starts at stubs: the first call of any
@@ -9,7 +9,7 @@
 //! width the CPU can run), points every entry at one copy and
 //! continues into it. From then on a call costs one indirect jump; nothing else changes, and a
 //! program never mixes copies, since the first call decides for all of them. The rows that
-//! C++ and Rust push inline go through `lcgf_rt_view`, which the chosen copy answers, so they
+//! C++ and Rust push inline go through `lcgf_frame_view`, which the chosen copy answers, so they
 //! need no dispatch.
 const std = @import("std");
 const lcgf = @import("lcgf");

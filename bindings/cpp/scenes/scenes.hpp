@@ -22,7 +22,7 @@ inline constexpr const char* names[count] = {"form", "list", "text", "springs", 
 inline constexpr std::uint32_t capacity[count] = {256, 256, 256, 2048, 256, 256};
 
 inline lcgf_limits limits(Scene s) {
-    lcgf_limits l{};
+    lcgf_limits l = lcgf::limits_default;
     l.nodes = capacity[s];
     l.texts = capacity[s];
     l.customs = 64;

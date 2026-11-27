@@ -85,51 +85,41 @@ impl From<&'static str> for Str {
     }
 }
 
-/// What the host tells a frame (`lcgf_input`).
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Input {
-    pub viewport: [f32; 2],
-    /// Logical pixels; `[-1, -1]` outside the window.
-    pub pointer: [f32; 2],
-    pub dt: f32,
-    pub scale: f32,
-    /// `Input::LEFT`, `RIGHT`, `MIDDLE`.
-    pub buttons: u32,
-    /// `Input::SHIFT`, `CTRL`, `ALT`, `CMD`.
-    pub mods: u32,
-    /// This frame's keys, in order (`Input::keys`); Tab moves focus.
-    pub events: *const KeyEvent,
-    pub events_len: u32,
-}
+/// What the host tells a frame (`lcgf_input`, all of Zig's `Input`): set what you have,
+/// `..Input::default()` the rest. Slices (`text`, `events`, `contacts`) are a pointer and a
+/// length, which must outlive the frame.
+pub type Input = sys::lcgf_input;
 
 /// A key event (`lcgf_key_event`).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct KeyEvent {
-    /// 0 press, 1 release, 2 repeat, 3 text.
-    pub kind: u8,
-    pub mods: u8,
-    pub code: u8,
-    pub pad: u8,
-    pub at: u32,
-    pub len: u32,
+pub type KeyEvent = sys::lcgf_key_event;
+
+impl Default for KeyEvent {
+    fn default() -> Self {
+        Self {
+            kind: 0,
+            mods: 0,
+            code: 0,
+            _pad: 0,
+            at: 0,
+            len: 0,
+        }
+    }
 }
 
 impl Input {
-    pub const LEFT: u32 = 1;
-    pub const RIGHT: u32 = 2;
-    pub const MIDDLE: u32 = 4;
-    pub const SHIFT: u32 = 1;
-    pub const CTRL: u32 = 2;
-    pub const ALT: u32 = 4;
-    pub const CMD: u32 = 8;
+    pub const LEFT: u8 = 1;
+    pub const RIGHT: u8 = 2;
+    pub const MIDDLE: u8 = 4;
+    pub const SHIFT: u8 = 1;
+    pub const CTRL: u8 = 2;
+    pub const ALT: u8 = 4;
+    pub const CMD: u8 = 8;
     pub const TAB: u8 = 0x2b;
 
     /// This frame's key events; they must outlive the frame.
     pub fn keys(mut self, events: &[KeyEvent]) -> Self {
         self.events = events.as_ptr();
-        self.events_len = events.len() as u32;
+        self.events_len = events.len();
         self
     }
 
@@ -139,23 +129,14 @@ impl Input {
             &[]
         } else {
             // SAFETY: set from a slice by `keys`, which must outlive the frame.
-            unsafe { core::slice::from_raw_parts(self.events, self.events_len as usize) }
+            unsafe { core::slice::from_raw_parts(self.events, self.events_len) }
         }
     }
 }
 
 impl Default for Input {
     fn default() -> Self {
-        Self {
-            viewport: [800.0, 600.0],
-            pointer: [-1.0, -1.0],
-            dt: 1.0 / 60.0,
-            scale: 1.0,
-            buttons: 0,
-            mods: 0,
-            events: core::ptr::null(),
-            events_len: 0,
-        }
+        sys::LCGF_INPUT_DEFAULT
     }
 }
 
@@ -644,7 +625,6 @@ const _: () = {
     use core::mem::size_of;
     assert!(size_of::<Quad>() == size_of::<sys::lcgf_quad>());
     assert!(size_of::<TextRun>() == size_of::<sys::lcgf_text_run>());
-    assert!(size_of::<Input>() == size_of::<sys::lcgf_input>());
     assert!(size_of::<RawDraw>() == size_of::<sys::lcgf_draw>());
     assert!(size_of::<RawFrame>() == size_of::<sys::lcgf_ui_output>());
 };

@@ -98,6 +98,7 @@ impl State {
             strings: 32 * 1024,
             anims: n,
             depth: 64,
+            ..Limits::default()
         }
     }
 

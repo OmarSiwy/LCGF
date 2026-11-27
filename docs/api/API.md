@@ -8410,6 +8410,12 @@ The mapping from a Zig function to its C export (docs/plans/bindings-rust.md §6
 
 - `fn Handle(comptime T: type) type`: The C form of a pointer to a handle type `T` (a `*Frame`): an opaque type, cast back.
 - `fn Words(comptime T: type) type`: The C form of a struct of no C layout: its words, in `words.put` order.
+- `fn wordable(comptime T: type) bool`: Whether `T` crosses as words: floats, ints of 32 bits or fewer, bools, enums, bitpacks, optional enums, and arrays and structs of them.
+- `fn CForm(comptime T: type) type`: The C form of a struct of no C layout that cannot be words (`Input`): an extern struct of its fields in order, each in its C form: a slice is a pointer (null when empty) and a `_len`, a nested struct its own C form, a bitpack its backing integer, an enum its tag.
+- `fn Fields(comptime T: type) type`
+- `fn Form(comptime T: type) type`: `T`'s C form (words or `CForm`).
+- `fn decode(comptime T: type, c: *const Form(T)) T`: `T` from its C form.
+- `fn encode(comptime T: type, v: T, out: *Form(T)) void`: `T`'s C form of `v`.
 - `fn CParams(comptime T: type, comptime handles: anytype) []const type`: The C parameters a Zig parameter of type `T` becomes; `handles` are the types passed as opaque pointers.
 - `fn CResult(comptime T: type) type`: The C result of a Zig result `T`; a slice returns its pointer and writes its length out, and a struct of no C layout writes its words out.
 - `fn cParamsOf(comptime F: type, comptime handles: anytype) []const type`: Every C parameter of `F`'s export, in order: each Zig parameter's, then `*usize` for a slice result's length or `*Words(R)` for a words result.
@@ -8427,6 +8433,19 @@ The C form of a struct of no C layout: its words, in `words.put` order.
 Fields: `w`
 
 - `Zig = T`
+- `words_form = true`
+
+### `CForm(..)` (generic struct)
+The C form of a struct of no C layout that cannot be words (`Input`): an extern struct of its fields in order, each in its C form: a slice is a pointer (null when empty) and a `_len`, a nested struct its own C form, a bitpack its backing integer, an enum its tag.
+
+Fields: `f`
+
+- `Zig = T`
+- `c_form = true`
+
+### `Form(..)` (generic struct)
+`T`'s C form (words or `CForm`).
+
 
 ### `CResult(..)` (generic struct)
 The C result of a Zig result `T`; a slice returns its pointer and writes its length out, and a struct of no C layout writes its words out.
@@ -8564,6 +8583,7 @@ The prebuilt frame behind the C seam: `ComptimeUi.frame` (src/widgets/base.zig) 
 
 - `none_widget = plan.none`: The `widget` of a frame without an event.
 - `Output = struct { draw: *const DrawList, tree: *const Tree, widget: u32 = none, value: f32 = 0, focus: u32 = none, wake: f32 = types.inf }`: What a frame returns: the draw list, the tree it was painted from, and the event the pointer made (`widget` is a slot in widget order, `none` for no event).
+- `CInput = abi.Form(Input)`: The input a host passes: all of `Input`, in its C form (`lcgf_input`, src/abi/abi.zig).
 - `Status = enum(c_int) { ok = 0, not_tables = 1, version = 2, layout_hash = 3, truncated = 4, buffer_too_small = 5, unaligned = 6 }`: Result codes of the C functions: 0 is success.
 - `frame_symbol = std.fmt.comptimePrint("lcgf_frame_u32_f32_l{d}", .{simd.lanes})`: The exported names, specialised as this build is: 32-bit rows, f32 coordinates, and the lane count of `simd`.
 - `fn cDraw(d: *const DrawList) CDraw`
@@ -8580,13 +8600,6 @@ Fields: `tables`, `rows`, `runs`, `customs`, `pressed`, `down`, `focus`, `rects`
 - `fn bytes(tables: []const u32) Error!usize`: Bytes one UI of `tables` needs in the caller's buffer.
 - `fn init(tables: []const u32, buf: []u8) Error!*Ui`: Checks `tables` and places a UI at the start of `buf`.
 - `fn frame(ui: *Ui, state: [*]u8, in: *const Input) Output`: One frame: the pointer's event applied to the state, then every row pushed, laid out and painted, as `ComptimeUi.frame` does for the reference widgets.
-
-### `CInput` (struct)
-The input a host passes: the fields the reference widgets read.
-
-Fields: `viewport`, `pointer`, `dt`, `scale`, `buttons`, `mods`, `events`, `events_len`
-
-- `fn input(c: *const CInput) Input`
 
 ### `CDraw` (struct)
 A frame's draw list as columns, for C, C++ and Rust to read in place.
@@ -8695,6 +8708,7 @@ The export list: which Zig functions liblcgf exports to C, under which names, an
 - `value_handles = .{Frame}`
 - `column_align = @import("../core/mem.zig").column_align`
 - `idiom_enums = .{ .{ types.Axis, "Dir" }, .{ types.Align, "Align" }, .{ types.Role, "Role" }, .{ Ease, "Ease" } }`: The bindings' own forms of the Zig types a program writes (bindings/cpp/include/lcgf/ types.hpp, bindings/rust/lcgf/src/types.rs, by tools/abi-gen): the enums by name, and the structs field for field with Zig's defaults, laid out as their words (`lcgf_style`).
+- `defaults = .{ .{ Input, "input" }, .{ context.Limits, "limits" } }`: The C structs whose defaults the bindings get as constants (`lcgf::input_default`, `sys::LCGF_INPUT_DEFAULT`): Zig's defaults in C form.
 - `idiom_structs = .{ .{ types.Size, "Size" }, .{ types.Style, "Style" }, .{ types.TextStyle, "TextStyle" }, .{ base.Theme, "Theme" }, .{ Spring, "Spring" } }`
 - `renames = .{.{ "float", "floating" }}`: Field names C, C++ or Rust cannot take, and what they are called there.
 - `Loc = struct { file: []const u8, decl: ?[]const u8, name: []const u8 }`: Where a function is: its file, its container (`null` for the file's top level) and name.
@@ -8719,14 +8733,8 @@ One export: its C name, the function that implements it, the Zig function it is 
 - `api = api_loc`
 - `impl = impl_loc`
 
-### `CLimits` (struct)
-`Limits`' sizes, as C passes them (`lcgf_limits`; A5 makes it all of `Limits`).
-
-Fields: `nodes`, `texts`, `customs`, `strings`, `anims`, `depth`
-
-
 ### `Session` (struct)
-What an `lcgf_context` is, at the start of the caller's buffer: the context, the input its frame reads until `lcgf_frame_end` (A5: `Context.begin` copies it), the font the frame is laid out with, and the palettes `lcgf_frame_canvas` makes from its options, in two generations as the canvas rows are (a reused canvas keeps last frame's).
+What an `lcgf_context` is, at the start of the caller's buffer: the context, the input its frame reads until `lcgf_frame_end` (decoded from the caller's `lcgf_input`, so that may be a temporary), the font the frame is laid out with, and the palettes `lcgf_frame_canvas` makes from its options, in two generations as the canvas rows are (a reused canvas keeps last frame's).
 
 Fields: `ctx`, `input`, `font`, `palettes`, `palette_len`
 

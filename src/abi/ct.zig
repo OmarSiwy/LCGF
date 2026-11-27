@@ -22,6 +22,7 @@
 //! sliders are the comptime pipeline's: rows a host hit-tests itself.
 
 const std = @import("std");
+const abi = @import("abi.zig");
 const fmt = @import("../core/fmt.zig");
 const simd = @import("../core/simd.zig");
 const tree = @import("../core/tree.zig");
@@ -1469,7 +1470,7 @@ fn cAt(buf: *anyopaque, x: f32, y: f32) callconv(.c) u32 {
 /// 0: no event; 1: a click on `widget`; 2: a slider `widget` dragged to `value`.
 fn cPointer(buf: *anyopaque, in: *const seam.CInput, widget: *u32, value: *f32) callconv(.c) c_int {
     const ui = uiOf(buf);
-    const input = in.input();
+    const input = abi.decode(Input, in);
     const hit = ui.pointer(&input) orelse return 0;
     widget.* = hit.slot;
     value.* = hit.value;
@@ -1478,7 +1479,7 @@ fn cPointer(buf: *anyopaque, in: *const seam.CInput, widget: *u32, value: *f32) 
 }
 
 fn cFocusKeys(buf: *anyopaque, in: *const seam.CInput, tab: u8) callconv(.c) void {
-    const input = in.input();
+    const input = abi.decode(Input, in);
     uiOf(buf).focusKeys(&input, tab);
 }
 

@@ -70,28 +70,12 @@ impl Response {
     }
 }
 
-/// `lcgf_limits`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Limits {
-    pub nodes: u32,
-    pub texts: u32,
-    pub customs: u32,
-    pub strings: u32,
-    pub anims: u32,
-    pub depth: u32,
-}
+/// A context's sizes (`lcgf_limits`, Zig's `Limits`): `Limits { nodes: 256, ..Limits::default() }`.
+pub type Limits = crate::sys::lcgf_limits;
 
 impl Default for Limits {
     fn default() -> Self {
-        Self {
-            nodes: 4096,
-            texts: 1024,
-            customs: 64,
-            strings: 64 * 1024,
-            anims: 256,
-            depth: 64,
-        }
+        crate::sys::LCGF_LIMITS_DEFAULT
     }
 }
 
