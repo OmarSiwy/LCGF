@@ -80,6 +80,8 @@ const atom_atom = 4;
 const atom_string = 31;
 
 pub const max_windows = 8;
+/// CRTCs the connection reads the rate of: more than any machine drives at once.
+const crtcs_max = 16;
 
 pub const Connection = struct {
     fd: i32 = -1,
@@ -115,6 +117,13 @@ pub const Connection = struct {
     screen_mm: u16 = 0,
     /// RandR's ScreenChangeNotify event code; 0 without RandR.
     randr_event: u8 = 0,
+    /// RandR's major opcode when the server speaks 1.3, which `readCrtcs` needs; 0 otherwise.
+    randr: u8 = 0,
+    /// The CRTCs that show the screen, for each window's refresh rate (`wire.refreshAt`), and
+    /// whether a ScreenChangeNotify asks to read them again at the end of the next `pump`.
+    crtcs: [crtcs_max]wire.Crtc = undefined,
+    crtcs_len: u8 = 0,
+    crtcs_stale: bool = false,
     /// The "cursor" font and a cursor per `context.Cursor`, created on first use; 0 is none.
     cursor_font: u32 = 0,
     cursors: [cursor_glyphs.len]u32 = @splat(0),
@@ -183,8 +192,51 @@ pub const Connection = struct {
                 c.screen_px = screen.px;
                 c.screen_mm = screen.mm;
             }
+            const version = try c.reply(c.send(wire.randr_query_version_size, wire.randrQueryVersion, .{randr}));
+            const major = wire.get(u32, version, 8);
+            const minor = wire.get(u32, version, 12);
+            if (major > 1 or minor >= 3) c.randr = randr;
         } else |_| {}
         try c.readScale();
+        try c.readCrtcs();
+    }
+
+    /// Reads where each active CRTC shows the screen and its mode's rate, into `crtcs`. Each
+    /// reply is valid only until the next read, so the CRTC ids come from one copy of the
+    /// resources and the modes' timings from a second, asked for behind the CRTCs.
+    fn readCrtcs(c: *Connection) Error!void {
+        c.crtcs_len = 0;
+        for (c.windows) |slot| {
+            if (slot) |w| w.refresh_stale = true;
+        }
+        if (c.randr == 0) return;
+        const root = c.setup.root;
+        const resources_size = wire.randr_get_screen_resources_current_size;
+        var ids: [crtcs_max]u32 = undefined;
+        const n = blk: {
+            const r = try c.reply(c.send(resources_size, wire.randrGetScreenResourcesCurrent, .{ c.randr, root }));
+            // ponytail: CRTCs past crtcs_max are not read; a window on one paces to the first.
+            const n: usize = @min(wire.get(u16, r, 16), crtcs_max);
+            if (r.len < 32 + 4 * n) return;
+            for (ids[0..n], 0..) |*crtc, k| crtc.* = wire.get(u32, r, 32 + 4 * k);
+            break :blk n;
+        };
+        var asked: [crtcs_max]u16 = undefined;
+        for (ids[0..n], asked[0..n]) |crtc, *seq| seq.* = c.send(wire.randr_get_crtc_info_size, wire.randrGetCrtcInfo, .{ c.randr, crtc });
+        const again = c.send(resources_size, wire.randrGetScreenResourcesCurrent, .{ c.randr, root });
+        var modes: [crtcs_max]u32 = undefined;
+        for (asked[0..n]) |seq| {
+            const on = wire.crtcInfo(try c.reply(seq)) orelse continue;
+            c.crtcs[c.crtcs_len] = on.crtc;
+            modes[c.crtcs_len] = on.mode;
+            c.crtcs_len += 1;
+        }
+        std.debug.assert(c.crtcs_len <= n);
+        const r = try c.reply(again);
+        for (c.crtcs[0..c.crtcs_len], modes[0..c.crtcs_len]) |*crtc, mode| {
+            crtc.refresh = wire.modeRefresh(r, mode) orelse wire.refresh_default;
+            std.debug.assert(crtc.refresh > 0);
+        }
     }
 
     fn readScale(c: *Connection) Error!void {
@@ -346,6 +398,14 @@ pub const Connection = struct {
             c.scale_stale = false;
             try c.readScale();
         }
+        if (c.crtcs_stale) {
+            c.crtcs_stale = false;
+            try c.readCrtcs();
+        }
+        for (c.windows) |slot| {
+            const w = slot orelse continue;
+            if (w.refresh_stale) try w.readRefresh();
+        }
         if (c.keymap_stale) {
             c.keymap_stale = false;
             try c.loadKeymap();
@@ -382,6 +442,7 @@ pub const Connection = struct {
             c.screen_px = wire.get(u16, m, 24);
             c.screen_mm = wire.get(u16, m, 28);
             c.scale_stale = true;
+            c.crtcs_stale = true;
         }
         const target = wire.eventWindow(m);
         for (c.windows) |slot| {
@@ -720,6 +781,10 @@ pub const Window = struct {
     presented_size: [2]u16 = .{ 0, 0 },
     /// Clock time of the last `present`, for `wait`'s display pacing.
     last_present: f64 = 0,
+    /// Seconds between frames of the display under the window's centre, read again at the end
+    /// of the `pump` after the window moves or the screen changes.
+    refresh: f32 = wire.refresh_default,
+    refresh_stale: bool = true,
     /// Set by `wake`; makes the next `poll` report a frame.
     woken: std.atomic.Value(bool) = .init(false),
     t0: f64,
@@ -887,6 +952,7 @@ pub const Window = struct {
             wire.configure_notify => {
                 w.width = wire.get(u16, m, 20);
                 w.height = wire.get(u16, m, 22);
+                w.refresh_stale = true;
                 in.viewport = .{ @as(f32, @floatFromInt(w.width)) / w.scale, @as(f32, @floatFromInt(w.height)) / w.scale };
             },
             wire.key_press, wire.key_release => {
@@ -1332,16 +1398,30 @@ pub const Window = struct {
     /// Blocks until the server sends something, `wake` is called, or `seconds` pass (`inf`: no
     /// limit), whichever is first; a timer is never woken for early. With `pace` `.display`, at
     /// least until the next refresh after the last present: PutImage has no vertical sync, so
-    /// frames are paced to a 60 Hz clock.
+    /// frames are paced to a clock at the rate RandR gives for the display under the window
+    /// (`refresh`), 60 Hz on a server without RandR 1.3.
     pub fn wait(w: *Window, seconds: f32, pace: Pace) void {
         if (w.woken.load(.acquire)) return;
         var s = seconds;
-        if (pace == .display) s = @max(s, @as(f32, @floatCast(w.last_present + refresh - now())));
+        if (pace == .display) s = @max(s, @as(f32, @floatCast(w.last_present + w.refresh - now())));
         w.conn.waitReadable(s);
     }
 
-    /// Seconds between frames when pacing to the display.
-    pub const refresh = 1.0 / 60.0;
+    /// Reads `refresh` for where the window's centre is now. With one CRTC or none the place
+    /// does not matter, and no round trip is made.
+    fn readRefresh(w: *Window) Error!void {
+        const c = w.conn;
+        w.refresh_stale = false;
+        var centre: [2]i32 = .{ 0, 0 };
+        if (c.crtcs_len > 1) {
+            const half: [2]i16 = .{ @intCast(w.width / 2), @intCast(w.height / 2) };
+            const r = try c.reply(c.send(wire.translate_coordinates_size, wire.translateCoordinates, .{ w.id, c.setup.root, half[0], half[1] }));
+            centre = .{ wire.get(i16, r, 12), wire.get(i16, r, 14) };
+        }
+        w.refresh = wire.refreshAt(c.crtcs[0..c.crtcs_len], centre[0], centre[1]);
+        std.debug.assert(w.refresh > 0);
+        std.debug.assert(!w.refresh_stale);
+    }
 
     /// Thread-safe: ends a `wait` in progress (or makes the next return at once) on any window
     /// of the connection.
@@ -2243,7 +2323,7 @@ test "x11: wait keeps timers and display pace, and a worker thread wakes it" {
     w.last_present = now();
     w.wait(0, .display);
     slept = now() - w.last_present;
-    try testing.expect(slept >= Window.refresh - 0.001 and slept < 0.5);
+    try testing.expect(slept >= w.refresh - 0.001 and slept < 0.5);
 
     // Idle: only a wake ends the wait. A missed wake would hang; the 10 s limit fails it instead.
     const worker = try std.Thread.spawn(.{}, sleeper, .{&w});
@@ -2261,6 +2341,87 @@ test "x11: wait keeps timers and display pace, and a worker thread wakes it" {
     t0 = now();
     w.wait(10, .idle);
     try testing.expect(now() - t0 < 1);
+}
+
+test "x11: display pacing follows the CRTC's mode, 60 Hz when the mode has no timing" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    if (c.randr == 0) return error.SkipZigTest;
+    var w: Window = undefined;
+    try w.open(c, 64, 64, "refresh", Fixture.buffers);
+    defer w.close();
+    try c.pump();
+    // Xvfb's own mode has a dot clock of 0: no rate, so 60 Hz.
+    try testing.expectEqual(@as(u8, 1), c.crtcs_len);
+    try testing.expectEqual(wire.refresh_default, w.refresh);
+
+    // The CRTC switches to a mode of the same size at 120.06 Hz (xrandr's 1024x768 timing):
+    // the ScreenChangeNotify that follows is read, and the window paces to it.
+    const root = c.setup.root;
+    const resources = try c.reply(c.send(wire.randr_get_screen_resources_current_size, wire.randrGetScreenResourcesCurrent, .{ c.randr, root }));
+    const config_time = wire.get(u32, resources, 12);
+    const crtc = wire.get(u32, resources, 32);
+    const output = wire.get(u32, resources, 36);
+    const old_mode = wire.get(u32, try c.reply(c.send(wire.randr_get_crtc_info_size, wire.randrGetCrtcInfo, .{ c.randr, crtc })), 20);
+    var info: [32]u8 = @splat(0);
+    for ([_][2]u32{ .{ 4, 1024 }, .{ 6, 768 }, .{ 16, 1328 }, .{ 24, 853 }, .{ 26, 5 } }) |f| std.mem.writeInt(u16, info[f[0]..][0..2], @intCast(f[1]), .little);
+    std.mem.writeInt(u32, info[8..12], 136_000_000, .little);
+    const mode = wire.get(u32, try c.reply(c.send(48, testRandrCreateMode, .{ c.randr, root, &info, "hz120" })), 8);
+    _ = c.send(12, testRandrOutputMode, .{ c.randr, 18, output, mode });
+    _ = try c.reply(c.send(32, testRandrSetCrtc, .{ c.randr, crtc, config_time, mode, output }));
+    const switched = waitRefresh(&w, 1328.0 * 853.0 / 136e6);
+    // Back to Xvfb's mode, and the new one removed, whether or not the test passed.
+    _ = try c.reply(c.send(32, testRandrSetCrtc, .{ c.randr, crtc, config_time, old_mode, output }));
+    _ = c.send(12, testRandrOutputMode, .{ c.randr, 19, output, mode });
+    _ = c.send(8, testRandrDestroyMode, .{ c.randr, mode });
+    try switched;
+    try waitRefresh(&w, wire.refresh_default);
+}
+
+/// Pumps until `w.refresh` is `want`.
+fn waitRefresh(w: *Window, want: f32) !void {
+    for (0..2000) |_| {
+        try w.conn.pump();
+        if (@abs(w.refresh - want) < 1e-6) return;
+        w.conn.waitReadable(0.005);
+    }
+    return error.RefreshNeverChanged;
+}
+
+/// RandR CreateMode (minor 16): `info`, a MODEINFO whose name length is `name.len`.
+fn testRandrCreateMode(b: *wire.Buf, randr: u8, window: u32, info: *const [32]u8, name: []const u8) void {
+    b.head(randr, 16, (40 + name.len + wire.pad4(name.len)) / 4);
+    b.int(u32, window);
+    for (info) |byte| b.int(u8, byte);
+    b.str(name);
+}
+
+/// RandR AddOutputMode (minor 18) or DeleteOutputMode (minor 19).
+fn testRandrOutputMode(b: *wire.Buf, randr: u8, minor: u8, output: u32, mode: u32) void {
+    b.head(randr, minor, 3);
+    b.int(u32, output);
+    b.int(u32, mode);
+}
+
+/// RandR DestroyMode (minor 17).
+fn testRandrDestroyMode(b: *wire.Buf, randr: u8, mode: u32) void {
+    b.head(randr, 17, 2);
+    b.int(u32, mode);
+}
+
+/// RandR SetCrtcConfig (minor 21): `crtc` at (0, 0) in `mode`, unrotated, on `output`.
+fn testRandrSetCrtc(b: *wire.Buf, randr: u8, crtc: u32, config_time: u32, mode: u32, output: u32) void {
+    b.head(randr, 21, 8);
+    b.int(u32, crtc);
+    b.int(u32, 0); // timestamp: CurrentTime
+    b.int(u32, config_time);
+    b.int(u32, 0); // x, y
+    b.int(u32, mode);
+    b.int(u16, 1); // rotation: Rotate_0
+    b.zeros(2);
+    b.int(u32, output);
 }
 
 /// Sends a window the close request a window manager sends when the user closes it.

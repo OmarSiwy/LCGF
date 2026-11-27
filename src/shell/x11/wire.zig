@@ -551,6 +551,96 @@ pub fn screenInfoSize(r: []const u8) ?ScreenWidth {
     return .{ .px = get(u16, r, at), .mm = get(u16, r, at + 4) };
 }
 
+pub const randr_query_version_size = 12;
+
+/// RandR QueryVersion (minor 0) for 1.3, the version of GetScreenResourcesCurrent. The reply
+/// has the server's major and minor version at bytes 8 and 12.
+pub fn randrQueryVersion(b: *Buf, randr: u8) void {
+    b.head(randr, 0, randr_query_version_size / 4);
+    b.int(u32, 1);
+    b.int(u32, 3);
+}
+
+pub const randr_get_screen_resources_current_size = 8;
+
+/// RandR GetScreenResourcesCurrent (minor 25): the CRTCs, outputs and modes of `window`'s
+/// screen as they are, without probing the outputs. The reply has the CRTC count at byte 16
+/// and the CRTC ids from byte 32; `modeRefresh` reads its modes.
+pub fn randrGetScreenResourcesCurrent(b: *Buf, randr: u8, window: u32) void {
+    b.head(randr, 25, randr_get_screen_resources_current_size / 4);
+    b.int(u32, window);
+}
+
+pub const randr_get_crtc_info_size = 12;
+
+/// RandR GetCrtcInfo (minor 20): where `crtc` shows the screen and in which mode, read by
+/// `crtcInfo`.
+pub fn randrGetCrtcInfo(b: *Buf, randr: u8, crtc: u32) void {
+    b.head(randr, 20, randr_get_crtc_info_size / 4);
+    b.int(u32, crtc);
+    b.int(u32, 0); // config timestamp: CurrentTime
+}
+
+/// Seconds between frames when the display's rate is unknown: a server without RandR 1.3, or a
+/// mode with no timing.
+pub const refresh_default: f32 = 1.0 / 60.0;
+
+/// A CRTC that shows part of the screen: its rectangle on the root window, and the seconds
+/// between its frames.
+pub const Crtc = struct { x: i16, y: i16, width: u16, height: u16, refresh: f32 };
+
+/// The rectangle and mode of a GetCrtcInfo reply, `refresh` left at `refresh_default` for
+/// `modeRefresh` to fill. Null for a CRTC that is off (mode None) or a reply cut short.
+pub fn crtcInfo(r: []const u8) ?struct { crtc: Crtc, mode: u32 } {
+    if (r.len < 32) return null;
+    const mode = get(u32, r, 20);
+    if (mode == 0) return null;
+    const crtc: Crtc = .{
+        .x = get(i16, r, 12),
+        .y = get(i16, r, 14),
+        .width = get(u16, r, 16),
+        .height = get(u16, r, 18),
+        .refresh = refresh_default,
+    };
+    return .{ .crtc = crtc, .mode = mode };
+}
+
+/// Seconds between frames of `mode` in a GetScreenResourcesCurrent reply: the pixels of a
+/// frame, blanking included, over the dot clock, as xrandr computes the rate. Null when the
+/// reply lists no such mode or the mode has no timing (Xvfb's own mode has a clock of 0).
+pub fn modeRefresh(r: []const u8, mode: u32) ?f32 {
+    if (r.len < 32) return null;
+    const crtcs: usize = get(u16, r, 16);
+    const outputs: usize = get(u16, r, 18);
+    const modes: usize = get(u16, r, 20);
+    const first = 32 + 4 * (crtcs + outputs);
+    if (r.len < first + 32 * modes) return null;
+    for (0..modes) |k| {
+        const m = r[first + 32 * k ..][0..32];
+        if (get(u32, m, 0) != mode) continue;
+        const clock: f32 = @floatFromInt(get(u32, m, 8));
+        const h_total: f32 = @floatFromInt(get(u16, m, 16));
+        var v_total: f32 = @floatFromInt(get(u16, m, 24));
+        const flags = get(u32, m, 28);
+        if (flags & 0x20 != 0) v_total *= 2; // DoubleScan: every line twice
+        if (flags & 0x10 != 0) v_total /= 2; // Interlace: half the lines a field
+        if (clock == 0 or h_total == 0 or v_total == 0) return null;
+        return h_total * v_total / clock;
+    }
+    return null;
+}
+
+/// Seconds between frames for a window centred at root pixel (`x`, `y`): those of the CRTC
+/// that contains the point, else of the first CRTC, else `refresh_default`.
+pub fn refreshAt(crtcs: []const Crtc, x: i32, y: i32) f32 {
+    for (crtcs) |c| {
+        const inside_x = x >= c.x and x < @as(i32, c.x) + c.width;
+        const inside_y = y >= c.y and y < @as(i32, c.y) + c.height;
+        if (inside_x and inside_y) return c.refresh;
+    }
+    return if (crtcs.len > 0) crtcs[0].refresh else refresh_default;
+}
+
 pub const randr_set_screen_size_size = 20;
 
 /// RandR SetScreenSize (minor 7): the screen's size in pixels and millimetres.
@@ -1039,6 +1129,9 @@ test "requests: lengths match the bytes written" {
         .{ delete_property_size, deleteProperty, .{ 1, 2 } },
         .{ randr_select_input_size, randrSelectInput, .{ 140, 1 } },
         .{ randr_get_screen_info_size, randrGetScreenInfo, .{ 140, 1 } },
+        .{ randr_query_version_size, randrQueryVersion, .{140} },
+        .{ randr_get_screen_resources_current_size, randrGetScreenResourcesCurrent, .{ 140, 1 } },
+        .{ randr_get_crtc_info_size, randrGetCrtcInfo, .{ 140, 1 } },
         .{ openFontSize("cursor"), openFont, .{ 1, "cursor" } },
         .{ create_cursor_size, createCursor, .{ 1, 2, 2 } },
         .{ clear_bitmap_size, clearBitmap, .{ 1, 2 } },
@@ -1097,6 +1190,54 @@ test "screenInfoSize: the current size of a GetScreenInfo reply, null when it na
     std.mem.writeInt(u16, r[22..24], 1, .little);
     try std.testing.expectEqual(@as(?ScreenWidth, null), screenInfoSize(r[0..44]));
     try std.testing.expectEqual(@as(?ScreenWidth, null), screenInfoSize(r[0..8]));
+}
+
+test "modeRefresh: a 120 Hz mode gives 1/120 s, a mode with no timing none" {
+    // A GetScreenResourcesCurrent reply: one CRTC, one output, Xvfb's untimed 1024x768
+    // (0x3a) and 2560x1440 at 120 Hz (0x229: 2720 x 1525 pixels a frame at 497.76 MHz).
+    var r: [32 + 8 + 64]u8 = @splat(0);
+    r[0] = reply;
+    std.mem.writeInt(u16, r[16..18], 1, .little);
+    std.mem.writeInt(u16, r[18..20], 1, .little);
+    std.mem.writeInt(u16, r[20..22], 2, .little);
+    const modes = r[40..];
+    std.mem.writeInt(u32, modes[0..4], 0x3a, .little);
+    std.mem.writeInt(u16, modes[4..6], 1024, .little);
+    std.mem.writeInt(u32, modes[32..36], 0x229, .little);
+    std.mem.writeInt(u32, modes[40..44], 497_760_000, .little);
+    std.mem.writeInt(u16, modes[48..50], 2720, .little);
+    std.mem.writeInt(u16, modes[56..58], 1525, .little);
+    try testing.expectApproxEqAbs(@as(f32, 1.0 / 120.0), modeRefresh(&r, 0x229).?, 1e-7);
+    try testing.expectEqual(@as(?f32, null), modeRefresh(&r, 0x3a));
+    try testing.expectEqual(@as(?f32, null), modeRefresh(&r, 0x99));
+    try testing.expectEqual(@as(?f32, null), modeRefresh(r[0..70], 0x229));
+    // Interlaced: a field every half frame.
+    std.mem.writeInt(u32, modes[60..64], 0x10, .little);
+    try testing.expectApproxEqAbs(@as(f32, 1.0 / 240.0), modeRefresh(&r, 0x229).?, 1e-7);
+}
+
+test "crtcInfo and refreshAt: the CRTC under the window's centre, else the first, else 60 Hz" {
+    // A GetCrtcInfo reply for a CRTC at (2560, 0), 1920 x 1080, in mode 0x229.
+    var r: [32]u8 = @splat(0);
+    std.mem.writeInt(i16, r[12..14], 2560, .little);
+    std.mem.writeInt(u16, r[16..18], 1920, .little);
+    std.mem.writeInt(u16, r[18..20], 1080, .little);
+    std.mem.writeInt(u32, r[20..24], 0x229, .little);
+    const on = crtcInfo(&r).?;
+    try testing.expectEqual(@as(u32, 0x229), on.mode);
+    try testing.expectEqual(Crtc{ .x = 2560, .y = 0, .width = 1920, .height = 1080, .refresh = refresh_default }, on.crtc);
+    std.mem.writeInt(u32, r[20..24], 0, .little);
+    try testing.expectEqual(null, crtcInfo(&r));
+
+    const crtcs = [_]Crtc{
+        .{ .x = 0, .y = 0, .width = 2560, .height = 1440, .refresh = 1.0 / 60.0 },
+        .{ .x = 2560, .y = 0, .width = 1920, .height = 1080, .refresh = 1.0 / 120.0 },
+    };
+    try testing.expectEqual(@as(f32, 1.0 / 120.0), refreshAt(&crtcs, 2560, 0));
+    try testing.expectEqual(@as(f32, 1.0 / 60.0), refreshAt(&crtcs, 2559, 1439));
+    // Between the screens, or no CRTC: the first, then 60 Hz.
+    try testing.expectEqual(@as(f32, 1.0 / 120.0), refreshAt(crtcs[1..], 100, 100));
+    try testing.expectEqual(@as(f32, 1.0 / 60.0), refreshAt(&.{}, 0, 0));
 }
 
 test "scale: Xft.dpi wins, then the screen's physical size in quarter steps" {
