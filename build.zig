@@ -1602,6 +1602,14 @@ pub fn build(b: *std.Build) void {
     // zig-out holds generated Zig (the installed lcgf sources, the bindings check's per-UI frames).
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig"), b.path("bench/vs/capy/main.zig"), b.path("zig-out") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
+    // The performance guide's build-time rules (docs/CODE_STANDARD.md): formatting, then no file
+    // over the findings recorded for it in ci/perf_tidy_baseline.json.
+    const tidy = b.addSystemCommand(&.{ "python3", "ci/perf_tidy_gate.py", "src", "build.zig" });
+    tidy.setCwd(b.path("."));
+    tidy.has_side_effects = true; // the sources are not declared inputs: check on every run
+    const lint = b.step("lint", "Check formatting and the performance rules (a ratchet)");
+    lint.dependOn(&fmt.step);
+    lint.dependOn(&tidy.step);
 }
 
 const WgpuNative = enum { v27, v29 };

@@ -1,0 +1,1973 @@
+{
+ "build.zig": {
+  "function-too-long": 1,
+  "line-too-long": 366
+ },
+ "src/a11y/accesskit/bridge.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 22,
+  "missing-assertion": 4
+ },
+ "src/a11y/accesskit/c.zig": {
+  "line-too-long": 8
+ },
+ "src/a11y/accesskit/macos.zig": {
+  "line-too-long": 4
+ },
+ "src/a11y/accesskit/smoke.zig": {
+  "flush-in-loop": 1,
+  "function-too-long": 1,
+  "line-too-long": 4,
+  "missing-assertion": 1
+ },
+ "src/a11y/accesskit/unix.zig": {
+  "line-too-long": 4
+ },
+ "src/a11y/accesskit/windows.zig": {
+  "line-too-long": 5
+ },
+ "src/a11y/census_probe.zig": {
+  "line-too-long": 2
+ },
+ "src/a11y/settings.zig": {
+  "line-too-long": 16,
+  "recursion": 2
+ },
+ "src/a11y/settings_data.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 1
+ },
+ "src/a11y/tree.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 30,
+  "missing-assertion": 2
+ },
+ "src/abi/abi.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 23,
+  "missing-assertion": 3,
+  "recursion": 5,
+  "too-many-parameters": 2
+ },
+ "src/abi/api.zig": {
+  "line-too-long": 31
+ },
+ "src/abi/auto.zig": {
+  "line-too-long": 2
+ },
+ "src/abi/canvas.zig": {
+  "line-too-long": 20,
+  "too-many-parameters": 1
+ },
+ "src/abi/ct.zig": {
+  "bool-heavy-struct": 1,
+  "bool-parameters": 1,
+  "fixed-vector-width": 1,
+  "function-too-long": 1,
+  "inline-always-large": 2,
+  "large-generic-function": 1,
+  "line-too-long": 118,
+  "missing-assertion": 9,
+  "missing-reserve": 7,
+  "recursion": 2,
+  "swallowed-error": 1,
+  "too-many-parameters": 2
+ },
+ "src/abi/lcgf.h": {
+  "line-too-long": 18
+ },
+ "src/abi/lcgf_lanes.h": {
+  "line-too-long": 4
+ },
+ "src/abi/plan.zig": {
+  "bool-parameters": 1,
+  "function-too-long": 2,
+  "inline-always-large": 1,
+  "large-generic-function": 2,
+  "line-too-long": 39,
+  "missing-assertion": 7,
+  "recursion": 2,
+  "too-many-parameters": 3
+ },
+ "src/abi/seam.zig": {
+  "function-too-long": 1,
+  "line-too-long": 24,
+  "missing-assertion": 3,
+  "swallowed-error": 1,
+  "unbounded-loop": 1
+ },
+ "src/abi/view.zig": {
+  "missing-assertion": 1
+ },
+ "src/abi/words.zig": {
+  "missing-assertion": 2,
+  "recursion": 4
+ },
+ "src/abi/zon.zig": {
+  "function-too-long": 1,
+  "line-too-long": 47,
+  "missing-assertion": 4,
+  "missing-reserve": 1
+ },
+ "src/anim/anims.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 9,
+  "missing-assertion": 2
+ },
+ "src/anim/census_probe.zig": {
+  "line-too-long": 1
+ },
+ "src/anim/flip.zig": {
+  "line-too-long": 1,
+  "missing-assertion": 1,
+  "swallowed-error": 1
+ },
+ "src/anim/motion.zig": {
+  "bool-heavy-struct": 1,
+  "bool-parameters": 1,
+  "line-too-long": 38,
+  "missing-assertion": 3
+ },
+ "src/anim/tweens.zig": {
+  "line-too-long": 4,
+  "missing-assertion": 2
+ },
+ "src/anim/values.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 5,
+  "missing-assertion": 2,
+  "recursion": 3
+ },
+ "src/app/app.zig": {
+  "function-too-long": 1,
+  "large-generic-function": 1,
+  "line-too-long": 16,
+  "missing-assertion": 2
+ },
+ "src/assets/embed.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 2
+ },
+ "src/assets/image_atlas.zig": {
+  "compound-assertion": 3,
+  "line-too-long": 3
+ },
+ "src/assets/image_jobs.zig": {
+  "line-too-long": 2
+ },
+ "src/assets/image_mipmaps.zig": {
+  "compound-assertion": 1,
+  "fixed-vector-width": 2,
+  "line-too-long": 2
+ },
+ "src/assets/image_tests.zig": {
+  "line-too-long": 3
+ },
+ "src/assets/png.zig": {
+  "allocation-in-loop": 2,
+  "inline-always-large": 1,
+  "line-too-long": 23,
+  "missing-assertion": 5,
+  "missing-reserve": 1,
+  "swallowed-error": 1,
+  "too-many-parameters": 2,
+  "unbounded-loop": 2
+ },
+ "src/assets/png_fuzz.zig": {
+  "compound-assertion": 3,
+  "line-too-long": 6
+ },
+ "src/comptime/columns.zig": {
+  "function-too-long": 1,
+  "line-too-long": 21,
+  "missing-assertion": 1,
+  "recursion": 4
+ },
+ "src/comptime/compile_fail/checkbox_type.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/compile_fail/duplicate_id.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/compile_fail/empty_name_checkbox.zig": {
+  "line-too-long": 2
+ },
+ "src/comptime/compile_fail/label_two_sources.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/compile_fail/missing_field.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/compile_fail/missing_field_label.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/compile_fail/slider_type.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/compile_fail/unnamed_slider.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/compile_fail/viewport_overflow.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/dynamic.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 24,
+  "missing-assertion": 2,
+  "recursion": 4,
+  "too-many-parameters": 1
+ },
+ "src/comptime/events.zig": {
+  "function-too-long": 1,
+  "inline-always-large": 1,
+  "line-too-long": 46,
+  "missing-assertion": 4,
+  "recursion": 5,
+  "swallowed-error": 1,
+  "unbounded-loop": 1
+ },
+ "src/comptime/examples.zig": {
+  "line-too-long": 16
+ },
+ "src/comptime/feature_size_probe.zig": {
+  "line-too-long": 2
+ },
+ "src/comptime/features.zig": {
+  "fixed-vector-width": 1,
+  "line-too-long": 3,
+  "recursion": 1
+ },
+ "src/comptime/flatten.zig": {
+  "line-too-long": 5,
+  "recursion": 5
+ },
+ "src/comptime/interop.zig": {
+  "fixed-vector-width": 5,
+  "line-too-long": 17,
+  "recursion": 1
+ },
+ "src/comptime/layout.zig": {
+  "function-too-long": 2,
+  "inline-always-large": 2,
+  "large-generic-function": 1,
+  "line-too-long": 58,
+  "missing-assertion": 3,
+  "recursion": 8,
+  "swallowed-error": 2,
+  "too-many-parameters": 5
+ },
+ "src/comptime/layout_bench.zig": {
+  "function-too-long": 1,
+  "line-too-long": 7,
+  "recursion": 1
+ },
+ "src/comptime/layout_size_probe.zig": {
+  "line-too-long": 4
+ },
+ "src/comptime/mixed.zig": {
+  "line-too-long": 11,
+  "missing-assertion": 2,
+  "swallowed-error": 2
+ },
+ "src/comptime/paint.zig": {
+  "fixed-vector-width": 1,
+  "function-too-long": 1,
+  "inline-always-large": 1,
+  "large-generic-function": 1,
+  "line-too-long": 45,
+  "member-accumulator": 3,
+  "missing-assertion": 3,
+  "recursion": 2,
+  "too-many-parameters": 1,
+  "unbounded-loop": 1
+ },
+ "src/comptime/paint_bench.zig": {
+  "line-too-long": 2,
+  "recursion": 1
+ },
+ "src/comptime/setter_probe.zig": {
+  "line-too-long": 1
+ },
+ "src/comptime/signals.zig": {
+  "function-too-long": 1,
+  "line-too-long": 25,
+  "missing-assertion": 1,
+  "recursion": 3,
+  "unbounded-loop": 1
+ },
+ "src/comptime/sizes.zig": {
+  "line-too-long": 5
+ },
+ "src/comptime/spec.zig": {
+  "compound-assertion": 13,
+  "inline-always-large": 1,
+  "line-too-long": 44,
+  "missing-assertion": 1,
+  "recursion": 3
+ },
+ "src/comptime/tables.zig": {
+  "fixed-vector-width": 1,
+  "large-generic-function": 1,
+  "line-too-long": 13,
+  "missing-assertion": 4,
+  "too-many-parameters": 3
+ },
+ "src/comptime/validate.zig": {
+  "line-too-long": 18,
+  "missing-assertion": 2,
+  "recursion": 2
+ },
+ "src/core/customs.zig": {
+  "line-too-long": 3
+ },
+ "src/core/fmt.zig": {
+  "line-too-long": 6,
+  "missing-assertion": 1
+ },
+ "src/core/input.zig": {
+  "function-too-long": 1,
+  "line-too-long": 19,
+  "missing-assertion": 2,
+  "unbounded-loop": 1
+ },
+ "src/core/mem.zig": {
+  "line-too-long": 3,
+  "too-many-parameters": 1
+ },
+ "src/core/simd.zig": {
+  "bool-parameters": 2,
+  "line-too-long": 3,
+  "missing-assertion": 1
+ },
+ "src/core/texts.zig": {
+  "line-too-long": 3
+ },
+ "src/core/tree.zig": {
+  "compound-assertion": 3,
+  "fixed-vector-width": 6,
+  "function-too-long": 1,
+  "large-generic-function": 1,
+  "line-too-long": 34,
+  "missing-assertion": 2
+ },
+ "src/core/types.zig": {
+  "bool-heavy-struct": 1,
+  "fixed-vector-width": 2,
+  "line-too-long": 10
+ },
+ "src/devtools/batches.zig": {
+  "line-too-long": 2,
+  "missing-assertion": 1
+ },
+ "src/devtools/changes.zig": {
+  "line-too-long": 1,
+  "member-accumulator": 1
+ },
+ "src/devtools/inspector.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 22,
+  "missing-assertion": 3
+ },
+ "src/devtools/log.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/devtools/record.zig": {
+  "line-too-long": 11,
+  "missing-assertion": 1
+ },
+ "src/devtools/timing.zig": {
+  "line-too-long": 2,
+  "missing-assertion": 1
+ },
+ "src/draw/backgrounds.zig": {
+  "line-too-long": 32,
+  "missing-assertion": 2
+ },
+ "src/draw/brushes.zig": {
+  "function-too-long": 1,
+  "line-too-long": 79,
+  "missing-assertion": 6,
+  "too-many-parameters": 1
+ },
+ "src/draw/canvas.zig": {
+  "bool-heavy-struct": 1,
+  "fixed-vector-width": 9,
+  "inline-always-large": 1,
+  "large-generic-function": 1,
+  "line-too-long": 47,
+  "missing-assertion": 6,
+  "recursion": 1
+ },
+ "src/draw/census_probe.zig": {
+  "line-too-long": 3
+ },
+ "src/draw/census_probe_paths.zig": {
+  "line-too-long": 1
+ },
+ "src/draw/color_math.zig": {
+  "fixed-vector-width": 3,
+  "line-too-long": 17,
+  "missing-assertion": 1
+ },
+ "src/draw/color_output.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 42,
+  "missing-assertion": 7
+ },
+ "src/draw/compositor.zig": {
+  "line-too-long": 54,
+  "missing-assertion": 6
+ },
+ "src/draw/cursor.zig": {
+  "line-too-long": 7,
+  "missing-assertion": 1
+ },
+ "src/draw/damage.zig": {
+  "fixed-vector-width": 7,
+  "inline-always-large": 1,
+  "large-generic-function": 1,
+  "line-too-long": 26,
+  "missing-assertion": 3
+ },
+ "src/draw/decoration.zig": {
+  "line-too-long": 82,
+  "missing-assertion": 7,
+  "swallowed-error": 2
+ },
+ "src/draw/draw_list.zig": {
+  "line-too-long": 8
+ },
+ "src/draw/features.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 13
+ },
+ "src/draw/filter_primitives.zig": {
+  "line-too-long": 45,
+  "missing-assertion": 6
+ },
+ "src/draw/geometry.zig": {
+  "compound-assertion": 1,
+  "fixed-vector-width": 6,
+  "line-too-long": 14,
+  "missing-assertion": 1,
+  "unbounded-loop": 1
+ },
+ "src/draw/image_sampling.zig": {
+  "line-too-long": 24,
+  "missing-assertion": 1
+ },
+ "src/draw/image_variants.zig": {
+  "line-too-long": 22,
+  "missing-assertion": 1
+ },
+ "src/draw/inherit.zig": {
+  "bool-parameters": 1,
+  "fixed-vector-width": 1,
+  "line-too-long": 10,
+  "missing-assertion": 1
+ },
+ "src/draw/masks.zig": {
+  "line-too-long": 17,
+  "missing-assertion": 1,
+  "swallowed-error": 1,
+  "too-many-parameters": 1
+ },
+ "src/draw/order.zig": {
+  "fixed-vector-width": 6,
+  "line-too-long": 21,
+  "missing-assertion": 3
+ },
+ "src/draw/outline.zig": {
+  "compound-assertion": 1,
+  "fixed-vector-width": 1,
+  "line-too-long": 5
+ },
+ "src/draw/paint.zig": {
+  "bool-parameters": 1,
+  "fixed-vector-width": 2,
+  "inline-always-large": 2,
+  "line-too-long": 30,
+  "missing-assertion": 4,
+  "too-many-parameters": 1
+ },
+ "src/draw/paths.zig": {
+  "compound-assertion": 6,
+  "function-too-long": 1,
+  "line-too-long": 34,
+  "member-accumulator": 1,
+  "missing-assertion": 2,
+  "too-many-parameters": 2
+ },
+ "src/draw/paths_golden.zig": {
+  "allocation-in-loop": 5,
+  "function-too-long": 1,
+  "line-too-long": 13,
+  "missing-reserve": 1,
+  "unbounded-loop": 1
+ },
+ "src/draw/projective.zig": {
+  "line-too-long": 17,
+  "missing-assertion": 1
+ },
+ "src/draw/surface.zig": {
+  "line-too-long": 6
+ },
+ "src/draw/svg.zig": {
+  "bool-heavy-struct": 4,
+  "function-too-long": 3,
+  "line-too-long": 128,
+  "member-accumulator": 19,
+  "missing-assertion": 18,
+  "too-many-parameters": 3
+ },
+ "src/draw/tinyvg.zig": {
+  "bool-parameters": 1,
+  "function-too-long": 1,
+  "line-too-long": 29,
+  "missing-assertion": 9,
+  "too-many-parameters": 2
+ },
+ "src/draw/vector.zig": {
+  "function-too-long": 1,
+  "line-too-long": 53,
+  "member-accumulator": 7,
+  "missing-assertion": 8,
+  "too-many-parameters": 1
+ },
+ "src/embedded/fixed.zig": {
+  "fixed-vector-width": 5,
+  "line-too-long": 1
+ },
+ "src/embedded/font.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 5
+ },
+ "src/embedded/framebuffer.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/embedded/spi.zig": {
+  "line-too-long": 5,
+  "missing-assertion": 1
+ },
+ "src/example/host.zig": {
+  "fixed-vector-width": 8,
+  "large-generic-function": 1,
+  "line-too-long": 48,
+  "member-accumulator": 2,
+  "missing-assertion": 5,
+  "swallowed-error": 1,
+  "too-many-parameters": 2,
+  "unbounded-loop": 1
+ },
+ "src/example/window.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/i18n/bundle.zig": {
+  "line-too-long": 12,
+  "missing-assertion": 1,
+  "swallowed-error": 1
+ },
+ "src/i18n/catalogue.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 22,
+  "missing-assertion": 2
+ },
+ "src/i18n/cldr.zig": {
+  "line-too-long": 20,
+  "swallowed-error": 9
+ },
+ "src/i18n/date.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 10,
+  "missing-assertion": 1
+ },
+ "src/i18n/number.zig": {
+  "line-too-long": 3,
+  "swallowed-error": 1
+ },
+ "src/i18n/plural.zig": {
+  "line-too-long": 4
+ },
+ "src/i18n/pseudo.zig": {
+  "line-too-long": 7,
+  "missing-assertion": 1,
+  "swallowed-error": 1
+ },
+ "src/interact/census_probe.zig": {
+  "line-too-long": 4
+ },
+ "src/interact/focus.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 10,
+  "member-accumulator": 1,
+  "missing-assertion": 6,
+  "too-many-parameters": 2
+ },
+ "src/interact/gestures.zig": {
+  "line-too-long": 6,
+  "missing-assertion": 7
+ },
+ "src/interact/hit.zig": {
+  "line-too-long": 13,
+  "missing-assertion": 5
+ },
+ "src/interact/interaction.zig": {
+  "function-too-long": 1,
+  "line-too-long": 21,
+  "missing-assertion": 2
+ },
+ "src/interact/keyboard.zig": {
+  "line-too-long": 2,
+  "member-accumulator": 2,
+  "missing-assertion": 1
+ },
+ "src/interact/targets.zig": {
+  "line-too-long": 23,
+  "missing-assertion": 2
+ },
+ "src/layout/baseline.zig": {
+  "line-too-long": 4
+ },
+ "src/layout/census_probe.zig": {
+  "line-too-long": 1
+ },
+ "src/layout/check.zig": {
+  "compound-assertion": 1,
+  "missing-assertion": 2
+ },
+ "src/layout/coefs.zig": {
+  "line-too-long": 6,
+  "missing-assertion": 2
+ },
+ "src/layout/document.zig": {
+  "line-too-long": 26,
+  "missing-assertion": 3,
+  "too-many-parameters": 2
+ },
+ "src/layout/flex.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 19,
+  "missing-assertion": 1
+ },
+ "src/layout/grid.zig": {
+  "compound-assertion": 2,
+  "large-generic-function": 2,
+  "line-too-long": 41,
+  "member-accumulator": 1,
+  "missing-assertion": 7,
+  "swallowed-error": 2,
+  "too-many-parameters": 1,
+  "unbounded-loop": 1
+ },
+ "src/layout/grid_names.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 2
+ },
+ "src/layout/incremental.zig": {
+  "compound-assertion": 2,
+  "fixed-vector-width": 4,
+  "function-too-long": 1,
+  "line-too-long": 8,
+  "missing-assertion": 2
+ },
+ "src/layout/layout.zig": {
+  "compound-assertion": 4,
+  "fixed-vector-width": 1,
+  "inline-always-large": 2,
+  "large-generic-function": 4,
+  "line-too-long": 24,
+  "swallowed-error": 2
+ },
+ "src/layout/levels.zig": {
+  "inline-always-large": 1,
+  "line-too-long": 8,
+  "missing-assertion": 1,
+  "unbounded-loop": 1
+ },
+ "src/layout/logical.zig": {
+  "line-too-long": 4,
+  "missing-assertion": 1
+ },
+ "src/layout/overlay.zig": {
+  "line-too-long": 16,
+  "missing-assertion": 2
+ },
+ "src/layout/rounding.zig": {
+  "line-too-long": 13
+ },
+ "src/layout/rtl.zig": {
+  "line-too-long": 4,
+  "missing-assertion": 2
+ },
+ "src/layout/scroll.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/layout/scroll_policy.zig": {
+  "line-too-long": 32,
+  "missing-assertion": 3,
+  "too-many-parameters": 2
+ },
+ "src/layout/special.zig": {
+  "line-too-long": 25,
+  "missing-assertion": 4
+ },
+ "src/layout/units.zig": {
+  "line-too-long": 5,
+  "missing-assertion": 2
+ },
+ "src/layout/wrap.zig": {
+  "line-too-long": 27,
+  "missing-assertion": 1,
+  "too-many-parameters": 2
+ },
+ "src/render/capabilities.zig": {
+  "bool-heavy-struct": 1,
+  "fixed-vector-width": 2,
+  "line-too-long": 30,
+  "missing-assertion": 3,
+  "too-many-parameters": 2
+ },
+ "src/render/conformance.zig": {
+  "line-too-long": 30,
+  "missing-assertion": 3
+ },
+ "src/render/conformance/dump.zig": {
+  "line-too-long": 3,
+  "missing-assertion": 1
+ },
+ "src/render/custom_draw_scene.zig": {
+  "missing-assertion": 1
+ },
+ "src/render/d3d12/c_linux.h": {
+  "line-too-long": 1
+ },
+ "src/render/d3d12/com.zig": {
+  "line-too-long": 82
+ },
+ "src/render/d3d12/device.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 19,
+  "missing-assertion": 2,
+  "swallowed-error": 1
+ },
+ "src/render/d3d12/frame.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 6
+ },
+ "src/render/d3d12/gpu.zig": {
+  "compound-assertion": 2,
+  "large-generic-function": 3,
+  "line-too-long": 72,
+  "missing-assertion": 10,
+  "swallowed-error": 1,
+  "too-many-parameters": 1
+ },
+ "src/render/d3d12/host.zig": {
+  "line-too-long": 9
+ },
+ "src/render/d3d12/pipeline.zig": {
+  "line-too-long": 17,
+  "missing-assertion": 2
+ },
+ "src/render/d3d12/play.zig": {
+  "allocation-in-loop": 2,
+  "line-too-long": 2,
+  "missing-assertion": 1,
+  "missing-reserve": 1
+ },
+ "src/render/d3d12/renderer.zig": {
+  "function-too-long": 1,
+  "line-too-long": 28,
+  "missing-assertion": 2
+ },
+ "src/render/d3d12/scenes.zig": {
+  "allocation-in-loop": 1,
+  "compound-assertion": 1,
+  "line-too-long": 14,
+  "missing-assertion": 2,
+  "print-in-loop": 1,
+  "swallowed-error": 1
+ },
+ "src/render/effects.zig": {
+  "function-too-long": 1,
+  "line-too-long": 44,
+  "missing-assertion": 3,
+  "too-many-parameters": 1
+ },
+ "src/render/gles/egl.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/render/gles/es2.zig": {
+  "line-too-long": 11,
+  "missing-assertion": 2
+ },
+ "src/render/gles/gl.zig": {
+  "line-too-long": 9
+ },
+ "src/render/gles/gpu.zig": {
+  "compound-assertion": 3,
+  "inline-always-large": 1,
+  "large-generic-function": 3,
+  "line-too-long": 58,
+  "missing-assertion": 8,
+  "too-many-parameters": 1
+ },
+ "src/render/gles/host.zig": {
+  "line-too-long": 3
+ },
+ "src/render/gles/play.zig": {
+  "allocation-in-loop": 3,
+  "line-too-long": 6,
+  "missing-assertion": 3,
+  "missing-reserve": 1,
+  "too-many-parameters": 1
+ },
+ "src/render/gles/program.zig": {
+  "line-too-long": 4,
+  "missing-assertion": 2
+ },
+ "src/render/gles/renderer.zig": {
+  "function-too-long": 1,
+  "line-too-long": 16,
+  "missing-assertion": 3
+ },
+ "src/render/gles/styling.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 18,
+  "missing-assertion": 1,
+  "print-in-loop": 1
+ },
+ "src/render/gpu/canvas.zig": {
+  "compound-assertion": 1,
+  "fixed-vector-width": 3,
+  "function-too-long": 1,
+  "line-too-long": 30,
+  "member-accumulator": 2,
+  "missing-assertion": 4,
+  "too-many-parameters": 2
+ },
+ "src/render/gpu/check.zig": {
+  "function-too-long": 2,
+  "line-too-long": 28,
+  "missing-assertion": 3,
+  "unbounded-loop": 1
+ },
+ "src/render/gpu/desc.zig": {
+  "line-too-long": 12
+ },
+ "src/render/gpu/gradient.zig": {
+  "line-too-long": 2
+ },
+ "src/render/gpu/naga.zig": {
+  "allocation-in-loop": 5,
+  "bool-parameters": 2,
+  "line-too-long": 38,
+  "missing-assertion": 8
+ },
+ "src/render/gpu/reflect.zig": {
+  "line-too-long": 23,
+  "member-accumulator": 11,
+  "missing-assertion": 4,
+  "unbounded-loop": 2
+ },
+ "src/render/iface.zig": {
+  "line-too-long": 5
+ },
+ "src/render/metal/device.zig": {
+  "line-too-long": 7
+ },
+ "src/render/metal/gpu.zig": {
+  "compound-assertion": 2,
+  "large-generic-function": 1,
+  "line-too-long": 72,
+  "missing-assertion": 3,
+  "too-many-parameters": 1
+ },
+ "src/render/metal/msl.zig": {
+  "line-too-long": 2
+ },
+ "src/render/metal/mtl.zig": {
+  "line-too-long": 5
+ },
+ "src/render/metal/objc.zig": {
+  "line-too-long": 3
+ },
+ "src/render/metal/pipeline.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/render/metal/play.zig": {
+  "allocation-in-loop": 3,
+  "function-too-long": 1,
+  "line-too-long": 8,
+  "missing-assertion": 1,
+  "missing-reserve": 1
+ },
+ "src/render/metal/present.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 17
+ },
+ "src/render/metal/probe_webgpu.zig": {
+  "line-too-long": 10
+ },
+ "src/render/metal/renderer.zig": {
+  "function-too-long": 1,
+  "line-too-long": 36,
+  "missing-assertion": 2
+ },
+ "src/render/metal/setup.zig": {
+  "line-too-long": 1
+ },
+ "src/render/metal/texture.zig": {
+  "line-too-long": 3
+ },
+ "src/render/null.zig": {
+  "line-too-long": 7
+ },
+ "src/render/prepared.zig": {
+  "line-too-long": 57,
+  "missing-assertion": 5,
+  "too-many-parameters": 2,
+  "unbounded-loop": 1
+ },
+ "src/render/select.zig": {
+  "line-too-long": 2
+ },
+ "src/render/select_probe.zig": {
+  "line-too-long": 2
+ },
+ "src/render/shaders/canvas.zig": {
+  "compound-assertion": 1,
+  "fixed-vector-width": 4,
+  "line-too-long": 4,
+  "missing-assertion": 1,
+  "too-many-parameters": 1
+ },
+ "src/render/shaders/dump.zig": {
+  "line-too-long": 3,
+  "missing-assertion": 1
+ },
+ "src/render/shaders/quad.zig": {
+  "line-too-long": 16,
+  "missing-assertion": 1
+ },
+ "src/render/sw/bands.zig": {
+  "atomic-array-unpadded": 2,
+  "line-too-long": 4,
+  "missing-assertion": 1,
+  "unbounded-loop": 2
+ },
+ "src/render/sw/canvas.zig": {
+  "fixed-vector-width": 16,
+  "function-too-long": 1,
+  "inline-always-large": 1,
+  "line-too-long": 50,
+  "manual-bit-trick": 1,
+  "missing-assertion": 4,
+  "too-many-parameters": 2
+ },
+ "src/render/sw/census_probe.zig": {
+  "line-too-long": 8
+ },
+ "src/render/sw/census_probe_alpha8.zig": {
+  "line-too-long": 8
+ },
+ "src/render/sw/font.zig": {
+  "line-too-long": 1
+ },
+ "src/render/sw/play.zig": {
+  "allocation-in-loop": 17,
+  "function-too-long": 2,
+  "line-too-long": 21,
+  "missing-assertion": 2,
+  "missing-reserve": 1,
+  "too-many-parameters": 1,
+  "unbounded-loop": 1
+ },
+ "src/render/sw/sw.zig": {
+  "bool-parameters": 1,
+  "fixed-vector-width": 36,
+  "function-too-long": 4,
+  "inline-always-large": 1,
+  "line-too-long": 116,
+  "missing-assertion": 15,
+  "print-in-loop": 1,
+  "recursion": 1,
+  "too-many-parameters": 2
+ },
+ "src/render/vk/canvasbench.zig": {
+  "function-too-long": 1,
+  "line-too-long": 10
+ },
+ "src/render/vk/device.zig": {
+  "line-too-long": 18,
+  "missing-assertion": 5
+ },
+ "src/render/vk/frame.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 22,
+  "missing-assertion": 2
+ },
+ "src/render/vk/gpu.zig": {
+  "compound-assertion": 2,
+  "function-too-long": 1,
+  "large-generic-function": 2,
+  "line-too-long": 62,
+  "missing-assertion": 7,
+  "too-many-parameters": 4
+ },
+ "src/render/vk/gpu_probe.zig": {
+  "line-too-long": 6,
+  "too-many-parameters": 2
+ },
+ "src/render/vk/host.zig": {
+  "line-too-long": 12,
+  "missing-assertion": 1,
+  "too-many-parameters": 1
+ },
+ "src/render/vk/loader.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/render/vk/pass.zig": {
+  "line-too-long": 10,
+  "missing-assertion": 1
+ },
+ "src/render/vk/play.zig": {
+  "allocation-in-loop": 2,
+  "line-too-long": 2,
+  "missing-assertion": 1,
+  "missing-reserve": 1
+ },
+ "src/render/vk/probe.zig": {
+  "line-too-long": 4
+ },
+ "src/render/vk/probe_projection.zig": {
+  "function-too-long": 1,
+  "line-too-long": 18,
+  "too-many-parameters": 1
+ },
+ "src/render/vk/probe_wgpu.zig": {
+  "line-too-long": 3
+ },
+ "src/render/vk/renderer.zig": {
+  "function-too-long": 2,
+  "line-too-long": 57,
+  "missing-assertion": 4
+ },
+ "src/render/vk/scenes.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 23,
+  "missing-assertion": 3
+ },
+ "src/render/vk/setup.zig": {
+  "line-too-long": 9,
+  "missing-assertion": 1,
+  "too-many-parameters": 1
+ },
+ "src/render/vk/swapchain.zig": {
+  "line-too-long": 19,
+  "missing-assertion": 1
+ },
+ "src/render/web/gpu.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 35,
+  "missing-assertion": 1,
+  "too-many-parameters": 1
+ },
+ "src/render/web/scenes.zig": {
+  "line-too-long": 9,
+  "missing-assertion": 1,
+  "swallowed-error": 1
+ },
+ "src/render/web/webgpu.zig": {
+  "line-too-long": 7
+ },
+ "src/render/wgpu/custom_draw_sample.zig": {
+  "line-too-long": 9
+ },
+ "src/render/wgpu/glyphs.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 3
+ },
+ "src/render/wgpu/gpu.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 43,
+  "missing-assertion": 5,
+  "too-many-parameters": 1
+ },
+ "src/render/wgpu/host.zig": {
+  "line-too-long": 17,
+  "missing-assertion": 1
+ },
+ "src/render/wgpu/native.zig": {
+  "line-too-long": 31,
+  "missing-assertion": 1
+ },
+ "src/render/wgpu/play.zig": {
+  "allocation-in-loop": 11,
+  "function-too-long": 1,
+  "line-too-long": 12,
+  "missing-assertion": 2,
+  "missing-reserve": 1,
+  "unbounded-loop": 1
+ },
+ "src/render/wgpu/surface.zig": {
+  "line-too-long": 7,
+  "missing-assertion": 1
+ },
+ "src/render/wgpu/wgpu.zig": {
+  "compound-assertion": 1,
+  "function-too-long": 1,
+  "line-too-long": 31,
+  "recursion": 1
+ },
+ "src/runtime/census_probe.zig": {
+  "line-too-long": 2
+ },
+ "src/runtime/context.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 31,
+  "missing-assertion": 4
+ },
+ "src/runtime/frame.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 61,
+  "missing-assertion": 4,
+  "swallowed-error": 6
+ },
+ "src/runtime/reuse.zig": {
+  "fixed-vector-width": 3,
+  "function-too-long": 1,
+  "line-too-long": 65,
+  "member-accumulator": 1,
+  "missing-assertion": 9,
+  "swallowed-error": 1,
+  "too-many-parameters": 1
+ },
+ "src/runtime/scheduler.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 2,
+  "member-accumulator": 2,
+  "missing-assertion": 1
+ },
+ "src/runtime/signals.zig": {
+  "line-too-long": 12
+ },
+ "src/shell/android/android.zig": {
+  "io-call-in-loop": 1,
+  "line-too-long": 39,
+  "missing-assertion": 5,
+  "unbounded-loop": 1
+ },
+ "src/shell/android/example.zig": {
+  "line-too-long": 5
+ },
+ "src/shell/android/jni.zig": {
+  "line-too-long": 12
+ },
+ "src/shell/android/sysroot.zig": {
+  "line-too-long": 1,
+  "missing-assertion": 1
+ },
+ "src/shell/android/translate.zig": {
+  "line-too-long": 21,
+  "missing-assertion": 4,
+  "unbounded-loop": 1
+ },
+ "src/shell/baremetal/firmware.zig": {
+  "line-too-long": 2,
+  "unbounded-loop": 1
+ },
+ "src/shell/baremetal/flush.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 14,
+  "missing-assertion": 1
+ },
+ "src/shell/baremetal/input.zig": {
+  "line-too-long": 3,
+  "missing-assertion": 1
+ },
+ "src/shell/baremetal/shell.zig": {
+  "function-too-long": 1,
+  "line-too-long": 17,
+  "too-many-parameters": 1
+ },
+ "src/shell/baremetal/sim.zig": {
+  "line-too-long": 4
+ },
+ "src/shell/example.zig": {
+  "line-too-long": 3
+ },
+ "src/shell/headless.zig": {
+  "line-too-long": 11,
+  "missing-assertion": 1,
+  "swallowed-error": 2
+ },
+ "src/shell/iface.zig": {
+  "line-too-long": 6
+ },
+ "src/shell/ios/example.zig": {
+  "line-too-long": 5
+ },
+ "src/shell/ios/ios.zig": {
+  "line-too-long": 27,
+  "missing-assertion": 4
+ },
+ "src/shell/ios/text_input.zig": {
+  "line-too-long": 7
+ },
+ "src/shell/ios/translate.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 22,
+  "member-accumulator": 2,
+  "missing-assertion": 5,
+  "unbounded-loop": 1
+ },
+ "src/shell/macos/example.zig": {
+  "line-too-long": 1
+ },
+ "src/shell/macos/macos.zig": {
+  "line-too-long": 74,
+  "missing-assertion": 4
+ },
+ "src/shell/macos/translate.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 26,
+  "member-accumulator": 2,
+  "missing-assertion": 9,
+  "swallowed-error": 1,
+  "unbounded-loop": 1
+ },
+ "src/shell/materials.zig": {
+  "line-too-long": 2
+ },
+ "src/shell/wayland/data.zig": {
+  "line-too-long": 7,
+  "member-accumulator": 2,
+  "missing-assertion": 4
+ },
+ "src/shell/wayland/ime.zig": {
+  "line-too-long": 5,
+  "missing-assertion": 2
+ },
+ "src/shell/wayland/input.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 3,
+  "member-accumulator": 1,
+  "missing-assertion": 4
+ },
+ "src/shell/wayland/main.zig": {
+  "function-too-long": 1,
+  "io-call-in-loop": 1,
+  "line-too-long": 10,
+  "missing-assertion": 1
+ },
+ "src/shell/wayland/test.zig": {
+  "line-too-long": 37
+ },
+ "src/shell/wayland/wayland.zig": {
+  "bool-heavy-struct": 1,
+  "function-too-long": 1,
+  "line-too-long": 41,
+  "missing-assertion": 7
+ },
+ "src/shell/wayland/wire.zig": {
+  "line-too-long": 8,
+  "member-accumulator": 2,
+  "missing-assertion": 3
+ },
+ "src/shell/wayland/xkb.zig": {
+  "line-too-long": 43,
+  "missing-assertion": 1
+ },
+ "src/shell/web/main.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 2,
+  "too-many-parameters": 1
+ },
+ "src/shell/web/web.zig": {
+  "function-too-long": 1,
+  "line-too-long": 10,
+  "missing-assertion": 2
+ },
+ "src/shell/win32/translate.zig": {
+  "line-too-long": 32,
+  "member-accumulator": 2,
+  "missing-assertion": 6,
+  "swallowed-error": 4,
+  "unbounded-loop": 1
+ },
+ "src/shell/win32/win32.zig": {
+  "line-too-long": 45,
+  "missing-assertion": 2
+ },
+ "src/shell/x11/example.zig": {
+  "line-too-long": 5
+ },
+ "src/shell/x11/keys.zig": {
+  "line-too-long": 22
+ },
+ "src/shell/x11/wire.zig": {
+  "line-too-long": 17,
+  "member-accumulator": 1,
+  "missing-assertion": 3,
+  "swallowed-error": 3,
+  "too-many-parameters": 4
+ },
+ "src/shell/x11/x11.zig": {
+  "bool-heavy-struct": 2,
+  "flush-in-loop": 2,
+  "function-too-long": 1,
+  "line-too-long": 115,
+  "member-accumulator": 3,
+  "missing-assertion": 21,
+  "swallowed-error": 10,
+  "unbounded-loop": 4
+ },
+ "src/shell/x11/xim.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1,
+  "swallowed-error": 1
+ },
+ "src/style/accessibility.zig": {
+  "line-too-long": 34,
+  "missing-assertion": 2
+ },
+ "src/style/compiler.zig": {
+  "line-too-long": 39,
+  "member-accumulator": 10,
+  "missing-assertion": 5,
+  "unbounded-loop": 2
+ },
+ "src/style/environment.zig": {
+  "line-too-long": 5,
+  "missing-assertion": 1
+ },
+ "src/style/import_tests.zig": {
+  "line-too-long": 10
+ },
+ "src/style/inspector.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 15,
+  "missing-assertion": 1
+ },
+ "src/style/locale.zig": {
+  "line-too-long": 28,
+  "swallowed-error": 1
+ },
+ "src/style/paragraph.zig": {
+  "line-too-long": 14,
+  "missing-assertion": 2
+ },
+ "src/style/properties.zig": {
+  "line-too-long": 14,
+  "missing-assertion": 6
+ },
+ "src/style/resolve.zig": {
+  "line-too-long": 15,
+  "missing-assertion": 3
+ },
+ "src/style/storage.zig": {
+  "line-too-long": 10
+ },
+ "src/style/system_colors.zig": {
+  "line-too-long": 4
+ },
+ "src/style/testdata/dtcg_generated.zig": {
+  "function-too-long": 1,
+  "line-too-long": 36
+ },
+ "src/style/tokens.zig": {
+  "line-too-long": 7,
+  "missing-assertion": 1
+ },
+ "src/text/census_probe.zig": {
+  "line-too-long": 2
+ },
+ "src/text/edit/buffer.zig": {
+  "compound-assertion": 3,
+  "swallowed-error": 1
+ },
+ "src/text/edit/edit.zig": {
+  "bool-heavy-struct": 3,
+  "function-too-long": 1,
+  "line-too-long": 10,
+  "missing-assertion": 4,
+  "swallowed-error": 2
+ },
+ "src/text/edit/history.zig": {
+  "line-too-long": 2,
+  "missing-assertion": 2,
+  "swallowed-error": 2,
+  "too-many-parameters": 1
+ },
+ "src/text/edit/moves.zig": {
+  "line-too-long": 3,
+  "missing-assertion": 1
+ },
+ "src/text/edit/tests.zig": {
+  "line-too-long": 11
+ },
+ "src/text/fallback/coretext.zig": {
+  "line-too-long": 5
+ },
+ "src/text/fallback/directwrite.zig": {
+  "line-too-long": 13
+ },
+ "src/text/fallback/fallback.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/text/fallback/fontconfig.zig": {
+  "line-too-long": 4
+ },
+ "src/text/fallback/system.zig": {
+  "line-too-long": 2
+ },
+ "src/text/fallback/tests.zig": {
+  "line-too-long": 7
+ },
+ "src/text/font/fuzz.zig": {
+  "compound-assertion": 2,
+  "line-too-long": 5
+ },
+ "src/text/font/match.zig": {
+  "line-too-long": 7
+ },
+ "src/text/font/opentype.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 27,
+  "missing-assertion": 11,
+  "swallowed-error": 2,
+  "unbounded-loop": 1
+ },
+ "src/text/layout/break_policy.zig": {
+  "line-too-long": 44,
+  "missing-assertion": 4,
+  "too-many-parameters": 2
+ },
+ "src/text/layout/conformance.zig": {
+  "line-too-long": 4
+ },
+ "src/text/layout/counters.zig": {
+  "line-too-long": 28,
+  "member-accumulator": 1,
+  "missing-assertion": 2,
+  "unbounded-loop": 1
+ },
+ "src/text/layout/decorations.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 19,
+  "too-many-parameters": 5
+ },
+ "src/text/layout/display.zig": {
+  "line-too-long": 16,
+  "missing-assertion": 1,
+  "swallowed-error": 1
+ },
+ "src/text/layout/emit.zig": {
+  "line-too-long": 8,
+  "missing-assertion": 1
+ },
+ "src/text/layout/emphasis.zig": {
+  "line-too-long": 22,
+  "missing-assertion": 4,
+  "too-many-parameters": 3
+ },
+ "src/text/layout/golden.zig": {
+  "bool-heavy-struct": 1,
+  "function-too-long": 1,
+  "line-too-long": 25,
+  "missing-assertion": 2,
+  "too-many-parameters": 1
+ },
+ "src/text/layout/inline_objects.zig": {
+  "line-too-long": 11,
+  "missing-assertion": 2
+ },
+ "src/text/layout/intrinsic.zig": {
+  "line-too-long": 10,
+  "missing-assertion": 3
+ },
+ "src/text/layout/lines.zig": {
+  "line-too-long": 15,
+  "too-many-parameters": 1
+ },
+ "src/text/layout/math.zig": {
+  "line-too-long": 60,
+  "missing-assertion": 9,
+  "swallowed-error": 6,
+  "too-many-parameters": 1,
+  "unbounded-loop": 1
+ },
+ "src/text/layout/metrics.zig": {
+  "line-too-long": 11,
+  "missing-assertion": 1,
+  "too-many-parameters": 1
+ },
+ "src/text/layout/ornament.zig": {
+  "line-too-long": 39,
+  "missing-assertion": 4
+ },
+ "src/text/layout/query.zig": {
+  "line-too-long": 7,
+  "member-accumulator": 1,
+  "missing-assertion": 4
+ },
+ "src/text/layout/spans.zig": {
+  "line-too-long": 6,
+  "too-many-parameters": 1
+ },
+ "src/text/layout/stack.zig": {
+  "line-too-long": 34,
+  "missing-assertion": 1,
+  "swallowed-error": 2,
+  "too-many-parameters": 1
+ },
+ "src/text/layout/tailoring.zig": {
+  "line-too-long": 3
+ },
+ "src/text/layout/tests.zig": {
+  "line-too-long": 9
+ },
+ "src/text/layout/vertical.zig": {
+  "line-too-long": 17
+ },
+ "src/text/layout/whitespace.zig": {
+  "line-too-long": 1
+ },
+ "src/text/protocol.zig": {
+  "compound-assertion": 1,
+  "function-too-long": 1,
+  "large-generic-function": 1,
+  "line-too-long": 51,
+  "member-accumulator": 1,
+  "missing-assertion": 7,
+  "swallowed-error": 3,
+  "too-many-parameters": 4
+ },
+ "src/text/raster/atlas.zig": {
+  "compound-assertion": 6,
+  "line-too-long": 16,
+  "missing-assertion": 2
+ },
+ "src/text/raster/gamma.zig": {
+  "line-too-long": 2
+ },
+ "src/text/raster/raster.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 4,
+  "missing-assertion": 4,
+  "swallowed-error": 1
+ },
+ "src/text/raster/sdf.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 3,
+  "too-many-parameters": 1
+ },
+ "src/text/shape/cache.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 10
+ },
+ "src/text/shape/cluster.zig": {
+  "line-too-long": 3
+ },
+ "src/text/shape/harfbuzz.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 106,
+  "missing-assertion": 3,
+  "swallowed-error": 1,
+  "too-many-parameters": 4
+ },
+ "src/text/shape/harfbuzz_paint.zig": {
+  "function-too-long": 1,
+  "large-generic-function": 1,
+  "line-too-long": 45,
+  "missing-assertion": 4,
+  "swallowed-error": 1,
+  "too-many-parameters": 5
+ },
+ "src/text/shape/layout.zig": {
+  "line-too-long": 1,
+  "missing-assertion": 3
+ },
+ "src/text/shape/shape.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 16,
+  "missing-assertion": 3,
+  "print-in-loop": 1,
+  "swallowed-error": 3
+ },
+ "src/text/unicode/bidi.zig": {
+  "compound-assertion": 1,
+  "function-too-long": 2,
+  "line-too-long": 8,
+  "missing-assertion": 4,
+  "too-many-parameters": 1,
+  "unbounded-loop": 1
+ },
+ "src/text/unicode/conformance.zig": {
+  "line-too-long": 16,
+  "member-accumulator": 1,
+  "print-in-loop": 2,
+  "swallowed-error": 4
+ },
+ "src/text/unicode/display_data.zig": {
+  "line-too-long": 259
+ },
+ "src/text/unicode/gen.zig": {
+  "allocation-in-loop": 2,
+  "function-too-long": 1,
+  "large-generic-function": 1,
+  "line-too-long": 17,
+  "missing-assertion": 4,
+  "print-in-loop": 1,
+  "swallowed-error": 2
+ },
+ "src/text/unicode/grapheme.zig": {
+  "bool-heavy-struct": 1,
+  "missing-assertion": 1
+ },
+ "src/text/unicode/line.zig": {
+  "bool-heavy-struct": 1,
+  "line-too-long": 12,
+  "member-accumulator": 1,
+  "missing-assertion": 2
+ },
+ "src/text/unicode/property.zig": {
+  "line-too-long": 8
+ },
+ "src/text/unicode/script.zig": {
+  "member-accumulator": 1,
+  "missing-assertion": 1
+ },
+ "src/text/unicode/utf8.zig": {
+  "line-too-long": 4
+ },
+ "src/text/unicode/word.zig": {
+  "line-too-long": 2,
+  "member-accumulator": 1,
+  "missing-assertion": 2
+ },
+ "src/theme/recipe.zig": {
+  "line-too-long": 97,
+  "missing-assertion": 3
+ },
+ "src/theme/recipe_comptime.zig": {
+  "function-too-long": 3,
+  "large-generic-function": 5,
+  "line-too-long": 108,
+  "missing-assertion": 11,
+  "too-many-parameters": 3
+ },
+ "src/theme/recipe_controls.zig": {
+  "bool-heavy-struct": 1,
+  "function-too-long": 1,
+  "large-generic-function": 2,
+  "line-too-long": 65,
+  "missing-assertion": 11,
+  "too-many-parameters": 2
+ },
+ "src/theme/recipe_extra_controls.zig": {
+  "line-too-long": 68,
+  "missing-assertion": 7,
+  "recursion": 1,
+  "too-many-parameters": 2
+ },
+ "src/theme/recipe_extra_tests.zig": {
+  "line-too-long": 27
+ },
+ "src/theme/recipe_overlays.zig": {
+  "fixed-vector-width": 1,
+  "function-too-long": 3,
+  "large-generic-function": 3,
+  "line-too-long": 234,
+  "missing-assertion": 10,
+  "too-many-parameters": 3
+ },
+ "src/theme/recipe_part_comptime.zig": {
+  "line-too-long": 19,
+  "missing-assertion": 1
+ },
+ "src/theme/recipe_parts.zig": {
+  "function-too-long": 1,
+  "large-generic-function": 1,
+  "line-too-long": 29,
+  "missing-assertion": 3
+ },
+ "src/theme/recipe_tests.zig": {
+  "line-too-long": 72
+ },
+ "src/theme/table.zig": {
+  "line-too-long": 1
+ },
+ "src/theme/tests.zig": {
+  "line-too-long": 2
+ },
+ "src/theme/theme.zig": {
+  "line-too-long": 18,
+  "missing-assertion": 1
+ },
+ "src/widgets/accordion.zig": {
+  "bool-heavy-struct": 2,
+  "bool-parameters": 1,
+  "line-too-long": 26,
+  "missing-assertion": 1,
+  "too-many-parameters": 2
+ },
+ "src/widgets/base.zig": {
+  "bool-parameters": 1,
+  "function-too-long": 3,
+  "inline-always-large": 1,
+  "large-generic-function": 1,
+  "line-too-long": 146,
+  "missing-assertion": 2,
+  "recursion": 16,
+  "swallowed-error": 4
+ },
+ "src/widgets/breadcrumb.zig": {
+  "line-too-long": 16,
+  "missing-assertion": 2
+ },
+ "src/widgets/button.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 28
+ },
+ "src/widgets/card.zig": {
+  "line-too-long": 10
+ },
+ "src/widgets/check.zig": {
+  "line-too-long": 1
+ },
+ "src/widgets/checkbox.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 25
+ },
+ "src/widgets/chip.zig": {
+  "line-too-long": 20
+ },
+ "src/widgets/colorpicker.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 21,
+  "missing-assertion": 3
+ },
+ "src/widgets/combobox.zig": {
+  "bool-heavy-struct": 2,
+  "bool-parameters": 1,
+  "line-too-long": 41,
+  "missing-assertion": 2,
+  "unbounded-loop": 1
+ },
+ "src/widgets/contextmenu.zig": {
+  "line-too-long": 34,
+  "missing-assertion": 1,
+  "too-many-parameters": 2
+ },
+ "src/widgets/datepicker.zig": {
+  "bool-heavy-struct": 1,
+  "large-generic-function": 1,
+  "line-too-long": 31,
+  "missing-assertion": 2,
+  "swallowed-error": 2
+ },
+ "src/widgets/dialog.zig": {
+  "bool-heavy-struct": 2,
+  "line-too-long": 36,
+  "missing-assertion": 2,
+  "too-many-parameters": 1
+ },
+ "src/widgets/dock.zig": {
+  "bool-heavy-struct": 1,
+  "compound-assertion": 1,
+  "function-too-long": 2,
+  "large-generic-function": 2,
+  "line-too-long": 36,
+  "missing-assertion": 6,
+  "too-many-parameters": 2
+ },
+ "src/widgets/icon.zig": {
+  "line-too-long": 13
+ },
+ "src/widgets/image.zig": {
+  "line-too-long": 24,
+  "missing-assertion": 1
+ },
+ "src/widgets/keys.zig": {
+  "line-too-long": 4
+ },
+ "src/widgets/kit.zig": {
+  "line-too-long": 5,
+  "missing-assertion": 1,
+  "swallowed-error": 1
+ },
+ "src/widgets/label.zig": {
+  "line-too-long": 15
+ },
+ "src/widgets/link.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 12
+ },
+ "src/widgets/list.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 28,
+  "missing-assertion": 2,
+  "recursion": 2,
+  "too-many-parameters": 1
+ },
+ "src/widgets/menu.zig": {
+  "line-too-long": 66,
+  "missing-assertion": 2,
+  "too-many-parameters": 3
+ },
+ "src/widgets/menubar.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 73,
+  "missing-assertion": 7,
+  "too-many-parameters": 4
+ },
+ "src/widgets/number.zig": {
+  "line-too-long": 23,
+  "missing-assertion": 1,
+  "swallowed-error": 1,
+  "too-many-parameters": 1
+ },
+ "src/widgets/popover.zig": {
+  "bool-parameters": 1,
+  "function-too-long": 1,
+  "line-too-long": 48,
+  "missing-assertion": 2,
+  "recursion": 3
+ },
+ "src/widgets/progress.zig": {
+  "line-too-long": 8
+ },
+ "src/widgets/radio.zig": {
+  "line-too-long": 28,
+  "missing-assertion": 3
+ },
+ "src/widgets/range.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 26,
+  "missing-assertion": 2,
+  "too-many-parameters": 1
+ },
+ "src/widgets/records.zig": {
+  "function-too-long": 1,
+  "line-too-long": 18,
+  "missing-assertion": 2,
+  "too-many-parameters": 1
+ },
+ "src/widgets/scroll.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 20,
+  "missing-assertion": 1,
+  "too-many-parameters": 1
+ },
+ "src/widgets/scroll_area.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 43,
+  "missing-assertion": 7,
+  "swallowed-error": 2,
+  "too-many-parameters": 3
+ },
+ "src/widgets/search.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 21,
+  "missing-assertion": 2,
+  "too-many-parameters": 1
+ },
+ "src/widgets/select.zig": {
+  "bool-parameters": 2,
+  "line-too-long": 58,
+  "missing-assertion": 2,
+  "too-many-parameters": 3
+ },
+ "src/widgets/separator.zig": {
+  "line-too-long": 5
+ },
+ "src/widgets/slider.zig": {
+  "line-too-long": 23,
+  "missing-assertion": 1,
+  "too-many-parameters": 1
+ },
+ "src/widgets/spacer.zig": {
+  "line-too-long": 7
+ },
+ "src/widgets/spinner.zig": {
+  "line-too-long": 6
+ },
+ "src/widgets/splitter.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 22,
+  "missing-assertion": 1
+ },
+ "src/widgets/statusbar.zig": {
+  "line-too-long": 13
+ },
+ "src/widgets/switch.zig": {
+  "bool-heavy-struct": 2,
+  "line-too-long": 18
+ },
+ "src/widgets/table.zig": {
+  "bool-parameters": 3,
+  "large-generic-function": 1,
+  "line-too-long": 35,
+  "missing-assertion": 4,
+  "too-many-parameters": 3
+ },
+ "src/widgets/tabs.zig": {
+  "compound-assertion": 1,
+  "large-generic-function": 1,
+  "line-too-long": 31,
+  "missing-assertion": 2,
+  "too-many-parameters": 1
+ },
+ "src/widgets/textarea.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 29,
+  "missing-assertion": 3,
+  "too-many-parameters": 2
+ },
+ "src/widgets/textfield.zig": {
+  "line-too-long": 50,
+  "missing-assertion": 2,
+  "too-many-parameters": 2
+ },
+ "src/widgets/toast.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 20
+ },
+ "src/widgets/toggle.zig": {
+  "bool-heavy-struct": 2,
+  "line-too-long": 18
+ },
+ "src/widgets/toolbar.zig": {
+  "compound-assertion": 1,
+  "line-too-long": 30,
+  "too-many-parameters": 1
+ },
+ "src/widgets/tooltip.zig": {
+  "bool-parameters": 1,
+  "line-too-long": 29,
+  "too-many-parameters": 1
+ },
+ "src/widgets/tree.zig": {
+  "bool-parameters": 1,
+  "large-generic-function": 1,
+  "line-too-long": 42,
+  "missing-assertion": 3,
+  "too-many-parameters": 3
+ },
+ "src/widgets/vlist.zig": {
+  "large-generic-function": 1,
+  "line-too-long": 32,
+  "missing-assertion": 2,
+  "too-many-parameters": 2
+ }
+}

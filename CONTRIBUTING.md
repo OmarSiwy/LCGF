@@ -18,6 +18,7 @@ Without Nix, install Zig 0.18.0-dev.1151+8dfb7a7cc exactly (ziglang.org/builds);
   ```
   zig build test
   zig build fmt
+  zig build lint
   ```
   No "fix the build" follow-ups. A history in which every commit is green is what makes
   `git bisect` and reverting one commit safe.
