@@ -1,11 +1,10 @@
 //! fmt: the format of a formatted label (`spec.text("Volume {.1} dB", .{.volume})`, a `.zon`
-//! `.text`), one meaning in every front end: Zig's comptime UIs and seam, and the static UIs of C++
-//! and Rust, whose frames are Zig's. Tier 0: no allocator; the caller holds the segments and the
-//! output.
+//! `.text`), one meaning in every front end. Tier 0: no allocator; the caller holds the
+//! segments and the output.
 //!
 //! The language:
 //! - `{}` is the next argument: a string as it is, a bool as `true` or `false`, an integer in
-//!   decimal, an enum(u8) as its number (what a C or Rust state, and the seam, hold of it).
+//!   decimal, an enum(u8) as its number.
 //! - `{.N}`, N from 0 to 6, is the next argument, an f32, with N decimals: the value widened to
 //!   f64, times 10^N, rounded half away from zero (every step exact or correctly rounded, so
 //!   every language gets the same digits). The sign shows only when that result is not zero; a

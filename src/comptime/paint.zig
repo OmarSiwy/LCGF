@@ -345,11 +345,11 @@ pub fn Paint(comptime spec: Spec, comptime options: Options) type {
 // ---- the frame over a table source ----------------------------------------------------------------
 //
 // Where a frame's draw list comes from: a comptime UI's `Paint` (every table a constant, so it
-// folds into the frame) or the static-UI engine's words (src/abi/ct.zig, the same frame over
-// tables read at run time). `t` has the paint tables (`node`, `templates`, `keys`,
-// `clip_node`, `label_plans`, the batches) and answers for row `i`: its paint source, outset,
-// look parameters, parent, presence, participation, opacity and clip radii; `g` is the frame's
-// geometry, which `t.rectOf`, `t.clipOf`, `t.worldOf` and `t.visibleOf` read.
+// folds into the frame) or tables read at run time (the same frame). `t` has the paint
+// tables (`node`, `templates`, `keys`, `clip_node`, `label_plans`, the batches) and answers
+// for row `i`: its paint source, outset, look parameters, parent, presence, participation,
+// opacity and clip radii; `g` is the frame's geometry, which `t.rectOf`, `t.clipOf`,
+// `t.worldOf` and `t.visibleOf` read.
 
 /// How far a frame's emit has got: the next quad and op.
 pub const Cursor = struct { quad: u32 = 0, op: u32 = 0 };

@@ -1,9 +1,6 @@
-//! The tables of a comptime UI as pure functions over arrays. Tier 1. They run in two places:
-//!
-//! - in the Zig compiler, at comptime, where `ct_layout.Layout` and `ct_paint.Paint` call them
-//!   over the tree `Tree.push` built from the spec (`columns.Columns.pushed`);
-//! - in `lcgf-gen` (tools/lcgf-gen/), at run time, over the same tree pushed from a `.zon`
-//!   spec, for the static UIs C++ and Rust programs link (src/abi/ct.zig).
+//! The tables of a comptime UI as pure functions over arrays. Tier 1. The Zig compiler runs
+//! them at comptime, where `ct_layout.Layout` and `ct_paint.Paint` call them over the tree
+//! `Tree.push` built from the spec (`columns.Columns.pushed`); they run at run time too.
 //!
 //! `p` is a pushed tree: anything with the columns of `Tree.Columns` in `c` (indexable rows)
 //! and the extras in `x` and `xlen`. Outputs go to slices the caller sizes, so the functions

@@ -513,8 +513,7 @@ pub fn Events(comptime spec: Spec) type {
 
 // ---- input over widget tables ---------------------------------------------------------------------
 //
-// The cores of `Events`, by widget position (slot) instead of `Widget`, so the static-UI engine
-// (src/abi/ct.zig) runs them over tables read from its words.
+// The cores of `Events`, by widget position (slot) instead of `Widget`.
 
 /// The topmost of `rows` rects under (x, y), or `none`: `c[0..4]` are the x0, y0, x1, y1
 /// columns, padded to whole vectors (padding rows empty, x0 == x1, so never hit). As

@@ -71,8 +71,7 @@ comptime {
 }
 ```
 
-The format has one meaning in every engine (src/core/fmt.zig), Zig's and the C++ and Rust
-ones a `.zon` UI compiles to, so their draw lists stay byte for byte the same: `{}` writes a
+The format (src/core/fmt.zig): `{}` writes a
 string, a bool, a u32, a u8 or an enum(u8) as its number; `{.N}` writes an f32 with N decimals,
 0 to 6, rounded half away from zero; `{{` and `}}` are braces. A wrong count, an f32 without a
 precision or a field of another type fails the build. A change of any argument lays the label

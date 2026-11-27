@@ -80,7 +80,7 @@ fn put(comptime T: type, v: T, out: []f32, at: *usize) void {
 
 /// An animated number as an integer of the range [lo, hi]: rounded half away from zero, clamped
 /// in f64 (where the ends of every type up to 32 bits are exact: an f32 of maxInt(u32) is 2^32),
-/// NaN to 0. What `build` does for an integer, and what the C++ and Rust bindings call.
+/// NaN to 0. What `build` does for an integer.
 pub fn intOf(x: f32, lo: i64, hi: i64) i64 {
     if (x != x) return 0;
     return @intFromFloat(@min(@max(@as(f64, @round(x)), @as(f64, @floatFromInt(lo))), @as(f64, @floatFromInt(hi))));

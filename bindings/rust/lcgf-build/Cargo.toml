@@ -1,6 +1,0 @@
-[package]
-name = "lcgf-build"
-description = "Builds a static UI's frame from a crate's build script: liblcgf's static frame specialized to the UI's tables"
-edition.workspace = true
-version.workspace = true
-license.workspace = true

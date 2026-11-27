@@ -23,8 +23,7 @@ const V4 = @Vector(4, f32); // tidy: allow(fixed-vector-width) a rect's four val
 pub const style_call: std.builtin.CallingConvention =
     if (@import("builtin").mode == .fast) .@"inline" else .auto;
 
-/// One row of a tree's paint extras (`Tree.Extras`). Extern: C++ and Rust write a row's first
-/// five fields in place (`lcgf_extra`, src/abi/view.zig's `CView`).
+/// One row of a tree's paint extras (`Tree.Extras`). Extern.
 pub const Extra = extern struct {
     /// `Style.border`. Read by finalize (children clip inside it), inherit and paint.
     border: f32,
@@ -131,7 +130,7 @@ pub const Template = struct {
     cursor: u8 = 255,
 
     /// The layout inputs a collapsed node (`Participation.layout` off) has zeroed: `pct` to -1,
-    /// the others to 0 (`Tree.pushRow`; tools/abi-gen writes the bindings' copy from it).
+    /// the others to 0 (`Tree.pushRow`).
     pub const collapsed = .{ "min", "max", "grow", "pct", "pad_lo", "pad_hi", "flow", "gap" };
 
     /// Names of the node-column fields, in column order.
@@ -194,7 +193,7 @@ pub const Template = struct {
             const k = @backingInt(s.size[a].kind);
             const v = s.size[a].v;
             // A select, not @max/@min: on a tie or a NaN it is the style's bound on every
-            // target (one maxss/minss on x86), so a row made in C++ or Rust is the same bits.
+            // target (one maxss/minss on x86), so every row made from it is the same bits.
             const lo = v * Size.k_min[k];
             const hi = v * Size.k_max[k] + Size.c_max[k];
             r.min[a] = if (lo > s.min[a]) lo else s.min[a];
@@ -248,9 +247,8 @@ pub const Template = struct {
     }
 };
 
-/// A `Template` as the C ABI lays it out (`lcgf_row` in src/abi/lcgf.h): one 32-bit word per
-/// field, `look` spelled out. C++ and Rust make these; `Tree.pushRow` reads one in place, field
-/// by field, so a row from across the seam is never copied into a `Template` first.
+/// A `Template` flattened: one 32-bit word per field, `look` spelled out. `Tree.pushRow` reads
+/// one in place, field by field, so it is never copied into a `Template` first.
 pub const FlatRow = extern struct {
     min: [2]f32,
     max: [2]f32,

@@ -168,7 +168,7 @@ pub fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime
         }
 
         /// Its event is its value, each frame it is held or a key moves it, as the reference
-        /// slider's (and the seam's) is.
+        /// slider's is.
         pub const Payload = f32;
 
         pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) @TypeOf(event) {

@@ -26,8 +26,8 @@
 //! end's budget on microcontrollers, so the rolled passes stay; unrolling below a node count is
 //! for the budget lane (ct-budget) to take up with a flash limit to weigh it against. The rolled
 //! passes are inlined into each UI's instantiation (`layout.pass_call`), so its constant
-//! columns and axis fold: 16 to 49% fewer instructions per frame on the static UIs
-//! (docs/research/static-ports). Size-optimized builds keep one shared copy instead.
+//! columns and axis fold: 16 to 49% fewer instructions per frame on the static UIs.
+//! Size-optimized builds keep one shared copy instead.
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -515,7 +515,7 @@ pub inline fn fillTexts(tx: *Texts, label_rows: anytype, spans: anytype) void {
 /// measures the labels' text (`spans[k]` is label k's bytes; void: none measured), the live
 /// mask `m` of the selection `sel` is applied, then fit, resolve and place on both axes.
 /// `t` is where the constant tables come from: a comptime UI's `Plain` (they fold into its
-/// frame) or the static-UI engine's words (src/abi/ct.zig). It has `sense`, `label_rows`,
+/// frame) or tables read at run time. It has `sense`, `label_rows`,
 /// `live` and, with it, `max_src` and `flow_src`; `windows` and `scroll_src`, `setScroll`;
 /// `root_when`.
 pub inline fn passesOver(t: anytype, v: anytype, tx: *Texts, spans: anytype, sel: anytype, m: anytype, viewport: [2]f32, font: anytype) void {

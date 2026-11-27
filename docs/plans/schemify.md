@@ -67,7 +67,6 @@ const r = f.interact(node, .{ .hover = true, .drag = true });   // pan, select: 
 | C3 | `sw`: the Zig shader for every kind, culled per band, clipped to the node, threaded and damage-aware like the quad loop | `src/render/sw/canvas.zig` |
 | C4 | `canvas.wgsl`, naga-translated (`src/render/shaders/translate.sh`), and an instanced pipeline in each GPU back end: vk, metal, d3d12, gles, wgpu, web | `src/render/shaders/`, each back end's renderer |
 | C5 | A `canvas` golden scene (every kind, caps, clipping, camera, glyphs) at 0 bad pixels, sw against GPU; a 100k-primitive pan/zoom benchmark against the 120 fps budget, with workload and conditions | `tools/golden/draw.zig`, `tools/golden/ref/draw/`, `bench/` |
-| C6 | C and C++/Rust exposure through `src/abi/api.zig` (per `docs/plans/bindings-rust.md` §6) | `src/abi/` |
 
 ## 2. Run-time theme values in compiled pages
 
@@ -96,11 +95,10 @@ Today a comptime page folds the theme: the theme is a comptime parameter (`Compt
 | T-RT, T-CT: run-time theme tokens on runtime and comptime pages | ac391ab0, dba544f2, aad15faf, de869134 |
 | C4/C5 GPU: canvas golden in draw-golden on the GPU, vk benchmark (RTX 5060: 0.55 ms/frame for 100k at 1080p; pan uploads 160 B), batch placement fix | 1e06d82c..00b85934 |
 | sw canvas: transform and rounded-clip parents, `Frame.reuse` (`enableCanvas` now takes 2 × customs rows), cheaper shading (71M instr/frame for 100k, 1 thread), golden through the bin, dashes on arcs | ea5ff09e, 58e13807, d42136f3, fdcd4a68, 2ae59430, b64b2381 |
-| GPU transformed nodes, rounded clips, dashed arcs; C6 canvas from C, C++ and Rust (safe Rust `Frame::canvas`); address-free damage; comptime `CanvasRenderer` (apps without a canvas pay 0 B); caller-set limits in `Desc` (`canvas_batches` ≤32, `canvas_draws` ≤64, `canvas_overrides` ≤512) | d48e38d1, 90db0223, 8af3f1ea, 7b81d32c..403133d8 |
+| GPU transformed nodes, rounded clips, dashed arcs; address-free damage; comptime `CanvasRenderer` (apps without a canvas pay 0 B); caller-set limits in `Desc` (`canvas_batches` ≤32, `canvas_draws` ≤64, `canvas_overrides` ≤512) | d48e38d1, 90db0223, 8af3f1ea, 7b81d32c..403133d8 |
 | Per-row mark colours for large selections: `Instances.init(…, .{ .marks = true })`, `mark(i, color)`; a mark beats a range override. **API change:** `Instances.init`/`requiredBytes` take an `Options` (`.{}` for none) | 2154cef9, b522005b |
 | E2 several regions; per-row view state; E1 fit-sized regions | 1d39f356, fa569c09, 71f60ea2, 357f6c33, 83987184, d72829fc |
 | **Re-pin here for your (1)+(2):** E1, a fit-sized region takes its content's size in the same frame and its clicks land in the final rect, in both frontends | cb47649c, 06c0e429; main 9e9a492b |
-| C++ and Rust: static UIs through a Zig-built per-UI frame (`ct.hpp` and `ct.rs` deleted); one HTML page from Zig, C++ and Rust (`lcgf_add_ui`/`include_ui!` take HTML, the seam subset) | 08e35e82, 93f62797, 024094de |
 | census-src passes (0 lines over baseline); embedded flash at or below the earlier main | 93f62797 |
 
 LCGF fixes bugs Schemify finds at the root, on `main`: send them to the LCGF session with the commit and a repro.

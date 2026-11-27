@@ -237,34 +237,6 @@ sh docs/research/custom-webgpu/validate.sh zig-out/bin/custom-draw-projection
   At 4× MSAA, lavapipe's scissor test passes 2 of 4 samples in the row and column just outside a scissor's top and left edges (a quarter in the corner). That is the rasterizer's sample placement, not the projection: the scissor recorded at 1× and 4× is the same. So multisampled comparisons allow exactly that ring, and nothing else: `pixelsOffMultisampled` in `src/render/vk/scenes.zig` accepts a pixel there only if it is the expected blend of inside and outside colours, and `tools/golden/golden.py --scissor-ring x0,y0,x1,y1` does the same for the wgpu goldens (`ci/jobs/wgpu.sh` passes `8,8,152,112` for `custom.png`). Every other pixel must still match.
 - **Custom-draw probe.** Times a redrawn custom node against the native-only build (`docs/research/custom-webgpu/measure.py`). Under validation it compares every composed frame with reference images, and a control run omits the layout hand-off to show the validation layer is active.
 
-### C++ and Rust bindings
-
-```sh
-nix develop .#vs -c ci/run.sh bindings
-```
-
-The job installs `zig build abi -Dwgpu-native=v29` into `zig-out`, a prefix with `liblcgf`, `lcgf.h`, `lcgf-gen`, the C++ headers, the CMake package and wgpu-native. CMake then builds the C++ checks and cargo builds the Rust crates against that prefix alone. `bindings/check/run.sh`:
-
-- replays 1,086 frames of pointer and Tab input over a toolbar (`.zon`), a mixer (the `ui!` DSL) and a panel with regions, a custom draw node and a spring, four ways: Zig's `ComptimeUi`, Zig through the seam, C++ and Rust. Draw lists and events must be byte-identical, and every widget must receive an event;
-- makes resources, two pipelines (with their MSL) and one frame through the Zig Metal projection, `lcgf/gpu.hpp` with `LCGF_GPU_METAL` and `lcgf::gpu` with `metal`, against a stand-in Objective-C runtime that logs every message (`bindings/check/objc_record.c`). The three logs must be equal; the C++ Metal checks must compile for aarch64-macos with `-Werror`;
-- makes the same resources, pipelines and frame through the Zig D3D12 projection, `lcgf/gpu.hpp` with `LCGF_GPU_D3D12` and `lcgf::gpu` with `d3d12`, on a recording Direct3D 12 over DirectX-Headers (`bindings/check/d3d12_record.c`) that logs every field of every struct, HLSL and root signatures included. The three logs must be equal; the C++ check must compile for x86_64-windows-gnu with `-Werror`;
-- draws the comptime examples (mixer, card, settings, badge, dash, todo, feed, sized controls, palette, with patched colours, and meter, with formatted labels of every argument kind) through Zig's comptime pipeline (`ct_layout`, `ct_paint`, `ct_events`; `bindings/check/ct_dump.zig`), and their `.zon` (`src/abi/testdata/static/`) through `lcgf-gen --static` into C++ (each UI's frame built three ways: by `zig build-obj`, and without Zig from C by clang and by gcc) and Rust (the same three ways, by `lcgf_build::static_ui`), 240 frames of changing viewports, label text, list counts, conditions, choices and scroll offsets, with pointer and Tab input. The draw lists, and the events and focus, must be byte-identical;
-- replays partial updates on mixer, dash, todo, palette and meter (where every field is a format's argument) (`ct_dump partial`; `ct_check partial` in C++ and Rust): every fourth frame a full frame, two in four one label's field changed and laid out again with `relayout`, one in four the colour fields changed and `patch`ed. The draw lists and each frame's dirty quads must be byte-identical to Zig's `Layout.relayout` and `Paint.Patches`;
-- runs the three UIs, three of the static UIs and three runtime scenes from C++ and Rust linked against `liblcgf_auto.a`, with `LCGF_FORCE_LANES` at 4, 8 and 16 in turn (widths the CPU cannot run are skipped). Every width must make Zig's frames, and the width that ran must be the one forced;
-- makes the rows of 4,096 styles in Zig, through `lcgf_template_from`, with C++'s `lcgf::Row` and with Rust's `Row::from`. They must be equal word for word;
-- builds bench/scenes' six scenes, and the gate's `kit` scene (formatted text written in place, the widgets by options, springs on a colour and an array, a tween), through the runtime front end in Zig, C++ (`lcgf/runtime.hpp`) and Rust (`lcgf::runtime`), 120 frames each with presses, and whether each frame was needed. Two scenes run again with 40 nodes and a stack of 3, so the rows C++ and Rust push inline overflow. The outputs must be byte-identical;
-- records one GPU frame through `lcgf_render.gpu`, `lcgf/gpu.hpp` and `lcgf::gpu` into `bindings/check/record.c`, which logs every Vulkan call with each argument and struct field. The three logs must be equal;
-- runs check.zig's GPU checks (`bindings/cpp/check/gpu_checks.hpp`, `bindings/rust/lcgf-check/src/gpu_checks.rs`) in C++ and Rust on Vulkan (lavapipe), GL ES 3.1 (llvmpipe through EGL) and wgpu-native, with pipelines and bind groups made from the repository's WGSL. The Rust `webgpu.h` declarations must have the C header's sizes and field offsets (`bindings/check/wgpu_layout.c`).
-
-Frame times for each language are printed but not judged (`ci/run.sh vs-lcgf-bindings` measures the C++ and Rust harnesses beside the Zig one). `zig build test` covers the rest:
-
-- the tables `lcgf-gen` writes must equal Zig's comptime tables word for word, static UIs' included (`src/abi/zon.zig`);
-- the tier-0 passes take min and max as selects (`simd.maxF`, `simd.minF`), so a tie or NaN gives the same bits on every target and in the C++ and Rust ports; the widget and draw goldens did not move when they changed;
-- the static engine's frames must equal `ct_layout` and `ct_paint`'s over the examples, bench scenes (folds, batch sorting, clips) and painted regions beside a fold, and its templates and constant columns theirs (`src/abi/ct.zig`). `ct_layout.Layout` and `ct_paint.Paint` make their tables with the same functions (`src/comptime/tables.zig`), and `ct-sizes`, `ct-rodata` and the two ct benches did not move when they started to;
-- the seam must match `ComptimeUi` over the reference replay and the panel (`src/abi/seam.zig`);
-- the runtime front end's C calls must keep the input alive through the frame and skip unchanged frames (`src/abi/api.zig`);
-- lcgf-gen's run-time GLSL binding patch must equal the comptime one (`src/render/gpu/naga.zig`).
-
 ## 5. API index
 
 ```sh

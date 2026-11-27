@@ -42,9 +42,8 @@ const libobjc = "/usr/lib/libobjc.A.dylib";
 const metal = "/System/Library/Frameworks/Metal.framework/Metal";
 const quartz_core = "/System/Library/Frameworks/QuartzCore.framework/QuartzCore";
 
-/// Where `loadFrom` opens the runtime. The defaults are the system's; bindings/check's recorder
-/// (objc_record.c) passes its own library for all three, so the projection's messages can be
-/// logged on Linux.
+/// Where `loadFrom` opens the runtime. The defaults are the system's; a recorder can pass its
+/// own library for all three, so the projection's messages can be logged on Linux.
 pub const Paths = struct {
     objc: [*:0]const u8 = libobjc,
     metal: [*:0]const u8 = metal,

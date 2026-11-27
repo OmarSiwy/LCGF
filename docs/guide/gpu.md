@@ -153,7 +153,3 @@ while walking the commands with `drawUntilCustom`, exactly as `custom.md` shows.
 
 The Direct3D 12 and Metal test suites run the same `check.zig` checks. Direct3D 12 runs them
 on WARP, or on vkd3d under Wine. Metal needs a Mac, and the checks skip on any other system.
-
-C++ and Rust programs get the same frame model on Vulkan, inline: `lcgf/gpu.hpp` follows Dawn
-and `lcgf::gpu` follows wgpu. A recorded frame makes the same Vulkan calls in all three
-languages. See [C++ and Rust](bindings.md).

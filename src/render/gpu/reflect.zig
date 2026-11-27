@@ -147,7 +147,7 @@ pub const Error = error{Wgsl};
 
 /// Reflects `src` at run time or at comptime, into the caller's memory: `text` (src.len bytes,
 /// the source without comments, which the names point into), `bindings` and `entries`. This is
-/// the one reader: `parse` calls it while compiling, lcgf-gen (tools/lcgf-gen/) when it runs.
+/// the one reader: `parse` calls it while compiling, a program when it runs.
 pub fn parseInto(src: []const u8, text: []u8, bindings: []Binding, entries: []EntryPoint, failure: *Failure) Error!Module {
     const stripped = stripComments(src, text);
     var nb: usize = 0;

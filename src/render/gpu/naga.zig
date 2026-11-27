@@ -237,7 +237,7 @@ const sample = reflect.parse(
     \\@group(1) @binding(1) var img: texture_storage_2d<rgba8unorm, write>;
 );
 
-// ---- The same at run time, for lcgf-gen (tools/lcgf-gen/), which writes C++ and Rust shaders ----
+// ---- The same at run time ----
 
 /// `slots` at run time: one per binding, into `out` (at least `m.bindings.len` long).
 pub fn slotsInto(m: reflect.Module, split_buffers: bool, split_images: bool, scratch: []reflect.Binding, out: []Slot) []Slot {
@@ -301,7 +301,7 @@ pub fn glslBlocksInto(gpa: std.mem.Allocator, text: []const u8, name: []const u8
     }
 }
 
-/// `hlsl` at run time, for lcgf-gen: naga's samplers taken out of its heap, one
+/// `hlsl` at run time: naga's samplers taken out of its heap, one
 /// `register(sB, spaceG)` each, line endings kept.
 pub fn hlslAlloc(gpa: std.mem.Allocator, src: []const u8) ![:0]u8 {
     var out: std.ArrayList(u8) = .empty;
@@ -348,7 +348,7 @@ pub fn mslSizedIndex(m: reflect.Module, group: u32, binding: u32) ?u32 {
     return null;
 }
 
-/// `msl` at run time, for lcgf-gen: naga's MSL with every resource at its slot (`table` from
+/// `msl` at run time: naga's MSL with every resource at its slot (`table` from
 /// `slotsInto(m, false, false, ...)`).
 pub fn mslAlloc(gpa: std.mem.Allocator, m: reflect.Module, table: []const Slot, src: []const u8) ![:0]u8 {
     const fake = " [[user(fake0)]]";

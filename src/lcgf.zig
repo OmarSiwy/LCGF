@@ -220,17 +220,6 @@ pub const i18n_date = @import("i18n/date.zig");
 pub const i18n_bundle = @import("i18n/bundle.zig");
 pub const i18n_pseudo = @import("i18n/pseudo.zig");
 pub const ct_interop = @import("comptime/interop.zig");
-/// The comptime front end's tables as data, and the prebuilt frame that reads them behind the
-/// C seam (C++ and Rust bindings: bindings/, tools/lcgf-gen/).
-pub const abi = @import("abi/abi.zig");
-pub const abi_words = @import("abi/words.zig");
-pub const abi_plan = @import("abi/plan.zig");
-pub const abi_seam = @import("abi/seam.zig");
-pub const abi_zon = @import("abi/zon.zig");
-pub const abi_api = @import("abi/api.zig");
-pub const abi_view = @import("abi/view.zig");
-pub const abi_canvas = @import("abi/canvas.zig");
-pub const abi_ct = @import("abi/ct.zig");
 pub const ct_tables = @import("comptime/tables.zig");
 
 pub const embedded_fixed = @import("embedded/fixed.zig");

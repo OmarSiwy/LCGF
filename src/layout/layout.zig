@@ -38,7 +38,7 @@ const inf = types.inf;
 /// SIMD. Clears per-frame scratch and derives `gap_total`.
 /// How the frame's passes are called from code that knows its tree at compile time (the comptime
 /// static pipeline): inlined into that instantiation, so its constant columns and axis fold
-/// (docs/research/static-ports, about 16-49% fewer instructions per frame), except in builds
+/// (about 16-49% fewer instructions per frame), except in builds
 /// optimized for size, where one shared copy keeps microcontroller flash down (C0165).
 pub const pass_call: std.builtin.CallModifier = if (inline_passes) .always_inline else .auto;
 // Measured: routing a size build's calls through `@call(.auto, …)` here still grew the rv32

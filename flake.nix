@@ -113,17 +113,6 @@
           packages = [
             pkgs.cargo
             pkgs.rustc
-            # The bindings' format checks (ci/jobs/bindings.sh): cargo fmt and clang-format.
-            pkgs.rustfmt
-            pkgs.clang-tools
-            # The C++ bindings' check (ci/jobs/bindings.sh) builds with CMake.
-            pkgs.cmake
-            # ...and counts the runtime scenes' instructions against Zig's (bindings/check/parity.sh).
-            pkgs.perf
-            # ...and translates its WGSL shaders with naga (lcgf_add_shader); static UIs' frames
-            # built without Zig are checked with clang (specialized) as well as gcc.
-            naga-cli
-            pkgs.clang
             pkgs.pkg-config
             pkgs.libx11
             pkgs.cairo

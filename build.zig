@@ -31,138 +31,9 @@ pub fn build(b: *std.Build) void {
     for ([_][]const u8{ "auxiliary/GraphemeBreakProperty", "emoji/emoji-data", "DerivedCoreProperties", "auxiliary/WordBreakProperty", "LineBreak", "EastAsianWidth", "extracted/DerivedGeneralCategory", "extracted/DerivedBidiClass", "BidiBrackets", "Scripts" }) |f|
         ucd_gen.addFileArg(ucd.path(b.fmt("{s}.txt", .{f})));
     lcgf.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
-    // lcgf for the machine running the build: what host tools (abi-gen) link.
-    const host_options = b.addOptions();
-    host_options.addOption(?u32, "lanes", null);
-    host_options.addOption(bool, "fixed_point", false);
-    const lcgf_host = b.addModule("lcgf_host", .{ .root_source_file = b.path("src/lcgf.zig"), .target = b.graph.host });
-    lcgf_host.addOptions("build_options", host_options);
-    lcgf_host.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
 
     const lib = b.addLibrary(.{ .name = "lcgf", .root_module = lcgf });
     b.getInstallStep().dependOn(&lib.step);
-
-    // ---- C++ and Rust: liblcgf, lcgf.h and lcgf-gen (src/abi/, tools/lcgf-gen/, bindings/) ----
-    // One archive per lane count, its frame named for it (lcgf_frame_u32_f32_l8); generated code
-    // names the one its target flags pick. lcgf-gen is built at 16 lanes, so the buffer size it
-    // writes is enough for any of them. None of it is needed by a Zig program.
-    const abi_step = b.step("abi", "Build liblcgf_l{4,8,16}.a, lcgf.h, lcgf-gen and the C++/Rust bindings into zig-out");
-    var lcgf16: *std.Build.Module = lcgf;
-    for ([_]u32{ 4, 8, 16 }) |abi_lanes| {
-        const abi_options = b.addOptions();
-        abi_options.addOption(?u32, "lanes", abi_lanes);
-        abi_options.addOption(bool, "fixed_point", false);
-        const m = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = optimize, .pic = true });
-        m.addOptions("build_options", abi_options);
-        m.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
-        if (abi_lanes == 16) lcgf16 = m;
-        const abi_lib = b.addLibrary(.{ .name = b.fmt("lcgf_l{d}", .{abi_lanes}), .linkage = .static, .root_module = b.createModule(.{
-            .root_source_file = b.path("src/abi/lib.zig"),
-            .target = target,
-            .optimize = optimize,
-            .pic = true,
-            .imports = &.{.{ .name = "lcgf", .module = m }},
-        }) });
-        abi_lib.bundle_compiler_rt = true;
-        abi_step.dependOn(&b.addInstallArtifact(abi_lib, .{}).step);
-    }
-    // The static-UI engine as C source (src/abi/ct_c.zig through Zig's C backend, its pointer
-    // arithmetic made foldable by tools/ct-csrc), one file per lane count, with the zig.h it
-    // includes: lcgf-gen --static's per-UI C compiles it with the UI's words as constants.
-    const ct_csrc = b.addExecutable(.{ .name = "ct-csrc", .root_module = b.createModule(.{ .root_source_file = b.path("tools/ct-csrc/main.zig"), .target = b.graph.host, .optimize = .ReleaseSafe }) });
-    for ([_]u32{ 4, 8, 16 }) |abi_lanes| {
-        const copt = b.addOptions();
-        copt.addOption(?u32, "lanes", abi_lanes);
-        copt.addOption(bool, "fixed_point", false);
-        const ctarget = b.resolveTargetQuery(.{ .cpu_arch = target.result.cpu.arch, .os_tag = target.result.os.tag, .abi = target.result.abi, .ofmt = .c });
-        const cm = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = ctarget, .optimize = optimize });
-        cm.addOptions("build_options", copt);
-        cm.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
-        const cobj = b.addObject(.{ .name = b.fmt("lcgf_ct_l{d}", .{abi_lanes}), .root_module = b.createModule(.{
-            .root_source_file = b.path("src/abi/ct_c.zig"),
-            .target = ctarget,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "lcgf", .module = cm }},
-        }) });
-        const fix = b.addRunArtifact(ct_csrc);
-        fix.addFileArg(cobj.getEmittedBin());
-        const fixed = fix.addOutputFileArg(b.fmt("lcgf_ct_l{d}.c", .{abi_lanes}));
-        abi_step.dependOn(&b.addInstallFile(fixed, b.fmt("share/lcgf/lcgf_ct_l{d}.c", .{abi_lanes})).step);
-    }
-    abi_step.dependOn(&b.addInstallFile(.{ .cwd_relative = b.pathJoin(&.{ std.fs.path.dirname(b.graph.zig_exe).?, "..", "lib", "zig.h" }) }, "share/lcgf/zig.h").step);
-    // lcgf's Zig sources, the Unicode tables and one build_options per lane count, for
-    // lcgf-gen --static --lang zig's per-UI frame: `zig build-obj` against them specializes
-    // liblcgf's static-UI frame to the UI's tables (CMake's lcgf_add_ui, lcgf-build for Rust).
-    abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("src"), .install_dir = .prefix, .install_subdir = "share/lcgf/zig/src", .include_extensions = &.{ ".zig", ".h" } }).step);
-    abi_step.dependOn(&b.addInstallFile(ucd_tables, "share/lcgf/zig/unicode_tables.zig").step);
-    for ([_]u32{ 4, 8, 16 }) |abi_lanes| {
-        const wf = b.addWriteFiles();
-        const f = wf.add("options.zig", b.fmt("pub const lanes: ?u32 = {d};\npub const fixed_point: bool = false;\n", .{abi_lanes}));
-        abi_step.dependOn(&b.addInstallFile(f, b.fmt("share/lcgf/zig/options_l{d}.zig", .{abi_lanes})).step);
-    }
-    // liblcgf_auto.a (x86-64 ELF): the three widths again, each built for the CPU level it suits
-    // and its C names suffixed, under the dispatcher of src/abi/auto.zig, which picks one at the
-    // first call. CMake's LCGF_LANES=auto and the crate's `lanes-auto` feature link it.
-    if (target.result.cpu.arch == .x86_64 and target.result.ofmt == .elf) {
-        const levels = [_]*const std.Target.Cpu.Model{ &std.Target.x86.cpu.x86_64, &std.Target.x86.cpu.x86_64_v3, &std.Target.x86.cpu.x86_64_v4 };
-        var auto_m: ?*std.Build.Module = null;
-        var objs: [3]*std.Build.Step.Compile = undefined;
-        for ([_]u32{ 4, 8, 16 }, levels, &objs) |w, level, *obj| {
-            var q = target.query;
-            q.cpu_model = .{ .explicit = level };
-            q.cpu_features_add = .empty;
-            q.cpu_features_sub = .empty;
-            const level_target = b.resolveTargetQuery(q);
-            const o = b.addOptions();
-            o.addOption(?u32, "lanes", w);
-            o.addOption(bool, "fixed_point", false);
-            o.addOption([]const u8, "symbol_suffix", b.fmt("__l{d}", .{w}));
-            const m = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = level_target, .optimize = optimize, .pic = true });
-            m.addOptions("build_options", o);
-            m.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
-            if (w == 4) auto_m = m;
-            obj.* = b.addObject(.{ .name = b.fmt("lcgf_auto_l{d}", .{w}), .root_module = b.createModule(.{
-                .root_source_file = b.path("src/abi/lib.zig"),
-                .target = level_target,
-                .optimize = optimize,
-                .pic = true,
-                .imports = &.{.{ .name = "lcgf", .module = m }},
-            }) });
-        }
-        var q = target.query;
-        q.cpu_model = .{ .explicit = levels[0] };
-        q.cpu_features_add = .empty;
-        q.cpu_features_sub = .empty;
-        const auto_lib = b.addLibrary(.{ .name = "lcgf_auto", .linkage = .static, .root_module = b.createModule(.{
-            .root_source_file = b.path("src/abi/auto.zig"),
-            .target = b.resolveTargetQuery(q),
-            .optimize = optimize,
-            .pic = true,
-            .imports = &.{.{ .name = "lcgf", .module = auto_m.? }},
-        }) });
-        for (objs) |obj| auto_lib.root_module.addObject(obj);
-        auto_lib.bundle_compiler_rt = true;
-        abi_step.dependOn(&b.addInstallArtifact(auto_lib, .{}).step);
-    }
-    const lcgf_gen = b.addExecutable(.{ .name = "lcgf-gen", .root_module = b.createModule(.{
-        .root_source_file = b.path("tools/lcgf-gen/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "lcgf", .module = lcgf16 }},
-    }) });
-    abi_step.dependOn(&b.addInstallArtifact(lcgf_gen, .{}).step);
-    // The Zig side of the bindings' gate (bindings/check/run.sh): the same UIs, frame by frame.
-    const lcgf_dump = b.addExecutable(.{ .name = "lcgf-dump", .root_module = b.createModule(.{
-        .root_source_file = b.path("bindings/check/dump.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
-    }) });
-    abi_step.dependOn(&b.addInstallArtifact(lcgf_dump, .{}).step);
-    abi_step.dependOn(&b.addInstallFile(b.path("src/abi/lcgf.h"), "include/lcgf.h").step);
-    abi_step.dependOn(&b.addInstallFile(b.path("src/abi/lcgf_lanes.h"), "include/lcgf_lanes.h").step);
-    abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("bindings/cpp/include"), .install_dir = .header, .install_subdir = "" }).step);
-    abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = b.path("bindings/cpp/cmake"), .install_dir = .lib, .install_subdir = "cmake/lcgf" }).step);
 
     const custom_draw_scene = b.createModule(.{
         .root_source_file = b.path("src/render/custom_draw_scene.zig"),
@@ -240,14 +111,6 @@ pub fn build(b: *std.Build) void {
         // The repository's lcgf_render.gpu shaders: WebGPU takes the WGSL as it is.
         const wgpu_shaders = addGpuShaders(b, .wgpu, .{ .prebuilt = b.path("src/render/shaders/gen") }, repo_gpu_shaders(b));
         for ([_]*std.Build.Module{ wgpu_tests.root_module, wgpu_play.root_module }) |m| m.addImport("gpu_shaders", wgpu_shaders);
-        // C++ and Rust over wgpu-native (lcgf/gpu.hpp with LCGF_GPU_WGPU, lcgf::gpu with `wgpu`):
-        // `zig build abi -Dwgpu-native=v29` puts its headers and libraries beside liblcgf. The
-        // shared library is what Rust links (a Rust static library brings its own std).
-        abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = wgpu_native.path("include"), .install_dir = .header, .install_subdir = "" }).step);
-        const shared = if (target.result.os.tag.isDarwin()) "libwgpu_native.dylib" else "libwgpu_native.so";
-        for ([_][]const u8{ "libwgpu_native.a", shared }) |file| {
-            abi_step.dependOn(&b.addInstallFileWithDir(wgpu_native.path(b.fmt("lib/{s}", .{file})), .lib, file).step);
-        }
         wgpu_step.dependOn(&b.addRunArtifact(wgpu_tests).step);
         wgpu_play_step.dependOn(&b.addInstallArtifact(wgpu_play, .{}).step);
         vk_probe_wgpu_step.dependOn(&b.addInstallArtifact(vk_probe_wgpu, .{}).step);
@@ -294,29 +157,6 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{ .root_module = lcgf });
     const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = ct_csrc.root_module })).step);
-    // tools/abi-gen: liblcgf's generated C header (src/abi/lcgf.h, from src/abi/api.zig) and
-    // the bindings' row stores (bindings/cpp/include/lcgf/rows.hpp, bindings/rust/lcgf/src/rows.rs),
-    // committed. `zig build abi-gen` writes it; the test fails when it is stale, when a pub fn
-    // of a container api.zig lists is neither exported nor skipped (the tripwire), or when the
-    // header does not compile as C.
-    const abi_gen = b.addExecutable(.{ .name = "abi-gen", .root_module = b.createModule(.{
-        .root_source_file = b.path("tools/abi-gen/main.zig"),
-        .target = b.graph.host,
-        .imports = &.{.{ .name = "lcgf", .module = lcgf_host }},
-    }) });
-    const abi_gen_write = b.addRunArtifact(abi_gen);
-    abi_gen_write.addDirectoryArg(b.path("."));
-    b.step("abi-gen", "Write liblcgf's generated C header (tools/abi-gen)").dependOn(&abi_gen_write.step);
-    const abi_gen_check = b.addRunArtifact(abi_gen);
-    abi_gen_check.addArg("--check");
-    abi_gen_check.addDirectoryArg(b.path("."));
-    abi_gen_check.has_side_effects = true;
-    test_step.dependOn(&abi_gen_check.step);
-    const abi_h_check = b.addObject(.{ .name = "lcgf_h", .root_module = b.createModule(.{ .target = b.graph.host }) });
-    abi_h_check.root_module.addCSourceFile(.{ .file = b.path("tools/abi-gen/check.c"), .flags = &.{ "-std=c11", "-Wall", "-Werror" } });
-    abi_h_check.root_module.addIncludePath(b.path("src/abi"));
-    test_step.dependOn(&abi_h_check.step);
     test_step.dependOn(&b.addRunArtifact(tests).step);
     // For targets this machine cannot run (ci/run.sh cross).
     b.step("test-build", "Compile the tests without running them").dependOn(&tests.step);
@@ -388,22 +228,6 @@ pub fn build(b: *std.Build) void {
     const src_scenes_root = b.path("bench/scenes/scenes.zig");
     const bench_src_ui = b.createModule(.{ .root_source_file = b.path("bench/micro/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }} });
     const bench_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = bench_src_ui }} });
-    // The runtime front end's bindings gate (bindings/check/rt_dump.zig): the same scenes in Zig.
-    const rt_dump = b.addExecutable(.{ .name = "lcgf-rt-dump", .root_module = b.createModule(.{
-        .root_source_file = b.path("bindings/check/rt_dump.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-        .imports = &.{ .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "scenes", .module = bench_src_scenes } },
-    }) });
-    abi_step.dependOn(&b.addInstallArtifact(rt_dump, .{}).step);
-    // The static UIs' bindings gate (bindings/check/ct_dump.zig): Zig's comptime pipeline.
-    const ct_dump = b.addExecutable(.{ .name = "lcgf-ct-dump", .root_module = b.createModule(.{
-        .root_source_file = b.path("bindings/check/ct_dump.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
-    }) });
-    abi_step.dependOn(&b.addInstallArtifact(ct_dump, .{}).step);
     const bench = b.addExecutable(.{ .name = "bench", .root_module = b.createModule(.{
         .root_source_file = b.path("bench/micro/bench.zig"),
         .target = target,
@@ -836,9 +660,6 @@ pub fn build(b: *std.Build) void {
     }) });
     const vk_step = b.step("vk", "Test the Vulkan back end on a real implementation (ci/run.sh vk)");
     const vk_play_step = b.step("vk-play", "Build zig-out/bin/vk-play (draws the render conformance scenes with Vulkan) and vk-probe");
-    // Declared outside the lazy block below: on the run that fetches vulkan_headers the block
-    // is skipped, and an option given but not declared stops the configure.
-    const directx_headers = b.option([]const u8, "directx-headers", "A DirectX-Headers v1.620.2 checkout, for the bindings gate's D3D12 recorder");
     if (b.lazyDependency("vulkan_headers", .{})) |vulkan_headers| {
         const vk_h = b.addTranslateC(.{ .root_source_file = vulkan_headers.path("include/vulkan/vulkan_core.h"), .target = target, .optimize = optimize });
         vk_h.addIncludePath(vulkan_headers.path("include"));
@@ -859,92 +680,6 @@ pub fn build(b: *std.Build) void {
             for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
                 m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
         }
-        // The bindings' GPU gate (bindings/check/): Vulkan's headers for C++ (lcgf/gpu.hpp), the
-        // command recorder, and the same frame recorded through lcgf_render.gpu in Zig.
-        abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = vulkan_headers.path("include"), .install_dir = .header, .install_subdir = "" }).step);
-        const record = b.addLibrary(.{ .name = "lcgf_record", .linkage = .static, .root_module = b.createModule(.{ .target = target, .optimize = optimize, .pic = true, .link_libc = true }) });
-        record.root_module.addCSourceFile(.{ .file = b.path("bindings/check/record.c") });
-        record.root_module.addIncludePath(vulkan_headers.path("include"));
-        abi_step.dependOn(&b.addInstallArtifact(record, .{}).step);
-        const vk_module = b.createModule(.{
-            .root_source_file = b.path("src/render/vk/vk.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk_c", .module = vk_c }, .{ .name = "gpu_shaders", .module = vk_shaders } },
-        });
-        const gpu_dump = b.addExecutable(.{ .name = "lcgf-gpu-dump", .root_module = b.createModule(.{
-            .root_source_file = b.path("bindings/check/gpu_dump.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{ .{ .name = "vk", .module = vk_module }, .{ .name = "gpu_shaders", .module = vk_shaders } },
-        }) });
-        gpu_dump.root_module.linkLibrary(record);
-        abi_step.dependOn(&b.addInstallArtifact(gpu_dump, .{}).step);
-
-        // The Metal gate (x86-64 Linux): a recording Objective-C runtime the projections open in
-        // place of the system's (bindings/check/objc_record.c), and the Zig side's frame.
-        if (target.result.cpu.arch == .x86_64 and target.result.os.tag == .linux) {
-            const objc_record = b.addLibrary(.{ .name = "lcgf_objc_record", .linkage = .dynamic, .root_module = b.createModule(.{ .target = target, .optimize = optimize, .pic = true, .link_libc = true }) });
-            objc_record.root_module.addCSourceFile(.{ .file = b.path("bindings/check/objc_record.c") });
-            abi_step.dependOn(&b.addInstallArtifact(objc_record, .{}).step);
-            const metal_dump_shaders = addGpuShaders(b, .metal, .{ .prebuilt = b.path("src/render/shaders/gen") }, repo_gpu_shaders(b));
-            const metal_module = b.createModule(.{
-                .root_source_file = b.path("src/render/metal/metal.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-                .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "gpu_shaders", .module = metal_dump_shaders } },
-            });
-            for ([_][]const u8{ "stock", "example", "canvas" }) |v|
-                metal_module.addAnonymousImport(b.fmt("{s}_metal", .{v}), .{ .root_source_file = b.path(b.fmt("src/render/shaders/gen/{s}.metal", .{v})) });
-            const metal_dump = b.addExecutable(.{ .name = "lcgf-metal-dump", .root_module = b.createModule(.{
-                .root_source_file = b.path("bindings/check/metal_dump.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-                .imports = &.{ .{ .name = "metal", .module = metal_module }, .{ .name = "gpu_shaders", .module = metal_dump_shaders } },
-            }) });
-            abi_step.dependOn(&b.addInstallArtifact(metal_dump, .{}).step);
-
-            // The D3D12 gate: a recording Direct3D 12 over DirectX-Headers' C interfaces
-            // (bindings/check/d3d12_record.c), the projection translated for Linux against them
-            // (src/render/d3d12/c_linux.h), and the Zig side's frame. DirectX-Headers' include
-            // paths are installed beside lcgf.h for the C++ and Rust sides.
-            // A directory path rather than a build.zig.zon dependency: the pinned Zig fetches every
-            // lazy dependency on every build, whatever its step, and only the bindings gate needs
-            // these headers (ci/jobs/bindings.sh downloads them).
-            if (directx_headers) |dx_dir| {
-                const dx: std.Build.LazyPath = .{ .cwd_relative = dx_dir };
-                const dx_include = [_]std.Build.LazyPath{ dx.path(b, "include"), dx.path(b, "include/wsl/stubs"), dx.path(b, "include/directx") };
-                const d3d12_record = b.addLibrary(.{ .name = "lcgf_d3d12_record", .linkage = .static, .root_module = b.createModule(.{ .target = target, .optimize = optimize, .pic = true, .link_libc = true }) });
-                d3d12_record.root_module.addCSourceFile(.{ .file = b.path("bindings/check/d3d12_record.c") });
-                for (dx_include) |inc| d3d12_record.root_module.addIncludePath(inc);
-                abi_step.dependOn(&b.addInstallArtifact(d3d12_record, .{}).step);
-                abi_step.dependOn(&b.addInstallDirectory(.{ .source_dir = dx.path(b, "include"), .install_dir = .header, .install_subdir = "directx-headers" }).step);
-                const d3d12_linux_h = b.addTranslateC(.{ .root_source_file = b.path("src/render/d3d12/c_linux.h"), .target = target, .optimize = optimize, .link_libc = true });
-                for (dx_include) |inc| d3d12_linux_h.addIncludePath(inc);
-                const d3d12_dump_shaders = addGpuShaders(b, .d3d12, .{ .prebuilt = b.path("src/render/shaders/gen") }, repo_gpu_shaders(b));
-                const d3d12_module = b.createModule(.{
-                    .root_source_file = b.path("src/render/d3d12/d3d12.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = true,
-                    .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "d3d12_c", .module = d3d12_linux_h.createModule() }, .{ .name = "gpu_shaders", .module = d3d12_dump_shaders } },
-                });
-                const d3d12_dump = b.addExecutable(.{ .name = "lcgf-d3d12-dump", .root_module = b.createModule(.{
-                    .root_source_file = b.path("bindings/check/d3d12_dump.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = true,
-                    .imports = &.{ .{ .name = "d3d12", .module = d3d12_module }, .{ .name = "gpu_shaders", .module = d3d12_dump_shaders } },
-                }) });
-                d3d12_dump.root_module.linkLibrary(d3d12_record);
-                abi_step.dependOn(&b.addInstallArtifact(d3d12_dump, .{}).step);
-            }
-        }
-
         // The custom-node timing of docs/research/custom-webgpu/, through lcgf_render.gpu: a
         // matched pair, the same scene with and without the application's drawing compiled in.
         // It replaced the wgpu-native guest experiment (probe_guest.zig, retired; see the report).
@@ -1643,7 +1378,7 @@ pub fn build(b: *std.Build) void {
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.
     // bench/vs/capy/main.zig is Zig 0.14 source, built inside a Capy checkout (its build.sh).
-    // zig-out holds generated Zig (the installed lcgf sources, the bindings check's per-UI frames).
+    // zig-out holds generated Zig.
     const fmt = b.addFmt(.{ .paths = &.{b.path(".")}, .exclude_paths = &.{ b.path("docs/guide/errors/shift_or.zig"), b.path("docs/guide/errors/packed_struct.zig"), b.path("bench/vs/capy/main.zig"), b.path("zig-out") }, .check = true });
     b.step("fmt", "Check formatting of every Zig file").dependOn(&fmt.step);
     // The performance guide's build-time rules (docs/CODE_STANDARD.md): formatting, then no file
