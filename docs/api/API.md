@@ -9392,9 +9392,13 @@ Styled two-axis viewport for known content extents (technical canvases and virtu
 
 - `State = struct { offset: [2]f32 = @splat(0) }`
 - `outer_style: Style = .{ .role = .group }`: The outer box's look: a group, no fill.
+- `Moved = struct { remainder: [2]f32 = @splat(0), overshoot: [2]f32 = @splat(0) }`: What a scroll area's step left to its ancestors.
 - `fn open(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appearance: Appearance, behavior: Behavior) policy.Error!Handle`: Opens the content box.
 - `fn openFace(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appearance: Appearance, behavior: Behavior, face: Style) policy.Error!Handle`: `open` with the outer box laid out by `face` instead of `outer_style`; it is still placed at `bounds`.
+- `fn hitsFrom(prev: anytype, id: Id, r: Responses, pointer: [2]f32, delta: [2]f32) Hits`: The hits of scroll area `id` from its parts' responses `r`, against last frame's tree `prev` (the parts are `id.with(k)` in both front ends), the pointer and its movement since last frame.
+- `fn advance(state: *State, bounds: Rect, extent: [2]f32, behavior: Behavior, hits: Hits, in: *const Input) policy.Error!Moved`: One frame of a scroll area at `bounds` over content of `extent`: the wheel and pixel scroll while over it, thumb drags, track and arrow clicks, and while focused the arrows, Page Up and Down, Home and End move `state.offset`, then overscroll and snapping apply.
 - `fn close(f: *Frame, handle: Handle) void`: Emit scrollbar parts after content so overlay bars remain above it.
+- `fn thumbStyle(appearance: Appearance, comptime axis: usize, r: types.Response) Style`: A thumb's look by its response: held, hovered, at rest.
 
 ### `Appearance` (struct)
 
@@ -9410,6 +9414,22 @@ Fields: `geometry`, `overscroll`, `line`, `snaps`, `snap_mode`, `snap_distance`
 
 Fields: `id`, `metrics`, `appearance`, `remainder`, `overshoot`, `outer`, `viewport`
 
+
+### `Responses` (struct)
+The responses of a scroll area's parts this frame.
+
+Fields: `view`, `thumbs`, `tracks`, `arrows`
+
+
+### `Hits` (struct)
+What the pointer and the parts did to a scroll area this frame.
+
+Fields: `over`, `focus`, `drag`, `back`, `forward`, `page`
+
+
+### `ct` (struct)
+
+- `fn scrollArea(comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime bounds: Rect, comptime extent: [2]f32, comptime appearance: Appearance,…`: Scroll area `name` at `bounds` over content of `extent`, bound to the `State` field `field`, holding `children` (any spec nodes) in its content box; `spec.styled` restyles its outer box as `openFace` does.
 
 ## `lcgf.special_layout` (src/layout/special.zig)
 
