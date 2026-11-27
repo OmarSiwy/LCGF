@@ -3811,7 +3811,7 @@ Fields: `alignment`, `last_align`, `direction`, `wrap`, `whitespace`, `tab_size`
 ### `Fallback` (struct)
 Optional plain-paragraph fallback.
 
-Fields: `chain`, `runs`, `metrics`
+Fields: `chain`, `by_font`, `runs`, `metrics`
 
 
 ### `Rich` (struct)
@@ -7965,6 +7965,11 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `randr_select_input_size = 12`
 - `randr_get_screen_info_size = 8`
 - `ScreenWidth = struct { px: u16, mm: u16 }`: A screen's width in pixels and in millimetres.
+- `randr_query_version_size = 12`
+- `randr_get_screen_resources_current_size = 8`
+- `randr_get_crtc_info_size = 12`
+- `refresh_default: f32 = 1.0 / 60.0`: Seconds between frames when the display's rate is unknown: a server without RandR 1.3, or a mode with no timing.
+- `Crtc = struct { x: i16, y: i16, width: u16, height: u16, refresh: f32 }`: A CRTC that shows part of the screen: its rectangle on the root window, and the seconds between its frames.
 - `randr_set_screen_size_size = 20`
 - `create_cursor_size = 32`
 - `clear_bitmap_size = 28`
@@ -8013,6 +8018,12 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `fn randrSelectInput(b: *Buf, randr: u8, window: u32) void`: RandR SelectInput (minor 4): ScreenChangeNotify events about `window`'s screen, whose code is the extension's first event.
 - `fn randrGetScreenInfo(b: *Buf, randr: u8, window: u32) void`: RandR GetScreenInfo (minor 5): the sizes of `window`'s screen and which one is current.
 - `fn screenInfoSize(r: []const u8) ?ScreenWidth`: The current size in a GetScreenInfo reply, or null when the reply names none: its width in pixels and millimetres, what a ScreenChangeNotify carries after a change.
+- `fn randrQueryVersion(b: *Buf, randr: u8) void`: RandR QueryVersion (minor 0) for 1.3, the version of GetScreenResourcesCurrent.
+- `fn randrGetScreenResourcesCurrent(b: *Buf, randr: u8, window: u32) void`: RandR GetScreenResourcesCurrent (minor 25): the CRTCs, outputs and modes of `window`'s screen as they are, without probing the outputs.
+- `fn randrGetCrtcInfo(b: *Buf, randr: u8, crtc: u32) void`: RandR GetCrtcInfo (minor 20): where `crtc` shows the screen and in which mode, read by `crtcInfo`.
+- `fn crtcInfo(r: []const u8) ?struct { crtc: Crtc, mode: u32 }`: The rectangle and mode of a GetCrtcInfo reply, `refresh` left at `refresh_default` for `modeRefresh` to fill.
+- `fn modeRefresh(r: []const u8, mode: u32) ?f32`: Seconds between frames of `mode` in a GetScreenResourcesCurrent reply: the pixels of a frame, blanking included, over the dot clock, as xrandr computes the rate.
+- `fn refreshAt(crtcs: []const Crtc, x: i32, y: i32) f32`: Seconds between frames for a window centred at root pixel (`x`, `y`): those of the CRTC that contains the point, else of the first CRTC, else `refresh_default`.
 - `fn randrSetScreenSize(b: *Buf, randr: u8, window: u32, w: u16, h: u16, mm_w: u32, mm_h: u32) void`: RandR SetScreenSize (minor 7): the screen's size in pixels and millimetres.
 - `fn openFontSize(name: []const u8) usize`
 - `fn openFont(b: *Buf, id: u32, name: []const u8) void`
