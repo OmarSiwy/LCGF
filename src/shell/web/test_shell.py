@@ -186,6 +186,19 @@ def dpr(page):
     check("dpr 2: a click at CSS (37, 25) presses Reset", state(page)[1] == 1)
 
 
+def dpr_fractional(page):
+    """In a browser at devicePixelRatio 1.5: the frame is drawn at 1200 x 900 device pixels for
+    the 800 x 600 CSS layout. (A ratio that changes while the page is open is not driven here:
+    headless Chromium's emulated ratio changes `devicePixelRatio` alone, firing no resize
+    observer or media query and leaving the device-pixel box at the launch ratio.)"""
+    page.wait("window.lcgf && window.lcgf.ui.exports.lcgf_example_state(0) > 0")
+    settle(page)
+    st = state(page)
+    check("dpr 1.5: scale 1.5, backing store 1200 x 900", st[6:9] == [1500, 1200, 900], st[6:9])
+    check("dpr 1.5: canvas element is 1200 x 900", page.eval("[document.getElementById('c').width, document.getElementById('c').height]") == [1200, 900])
+    check("dpr 1.5: the sidebar shows the panel colour", pixel(page, 80, 590) == rgba(st[4]), list(pixel(page, 80, 590)))
+
+
 def cursor(page):
     """C0477: the cursor the UI asks for is the canvas's CSS cursor: a hand over Reset, the
     arrow off it."""
@@ -287,7 +300,7 @@ def main(argv):
     # Each group on a fresh page (the replay starts from the example's first frame), in a
     # browser at the group's device pixel ratio, with the group's back end.
     for scale, query, tests in ((1, "?backend=2d", (attach, glyphs)), (1, "?backend=2d", (replay, keys, wheel, touch, cursor, clipboard, ime, timers)),
-                                (2, "?backend=2d", (dpr,)), (1, "", (gpu,))):
+                                (2, "?backend=2d", (dpr,)), (1.5, "?backend=2d", (dpr_fractional,)), (1, "", (gpu,))):
         b = browser.Browser(scale=scale)
         try:
             page = b.open(server.url + "index.html" + query)
