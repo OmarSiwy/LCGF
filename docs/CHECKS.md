@@ -97,6 +97,11 @@ jump those merges added was removed). Each remaining jump was read in the disass
   `p_merge_across_text` 12 -> 15: `geometry.transformRect`'s one test for the identity, per call
   site. The branch-free form computes the inverse and corners for every row: on the rows bench
   finalize took 7.4G instead of 3.2G instructions:u and `nodeBounds` 1.9G instead of 0.8G.
+- `p_paint` jcc 14 -> 16, `p_paint_layered` 14 -> 17 (short_fwd 1 -> 0 in both):
+  `geometry.nodeShown`'s test for a plain node (default extras row, no stock shadow), two long
+  forward jumps per sweep to the out-of-line bounds. Without it paint computed every node's
+  bounds again after finalize: on bench/vs/lcgf (x86_64_v3, 3,000 polls) springs took 889,817
+  instead of 780,526 instructions a frame and list 161,722 instead of 146,834.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.

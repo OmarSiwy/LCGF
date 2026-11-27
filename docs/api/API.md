@@ -2172,6 +2172,7 @@ Shared paint and input geometry.
 - `fn nodeClipRadii(t: anytype, i: usize) [4]f32`
 - `fn nodeAlpha(t: anytype, i: usize) f32`
 - `fn nodeBounds(t: anytype, i: usize) [4]f32`: World-space node bounds after layout and inherit.transform.
+- `fn nodeShown(t: anytype, i: usize) bool`: `hasArea(nodeBounds(t, i))` for a tree `layout.finalize` has run over.
 - `fn contains(rect: [4]f32, p: [2]f32) bool`
 - `fn normalizeRadii(rect: [4]f32, radii: [4]f32) [4]f32`: Normalizes overlapping circular corner radii with one common factor.
 - `fn roundedContains(rect: [4]f32, radii: [4]f32, p: [2]f32) bool`

@@ -220,14 +220,14 @@
     "short_fwd": 5
   },
   "p_paint": {
-    "jcc": 14,
+    "jcc": 16,
     "back": 6,
-    "short_fwd": 1
+    "short_fwd": 0
   },
   "p_paint_layered": {
-    "jcc": 14,
+    "jcc": 17,
     "back": 6,
-    "short_fwd": 1
+    "short_fwd": 0
   },
   "p_path_fill": {
     "back": 10,

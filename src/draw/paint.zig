@@ -99,7 +99,7 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
     var o: u32 = 0;
     for (0..t.len) |k| {
         const i = if (ordered) order[k] else k;
-        const vis: u32 = @intFromBool(geometry.hasArea(geometry.nodeBounds(t, i))) & @intFromBool(t.participation(@intCast(i)).paint);
+        const vis: u32 = @intFromBool(geometry.nodeShown(t, i)) & @intFromBool(t.participation(@intCast(i)).paint);
         const clip = geometry.nodeClip(t, i);
         const look = &looks[i];
         // Own extras through `extra`, inherited ones through `scope` (row 0: the defaults).

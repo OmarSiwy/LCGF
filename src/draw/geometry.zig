@@ -219,6 +219,23 @@ pub fn nodeBounds(t: anytype, i: usize) [4]f32 {
     return paintBounds(nodeRect(t, i), t.c.look[i].params, nodeWorld(t, i), nodeClip(t, i));
 }
 
+/// `hasArea(nodeBounds(t, i))` for a tree `layout.finalize` has run over. A node on the default
+/// extras row (no paint reference, no outset) and without the stock shadow paints exactly the
+/// rect finalize clipped, so the answer is `visible[i]`: one load, where the bounds were a
+/// third of the paint sweep. One jump, on that case (nearly every node: well predicted), as in
+/// `transformRect`. Size builds keep the one form.
+pub inline fn nodeShown(t: anytype, i: usize) bool {
+    const params: [4]u32 = @bitCast(t.c.look[i].params);
+    if (!small and (t.c.extra[i] == 0) & (params[0] != @backingInt(features.Kind.shadow))) {
+        @branchHint(.likely);
+        const shown = t.c.visible[i] != 0;
+        // Every Debug and ReleaseSafe test is the differential check against the bounds.
+        if (std.debug.runtime_safety) std.debug.assert(shown == hasArea(nodeBounds(t, i)));
+        return shown;
+    }
+    return hasArea(nodeBounds(t, i));
+}
+
 pub fn contains(rect: [4]f32, p: [2]f32) bool {
     return (p[0] >= rect[0]) & (p[0] < rect[2]) & (p[1] >= rect[1]) & (p[1] < rect[3]);
 }
