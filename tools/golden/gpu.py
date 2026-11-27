@@ -6,7 +6,8 @@ check eight of them and write the frame as a PNG for tools/golden/golden.py.
 
 DIR holds what a dump tool wrote (tools/golden/dump.zig for the toolbar scene): quad.wgsl, quads.bin, glyphs.bin,
 cmds.txt, and the textures the frame samples: a `texture ID W H FILE` line in cmds.txt per
-RGBA8 file in DIR, bound as texture ID. Texture 0 is white; an id with no file, and every text
+RGBA8 file in DIR, bound as texture ID. A `scale S` line draws the 800x600 logical frame on an
+S times larger target, S physical pixels per logical pixel, as a back end does on a HiDPI screen. Texture 0 is white; an id with no file, and every text
 run, gets the stand-in glyph atlas below. Ported from prototype/render.py; the drawing and the
 checks are unchanged.
 
@@ -38,11 +39,12 @@ def pick_adapter():
 from golden import write_png
 
 d, out_png = Path(sys.argv[1]), sys.argv[2]
-W, H = 800, 600
 wgsl = (d / "quad.wgsl").read_text()
 quads = (d / "quads.bin").read_bytes()
 glyphs = (d / "glyphs.bin").read_bytes()
 lines = [l.split() for l in (d / "cmds.txt").read_text().splitlines()]
+S = float(next((l[1] for l in lines if l[0] == "scale"), 1))
+W, H = round(800 * S), round(600 * S)
 stride = int([l for l in lines if l[0] == "stride"][0][1])
 attrs = [{"shader_location": int(l[1]), "offset": int(l[2]), "format": l[3]} for l in lines if l[0] == "attr"]
 
@@ -84,7 +86,7 @@ def vbuf(data):
     return b
 quad_buf, glyph_buf = vbuf(quads), vbuf(glyphs)
 globals_buf = device.create_buffer(size=16, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
-device.queue.write_buffer(globals_buf, 0, struct.pack("<4f", W, H, 1.0, 0.0))
+device.queue.write_buffer(globals_buf, 0, struct.pack("<4f", 800, 600, S, 0.0))
 g0 = device.create_bind_group(layout=bgl0, entries=[{"binding": 0, "resource": {"buffer": globals_buf, "offset": 0, "size": 16}}])
 
 def tex_group(w, h, data):
@@ -171,34 +173,35 @@ if any(l[0] == "canvas" for l in lines):
     cg1 = device.create_bind_group(layout=cbgl1, entries=[{"binding": 0, "resource": at_tex.create_view()}])
     for c in cmds:
         node, cam, marks = c["node"], c["cam"], c["marks"]
-        # canvas.zig `View.of` at scale 1, then shaders/canvas.zig `fill` (`Uniforms`).
+        # canvas.zig `View.of` at scale S, then shaders/canvas.zig `fill` (`Uniforms`).
         origin = [int(cam[0]) & 0xffffffff, int(cam[1]) & 0xffffffff]
         scale, ox, oy, zoom = f32(float(cam[2])), float(cam[3]), float(cam[4]), float(cam[5])
-        line = f32(min(max(zoom, 0.5), 4)) if zoom_scale else 1.0
+        line = f32(f32(min(max(zoom, 0.5), 4) if zoom_scale else 1.0) * S)
         a, b, cc, dd, tx, ty = [f32(v) for v in node[9:15]]
         det = f32(f32(a * dd) - f32(b * cc))
         if det == 0: continue
         inv = [f32(dd / det), f32(-b / det), f32(-cc / det), f32(a / det)]
-        inv_t = [f32(f32(-f32(f32(dd * tx) - f32(cc * ty))) / det), f32(f32(-f32(f32(a * ty) - f32(b * tx))) / det)]
+        inv_t = [f32(f32(f32(-f32(f32(dd * tx) - f32(cc * ty))) * S) / det), f32(f32(f32(-f32(f32(a * ty) - f32(b * tx))) * S) / det)]
         radii = node[15:19]
         clip = node[4:8]
-        u = struct.pack("<2I2f3fI", origin[0], origin[1], f32(node[0] + ox), f32(node[1] + oy), scale, line, 1.0, zoom_scale)
-        u += struct.pack("<4f4f2ff5I", *node[0:4], *clip, W, H, node[8], 0, 0, len(verts) // 8, len(marks), len(layers))
-        u += struct.pack("<4f2f2f4f4f4f2fII", *inv, *inv_t, tx, ty, a, b, cc, dd, *radii,
+        u = struct.pack("<2I2f3fI", origin[0], origin[1], f32(f32(node[0] + ox) * S), f32(f32(node[1] + oy) * S), f32(scale * S), line, S, zoom_scale)
+        u += struct.pack("<4f4f2ff5I", *[f32(v * S) for v in node[0:4]], *[f32(v * S) for v in clip], W, H, node[8], 0, 0, len(verts) // 8, len(marks), len(layers))
+        u += struct.pack("<4f2f2f4f4f4f2fII", *inv, *inv_t, f32(tx * S), f32(ty * S), a, b, cc, dd, *radii,
                          f32(f32(clip[0] + clip[2]) * 0.5), f32(f32(clip[1] + clip[3]) * 0.5), f32(f32(clip[2] - clip[0]) * 0.5), f32(f32(clip[3] - clip[1]) * 0.5),
-                         1.0, 1.0, int(any(r > 0 for r in radii)), 0)
+                         S, f32(1 / S), int(any(r > 0 for r in radii)), 0)
         pal = b"".join(struct.pack("<IIfI", int(l[0]), int(l[1]), float(l[2]), int(l[3])) for l in layers)
         u += pal + bytes(16 * (256 - len(layers)))
         u += b"".join(struct.pack("<4I", x, y, z, 0) for x, y, z in marks) + bytes(16 * (512 - len(marks)))
         uni = buf(u, wgpu.BufferUsage.UNIFORM)
         cg0 = device.create_bind_group(layout=cbgl0, entries=[{"binding": 0, "resource": {"buffer": uni, "offset": 0, "size": len(u)}},
                                                               {"binding": 1, "resource": {"buffer": vert_buf, "offset": 0, "size": vert_buf.size}}])
-        # gpu.scissor of the node's screen bounds (a pixel wider when turned) and its clip.
+        # gpu/desc.zig `scissor` of the node's screen bounds (a pixel wider when turned) and its
+        # clip, in physical pixels.
         xs = [a * x + cc * y + tx for x in (node[0], node[2]) for y in (node[1], node[3])]
         ys = [b * x + dd * y + ty for x in (node[0], node[2]) for y in (node[1], node[3])]
         e = 0 if node[9:15] == [1, 0, 0, 1, 0, 0] else 1
-        x0, y0 = max(0, math.floor(max(min(xs) - e, clip[0]))), max(0, math.floor(max(min(ys) - e, clip[1])))
-        x1, y1 = min(W, math.ceil(min(max(xs) + e, clip[2]))), min(H, math.ceil(min(max(ys) + e, clip[3])))
+        x0, y0 = max(0, math.floor(max(min(xs) - e, clip[0]) * S)), max(0, math.floor(max(min(ys) - e, clip[1]) * S))
+        x1, y1 = min(W, math.ceil(min(max(xs) + e, clip[2]) * S)), min(H, math.ceil(min(max(ys) + e, clip[3]) * S))
         if x1 <= x0 or y1 <= y0: continue
         rp.set_scissor_rect(x0, y0, x1 - x0, y1 - y0)
         rp.set_pipeline(cpipe); rp.set_bind_group(0, cg0); rp.set_bind_group(1, cg1)

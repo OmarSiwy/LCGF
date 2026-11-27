@@ -1,7 +1,11 @@
 //! Golden-image dumper for the draw features: builds one scene with the tier-0 passes of src/
 //! (tree, layout, paint) and writes what tools/golden/gpu.py draws, into a directory:
 //!
-//!     zig build draw-dump -- <scene> <dir>     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
+//!     zig build draw-dump -- <scene> <dir> [scale]     quad.wgsl, quads.bin, glyphs.bin, cmds.txt
+//!
+//! `scale` (default 1) is the physical pixels per logical pixel the scene is drawn at: the draw
+//! list is the same, and cmds.txt's `scale` line tells gpu.py and sw-play to draw it on a target
+//! that many times 800x600.
 //!
 //! `paragraphs` draws styled text: glyphs from `MonoParagraphs.quads` over the stand-in atlas.
 //!
@@ -256,7 +260,7 @@ var canvas_storage: lcgf.render_conformance.CanvasStorage = undefined;
 /// `layer` stroke fill width flags line per layer, colours as rgba8 u32), then per canvas
 /// command its node (`canvas` rect clip opacity xform radii), camera (origin as two i64s,
 /// scale, offset, zoom), ranges and overrides.
-fn canvasScene(io: std.Io, out_path: []const u8) !void {
+fn canvasScene(io: std.Io, out_path: []const u8, scale: f32) !void {
     const sc = lcgf.render_conformance.canvas_scene;
     const st = &canvas_storage;
     st.load();
@@ -277,7 +281,7 @@ fn canvasScene(io: std.Io, out_path: []const u8) !void {
     try dir.writeFile(io, .{ .sub_path = "glyphs.bin", .data = &@as([@sizeOf(Quad)]u8, @splat(0)) });
     var text: [16 * 1024]u8 = undefined;
     var t = std.Io.Writer.fixed(&text);
-    try t.print("stride {d}\n", .{gfx.stride});
+    try t.print("stride {d}\nscale {d}\n", .{ gfx.stride, scale });
     for (gfx.attrs) |a| try t.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     try t.print("palette {d}\n", .{@intFromBool(sc.palette.zoom_scale)});
     for (sc.palette.layers) |l| try t.print("layer {d} {d} {d} {d}\n", .{ l.stroke, l.fill, l.width, l.flags });
@@ -300,7 +304,7 @@ fn canvasScene(io: std.Io, out_path: []const u8) !void {
 /// colours, underline with line-through, and a wrapped paragraph clamped to two lines with an
 /// ellipsis. Its glyph quads are `MonoParagraphs.quads`'s over the stand-in atlas, and the
 /// decorations are the draw list's own quads, so the pixels check both.
-fn paragraphScene(io: std.Io, out_path: []const u8) !void {
+fn paragraphScene(io: std.Io, out_path: []const u8, scale: f32) !void {
     var carver: lcgf.mem.Carver = .{ .buf = &buf };
     var sc = Scene.carve(&carver);
     var bytes: [256]u8 = undefined;
@@ -365,7 +369,7 @@ fn paragraphScene(io: std.Io, out_path: []const u8) !void {
     try dir.writeFile(io, .{ .sub_path = "glyphs.bin", .data = std.mem.sliceAsBytes(glyphs[0..n]) });
     var text: [16 * 1024]u8 = undefined;
     var w = std.Io.Writer.fixed(&text);
-    try w.print("stride {d}\n", .{gfx.stride});
+    try w.print("stride {d}\nscale {d}\n", .{ gfx.stride, scale });
     for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     for (0..sc.d.cmd_len) |i| switch (sc.d.command(@intCast(i))) {
         .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),
@@ -382,6 +386,8 @@ pub fn main(init: std.process.Init) !void {
     _ = args.next();
     const name = args.next() orelse return error.Usage;
     const out_path = args.next() orelse return error.Usage;
+    const scale = if (args.next()) |a| try std.fmt.parseFloat(f32, a) else 1;
+    if (!(scale > 0)) return error.Usage;
 
     var carver: lcgf.mem.Carver = .{ .buf = &buf };
     var sc = Scene.carve(&carver);
@@ -392,8 +398,8 @@ pub fn main(init: std.process.Init) !void {
             found = true;
         }
     }
-    if (std.mem.eql(u8, name, "canvas")) return canvasScene(io, out_path);
-    if (std.mem.eql(u8, name, "paragraphs")) return paragraphScene(io, out_path);
+    if (std.mem.eql(u8, name, "canvas")) return canvasScene(io, out_path, scale);
+    if (std.mem.eql(u8, name, "paragraphs")) return paragraphScene(io, out_path, scale);
     if (!found) return error.UnknownScene;
     lcgf.layout.run(&sc.t, &sc.tx, viewport);
     lcgf.inherit.opacity(&sc.t);
@@ -411,7 +417,7 @@ pub fn main(init: std.process.Init) !void {
 
     var text: [16 * 1024]u8 = undefined;
     var w = std.Io.Writer.fixed(&text);
-    try w.print("stride {d}\n", .{gfx.stride});
+    try w.print("stride {d}\nscale {d}\n", .{ gfx.stride, scale });
     for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     for (0..sc.d.cmd_len) |i| switch (sc.d.command(@intCast(i))) {
         .quads => |b| try w.print("quads {d} {d} {d} {d}\n", .{ b.first, b.count, @backingInt(b.texture), @backingInt(b.material) }),

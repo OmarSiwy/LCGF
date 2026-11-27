@@ -6,7 +6,8 @@
 //! DIR is what conformance-dump or draw-dump wrote (quads.bin, glyphs.bin, cmds.txt). The
 //! drawing mirrors src/render/conformance/render.py and tools/golden/gpu.py: the same stand-in
 //! glyph atlas as texture 1, the same host gradient for custom commands, the size from
-//! cmds.txt (800x600 without a `size` line) and the clear colour from the argument (black).
+//! cmds.txt (800x600 without a `size` line, times its `scale` line's physical pixels per
+//! logical pixel, 1 without one) and the clear colour from the argument (black).
 //! A `canvas` line (tools/golden/draw.zig `canvasScene`) adds one canvas node from canvas.bin,
 //! verts.bin and its `camera`, `palette`, `layer`, `range` and `override` lines.
 const std = @import("std");
@@ -33,6 +34,7 @@ pub fn main(init: std.process.Init) !void {
 
     var w: u32 = 800;
     var h: u32 = 600;
+    var scale: f32 = 1;
     // `texture ID W H FILE`: an RGBA8 texture of its own (gpu.py binds it the same way).
     var own: ?struct { id: u32, img: sw.Image } = null;
     var first: std.ArrayList(u32) = .empty;
@@ -44,6 +46,9 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, key, "size")) {
             w = try std.fmt.parseInt(u32, f.next().?, 10);
             h = try std.fmt.parseInt(u32, f.next().?, 10);
+        } else if (std.mem.eql(u8, key, "scale")) {
+            scale = try std.fmt.parseFloat(f32, f.next().?);
+            if (!(scale > 0)) return error.BadScale;
         } else if (std.mem.eql(u8, key, "texture")) {
             const id = try std.fmt.parseInt(u32, f.next().?, 10);
             const tw = try std.fmt.parseInt(u32, f.next().?, 10);
@@ -58,6 +63,9 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    w = @intFromFloat(@round(@as(f32, @floatFromInt(w)) * scale));
+    h = @intFromFloat(@round(@as(f32, @floatFromInt(h)) * scale));
+
     // Stand-in atlas, 16x16 cells of 4x4 texels: every printable byte is a small block.
     var atlas: [64 * 64]u32 = @splat(0);
     for (33..127) |byte| for (1..4) |y| for (1..3) |x| {
@@ -71,6 +79,7 @@ pub fn main(init: std.process.Init) !void {
         .quads = quads,
         .glyphs = .{ .quads = glyph_quads, .first = first.items, .count = count.items, .texture = atlas_tex },
         .images = images[0 .. @as(usize, 2) + @intFromBool(own != null)],
+        .scale = scale,
     };
 
     const px = try gpa.alloc(u32, sw.Framebuffer.len(w, h));
@@ -104,7 +113,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    if (std.mem.indexOf(u8, cmds, "canvas ") != null) try drawCanvas(io, dir, gpa, cmds, t.fb, clear, s.images[1]);
+    if (std.mem.indexOf(u8, cmds, "canvas ") != null) try drawCanvas(io, dir, gpa, cmds, t.fb, clear, s.images[1], scale);
 
     // Tightly packed RGBA rows, then a PNG with stored (uncompressed) deflate blocks.
     var raw: std.ArrayList(u8) = .empty;
@@ -149,7 +158,7 @@ pub fn main(init: std.process.Init) !void {
 /// and the canvas binned into them (`Setup.bins`), so sw-golden covers the binned path; the
 /// walk without a bin is covered by sw/canvas.zig's tests. The scene is the canvas alone, so
 /// Setup's clear to `clear` loses nothing.
-fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const u8, fb: *sw.Framebuffer, clear: Color, atlas: sw.Image) !void {
+fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const u8, fb: *sw.Framebuffer, clear: Color, atlas: sw.Image, scale: f32) !void {
     const canvas = lcgf.canvas;
     const DrawList = lcgf.draw_list.DrawList;
     // One command per `canvas` line; the `camera`, `range` and `override` lines after it are its.
@@ -238,7 +247,7 @@ fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const
     var bins = [1]sw.canvas.Bin{.init(&bin_carver, cap, 2 * cap)};
     var setup: sw.Setup = .{ .pool = &pool, .bins = &bins };
     setup.gfx.images = &.{ sw.Image.white, atlas };
-    setup.draw(fb, &list, .{ .texture = @fromBackingInt(1) }, clear, 1);
+    setup.draw(fb, &list, .{ .texture = @fromBackingInt(1) }, clear, scale);
     // Every band drew from the bin.
     if (bins[0].list != &list or bins[0].bands != pool.count) return error.CanvasNotBinned;
 }
