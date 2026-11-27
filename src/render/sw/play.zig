@@ -113,7 +113,22 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    if (std.mem.indexOf(u8, cmds, "canvas ") != null) try drawCanvas(io, dir, gpa, cmds, t.fb, clear, s.images[1], scale);
+    if (std.mem.indexOf(u8, cmds, "canvas ") != null) {
+        // A `canvas-atlas w h file` line: the canvas glyphs' own atlas, alpha bytes (draw.zig's
+        // `labels`); else the stand-in atlas.
+        var canvas_atlas = s.images[1];
+        var atlas_lines = std.mem.tokenizeScalar(u8, cmds, '\n');
+        while (atlas_lines.next()) |line| {
+            var f = std.mem.tokenizeScalar(u8, line, ' ');
+            if (!std.mem.eql(u8, f.next().?, "canvas-atlas")) continue;
+            const aw = try std.fmt.parseInt(u32, f.next().?, 10);
+            const ah = try std.fmt.parseInt(u32, f.next().?, 10);
+            const bytes = try dir.readFileAlloc(io, f.next().?, gpa, .limited(1 << 26));
+            if (bytes.len != @as(usize, aw) * ah) return error.BadAtlas;
+            canvas_atlas = .{ .width = aw, .height = ah, .alpha8 = bytes };
+        }
+        try drawCanvas(io, dir, gpa, cmds, t.fb, clear, canvas_atlas, scale);
+    }
 
     // Tightly packed RGBA rows, then a PNG with stored (uncompressed) deflate blocks.
     var raw: std.ArrayList(u8) = .empty;

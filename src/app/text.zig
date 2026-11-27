@@ -39,6 +39,7 @@
 //!     pub fn deinit(t: *Text, gpa: Allocator) void
 //!   pub const Discovery = system.Discovery
 //!   pub const can_discover: bool
+//!   pub const labels = @import("labels.zig")
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -121,6 +122,9 @@ pub const Discovery = system.Discovery;
 /// with libc's dynamic loader, so a build without libc (lcgf_app's today) cannot: it draws
 /// with the application's files or the bundled bitmap font.
 pub const can_discover = builtin.os.tag != .linux or builtin.link_libc;
+
+/// Canvas labels in these faces over a distance atlas (src/app/labels.zig).
+pub const labels = @import("labels.zig");
 
 pub const Text = struct {
     /// Shapes, measures and wraps every run whose font is a face here, in logical pixels: the
@@ -718,14 +722,14 @@ const Color = lcgf.types.Color;
 
 /// The repository's text test face (Noto Sans subset, src/text/layout/testdata/layout.ttf)
 /// and the face it falls back to for the infinity sign and the middle dot (testdata/make.py).
-const test_files = [_]File{
+pub const test_files = [_]File{
     .{ .bytes = @embedFile("layout.ttf") },
     .{ .bytes = @embedFile("testdata/symbols.ttf") },
 };
 const paragraph = "A paragraph in a proportional face: \u{221e} loops \u{00b7} dots \u{2026} " ++
     "and wraps to the box at any scale.";
 const limits: lcgf.context.Limits = .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512 };
-const test_options: Options = .{
+pub const test_options: Options = .{
     .atlas = .{ 256, 256 },
     .images = 512,
     .texts = limits.texts,
@@ -988,4 +992,8 @@ test "the system's default faces and a face for each character they lack draw te
         try t.stack.paragraph(out.texts, &strings, k);
         for (t.stack.g.glyph[0..t.stack.g.len]) |g| try testing.expect(g != 0);
     }
+}
+
+test {
+    _ = @import("labels.zig");
 }

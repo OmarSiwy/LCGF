@@ -1,0 +1,413 @@
+//! Canvas labels in real fonts, sharp at any camera scale: text in, canvas glyph instances
+//! (`canvas.Instances.glyph` with `distance`) over one distance atlas out. Stage 5 of
+//! docs/plans/window.md; the choice of distance images over rasterising again at each zoom is
+//! measured by bench/micro/canvastext.zig.
+//!
+//!     var labels = try Labels.init(buffer, .{});
+//!     const r = try labels.label(&text, &shapes, "R1", .{ .origin = .{ 2000, 0 }, .px = 1300 });
+//!     // each frame: upload labels.atlas.takeDirty(), and draw with Glyphs.canvas set to the
+//!     // handle it is registered as (canvas.wgsl and sw read the alpha channel).
+//!
+//! Each glyph's image is made once, at an em of `Options.em` px with `canvas.distance_spread`
+//! texels of distance either side of the edge (src/text/raster/sdf.zig), whatever the label's
+//! size or the camera's, and keeps its place while the atlas lives. When the atlas or its
+//! table is full, `label` starts it again empty, moves `generation` on and fails: every label
+//! made before is stale, and the caller makes them again. Shapes with the faces and fallback
+//! chains of a `text.Text`, which must outlive the labels' rows only while they are made.
+//!
+//! Outside the tiers (src/app/), next to the text service; every table is carved from the
+//! caller's buffer (`requiredBytes`), nothing allocates.
+//!
+//! Contents
+//!   pub const Options = struct
+//!   pub const Label = struct
+//!   pub const Labels = struct
+//!     pub fn requiredBytes(o: Options) usize
+//!     pub fn init(buf: []align(64) u8, o: Options) Labels
+//!     pub fn label(l: *Labels, t: *const Text, s: *Instances, str: []const u8, o: Label)
+//!         Error!Range
+//!   pub const Error = error{ Full, NoSpace }
+
+const std = @import("std");
+const lcgf = @import("lcgf");
+const mem = lcgf.mem;
+const raster = lcgf.raster;
+const sdf = lcgf.raster_sdf;
+const canvas = lcgf.canvas;
+const fallback = lcgf.fallback;
+const shape = lcgf.shape;
+const opentype = lcgf.opentype;
+const Atlas = lcgf.raster_atlas.Atlas;
+const Instances = canvas.Instances;
+const Range = canvas.Range;
+const Text = @import("text.zig").Text;
+
+/// Capacities.
+pub const Options = struct {
+    /// Width and height of the distance atlas, one byte a texel.
+    atlas: [2]u32 = .{ 512, 512 },
+    /// Glyph images its table holds (one per face and glyph).
+    images: u32 = 1024,
+    /// The em, px, each image is made at: 48 is within about a level of the exact glyph from
+    /// camera scale 2 to 8 (bench/micro/canvastext.zig), 121 KB for printable ASCII.
+    em: u32 = 48,
+    /// Glyphs, and runs of one face, of the longest label.
+    label_glyphs: u32 = 256,
+    label_faces: u32 = 16,
+    /// Points, contours and flattened edges of the most complex outline.
+    outline_points: u32 = 2048,
+    outline_contours: u32 = 256,
+    edges: u32 = 8192,
+};
+
+/// Where a label is and how it looks. Its baseline starts at `origin` (world units) and runs
+/// along the glyphs' x axis, turned `turns` quarter turns clockwise on screen with them; `px`
+/// is its em in world units.
+pub const Label = struct { origin: [2]i32, px: u32, font: u16 = 0, layer: u8 = 0, turns: u2 = 0 };
+
+/// `error.Full`: the atlas or its table filled up and is empty again (`label`).
+/// `error.NoSpace`: the instances or the label scratch are short.
+pub const Error = error{ Full, NoSpace };
+
+pub const Labels = struct {
+    atlas: Atlas,
+    /// Moves on when the atlas started again empty: the rows of every label made before
+    /// sample stale texels.
+    generation: u32 = 0,
+    /// A glyph too complex for the scratch, or a label longer than `Options.label_glyphs`,
+    /// was drawn short. Reset by the caller.
+    overflow: bool = false,
+    em: f32,
+    /// Open-addressed glyph table: key (face << 16 | glyph, bit 31 set; 0 empty), and where
+    /// its image is.
+    keys: []u32,
+    slots: []Slot,
+    image_len: u32 = 0,
+    image_cap: u32,
+    run: shape.Run,
+    runs: fallback.Runs,
+    outline: opentype.Outline,
+    segs: raster.Segments,
+    acc: []f32,
+    cov: []u8,
+
+    /// Bytes of the buffer `init` carves for `o`.
+    pub fn requiredBytes(o: Options) usize {
+        @setEvalBranchQuota(10_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = carve(&counter, o);
+        return counter.off;
+    }
+
+    /// Labels over `buf` (`requiredBytes(o)` bytes, which it keeps), the atlas empty.
+    pub fn init(buf: []align(mem.column_align) u8, o: Options) Labels {
+        std.debug.assert(buf.len >= requiredBytes(o));
+        std.debug.assert(o.images > 0);
+        var c: mem.Carver = .{ .buf = buf };
+        return carve(&c, o);
+    }
+
+    /// Appends the glyphs of `str` to `s`, shaped in font `o.font` of `t` (its fallback
+    /// chain for characters the font lacks), as distance glyphs of this atlas, the first pen
+    /// at `o.origin`. Returns the rows. `error.Full` when the atlas or its table filled up:
+    /// it is empty again, `generation` has moved on, and this label and every one before
+    /// must be made again. `error.NoSpace` when `s` or the label scratch is short. Asserts
+    /// `o.font` is a face of `t`.
+    pub fn label(l: *Labels, t: *const Text, s: *Instances, str: []const u8, o: Label) Error!Range {
+        std.debug.assert(o.font < t.face_len);
+        const first = s.len;
+        try fallback.resolveClusters(&t.chains[o.font], str, &l.runs);
+        // World units per px of the em the images were made at, and the label's turn.
+        const k = @as(f32, @floatFromInt(o.px)) / l.em;
+        const c, const sn = canvas.turn(o.turns);
+        var pen: f32 = 0;
+        var start: u32 = 0;
+        for (l.runs.end[0..l.runs.len], l.runs.face[0..l.runs.len]) |end, f| {
+            defer start = end;
+            const shaper = &t.shapers[f];
+            try shaper.shape(str[start..end], &l.run, .{});
+            const per_unit = l.em / @as(f32, @floatFromInt(shaper.face.units_per_em));
+            for (0..l.run.len) |i| {
+                defer pen += @as(f32, @floatFromInt(l.run.advance[i])) * per_unit;
+                const slot = try l.image(t, f, l.run.glyph[i]);
+                if (slot.w == 0) continue;
+                // The image's top-left corner from the pen (y down), em px, then world units.
+                const dx: f32 = @floatFromInt(l.run.x_offset[i]);
+                const dy: f32 = @floatFromInt(l.run.y_offset[i]);
+                const x = (pen + dx * per_unit + @as(f32, @floatFromInt(slot.left))) * k;
+                const y = (-dy * per_unit - @as(f32, @floatFromInt(slot.top))) * k;
+                const anchor = [2]i32{
+                    o.origin[0] + @as(i32, @intFromFloat(@round(c * x - sn * y))),
+                    o.origin[1] + @as(i32, @intFromFloat(@round(sn * x + c * y))),
+                };
+                const size = [2]u32{
+                    @intFromFloat(@round(@as(f32, @floatFromInt(slot.w)) * k)),
+                    @intFromFloat(@round(@as(f32, @floatFromInt(slot.h)) * k)),
+                };
+                if (s.len == s.cap) return error.NoSpace;
+                const rect: Atlas.Rect = .{ .x = slot.x, .y = slot.y, .w = slot.w, .h = slot.h };
+                const style: Instances.Glyph = .{
+                    .layer = o.layer,
+                    .turns = o.turns,
+                    .distance = true,
+                };
+                _ = s.glyph(anchor, size, l.atlas.uv(rect), style);
+            }
+        }
+        std.debug.assert(s.len >= first);
+        return s.since(first);
+    }
+
+    // ---- private ----
+
+    /// The atlas slot of glyph `glyph` of face `f`, its distance image made when no earlier
+    /// label made it.
+    fn image(l: *Labels, t: *const Text, f: u16, glyph: u16) error{Full}!Slot {
+        const key = (@as(u32, f) << 16) | glyph | (1 << 31);
+        const mask: u32 = @intCast(l.keys.len - 1);
+        var at = ((key *% 0x9e37_79b1) >> 7) & mask;
+        var probes: u32 = 0;
+        while (l.keys[at] != 0) : (at = (at + 1) & mask) {
+            if (l.keys[at] == key) return l.slots[at];
+            probes += 1;
+            std.debug.assert(probes <= mask);
+        }
+        if (l.image_len == l.image_cap) return l.reset();
+        const slot = l.distance(&t.faces[f], glyph) orelse return l.reset();
+        l.keys[at] = key;
+        l.slots[at] = slot;
+        l.image_len += 1;
+        return slot;
+    }
+
+    /// Empties the atlas and its table, moves `generation` on and fails.
+    fn reset(l: *Labels) error{Full} {
+        l.atlas.clear();
+        @memset(l.keys, 0);
+        l.image_len = 0;
+        l.generation +%= 1;
+        return error.Full;
+    }
+
+    /// The distance image of `glyph` put in a new place of the atlas; an empty slot for a
+    /// glyph with no ink or too complex for the scratch (`overflow`); null when the atlas
+    /// has no room.
+    fn distance(l: *Labels, face: *const opentype.Face, glyph: u16) ?Slot {
+        std.debug.assert(glyph < face.glyph_count or face.glyph_count == 0);
+        l.outline.points = 0;
+        l.outline.contours = 0;
+        face.outline(glyph, &l.outline) catch {
+            l.overflow = true;
+            return .{};
+        };
+        const scale = l.em / @as(f32, @floatFromInt(face.units_per_em));
+        const spread = canvas.distance_spread;
+        const b = sdf.box(&l.outline, scale, 0, spread);
+        if (b.w == 0 or b.h == 0) return .{};
+        if (raster.accLen(b) > l.acc.len or raster.imageLen(b) > l.cov.len) {
+            l.overflow = true;
+            return .{};
+        }
+        sdf.fill(&l.outline, scale, 0, spread, b, &l.segs, l.acc, l.cov) catch {
+            l.overflow = true;
+            return .{};
+        };
+        // A texel of gap, zero (far outside), between images: the bilinear read at an
+        // image's edge sees no neighbour.
+        const r = l.atlas.pack(b.w + 1, b.h + 1) orelse return null;
+        l.atlas.put(.{ .x = r.x, .y = r.y, .w = b.w, .h = b.h }, l.cov);
+        return .{
+            .x = @intCast(r.x),
+            .y = @intCast(r.y),
+            .w = @intCast(b.w),
+            .h = @intCast(b.h),
+            .left = @intCast(b.left),
+            .top = @intCast(b.top),
+        };
+    }
+};
+
+/// Where a distance image is in the atlas and its box from the pen at the em (`sdf.box`).
+const Slot = struct { x: u16 = 0, y: u16 = 0, w: u16 = 0, h: u16 = 0, left: i16 = 0, top: i16 = 0 };
+
+/// The tables of `Labels`, carved in one order for sizing and for use.
+fn carve(c: *mem.Carver, o: Options) Labels {
+    std.debug.assert(o.atlas[0] < 1 << 16);
+    std.debug.assert(o.atlas[1] < 1 << 16);
+    const table = std.math.ceilPowerOfTwoAssert(u32, 2 * o.images);
+    // The largest image at the em: wide glyphs reach about 2 em, plus the spread.
+    const side: u32 = 2 * o.em + 2 * canvas.distance_spread + 2;
+    const scratch: raster.Box = .{ .w = side, .h = side };
+    const pixels = c.slice(u8, @as(usize, o.atlas[0]) * o.atlas[1]);
+    const sky: Atlas.Skyline = .{
+        .x = c.slice(u32, o.atlas[0]),
+        .y = c.slice(u32, o.atlas[0]),
+        .w = c.slice(u32, o.atlas[0]),
+    };
+    const n = o.label_glyphs;
+    var l: Labels = .{
+        .atlas = undefined,
+        .em = @floatFromInt(o.em),
+        .keys = c.slice(u32, table),
+        .slots = c.slice(Slot, table),
+        .image_cap = o.images,
+        .run = .{
+            .glyph = c.slice(u16, n),
+            .cluster = c.slice(u32, n),
+            .advance = c.slice(i32, n),
+            .x_offset = c.slice(i32, n),
+            .y_offset = c.slice(i32, n),
+        },
+        .runs = .{
+            .end = c.slice(u32, o.label_faces),
+            .face = c.slice(u16, o.label_faces),
+            .script = c.slice(lcgf.unicode_property.Script, o.label_faces),
+        },
+        .outline = .{
+            .x = c.slice(f32, o.outline_points),
+            .y = c.slice(f32, o.outline_points),
+            .on = c.slice(bool, o.outline_points),
+            .ends = c.slice(u32, o.outline_contours),
+        },
+        .segs = .{
+            .x0 = c.slice(f32, o.edges),
+            .y0 = c.slice(f32, o.edges),
+            .x1 = c.slice(f32, o.edges),
+            .y1 = c.slice(f32, o.edges),
+        },
+        .acc = c.slice(f32, raster.accLen(scratch)),
+        .cov = c.slice(u8, raster.imageLen(scratch)),
+    };
+    if (pixels.len > 0) l.atlas = .init(o.atlas[0], o.atlas[1], pixels, sky);
+    return l;
+}
+
+// ---------------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const sw = lcgf.render_sw;
+const DrawList = lcgf.draw_list.DrawList;
+const text_mod = @import("text.zig");
+
+const scales = [_]f32{ 0.5, 1, 2, 4, 8 };
+/// World units per logical pixel at camera scale 1 (Schemify's milli-units are finer still).
+const per_px = 100;
+const words = "R1 10k Vout";
+
+/// One canvas node over `w` x `h` pixels drawing `shapes` under `cam`, white on black, by the
+/// software back end; `atlas` is the distance atlas.
+const Node = struct {
+    list_buf: [list_bytes]u8 align(mem.column_align) = undefined,
+    rows: [1]lcgf.draw_list.CanvasDraw = undefined,
+    all: [1]canvas.Range = undefined,
+    list: DrawList = undefined,
+    const list_bytes = blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = DrawList.init(&counter, 1, 1, 1);
+        break :blk counter.off;
+    };
+    const palette: canvas.Palette = .{ .layers = &.{.of(.{ .stroke = .white })} };
+
+    fn draw(
+        n: *Node,
+        fb: *sw.Framebuffer,
+        s: *const Instances,
+        cam: canvas.Camera,
+        img: sw.Image,
+    ) void {
+        var a: mem.Carver = .{ .buf = &n.list_buf };
+        n.list = DrawList.init(&a, 1, 1, 1);
+        const r: [4]f32 = .{ 0, 0, @floatFromInt(fb.width), @floatFromInt(fb.height) };
+        n.list.customs[0] = .{ .rect = r, .clip = r, .data = 0, .id = 0, .node = 0 };
+        n.list.custom_len = 1;
+        n.all = .{s.since(0)};
+        n.rows = .{.{ .instances = s, .camera = cam, .ranges = &n.all, .palette = &palette }};
+        n.list.canvases = &n.rows;
+        n.list.cmd.kind[0] = @backingInt(DrawList.Kind.canvas);
+        n.list.cmd.first[0] = 0;
+        n.list.cmd.count[0] = 1;
+        n.list.cmd_len = 1;
+        fb.clear(.black);
+        sw.canvas.draw(.{ .fb = fb, .scissor = fb.all() }, &n.list, 0, 1, img);
+    }
+};
+
+test "a label is as sharp at camera scale 8 as at 1 and close to its glyphs rasterised there" {
+    var text_buf: [Text.requiredBytes(text_mod.test_options)]u8 align(mem.column_align) = undefined;
+    const t = try Text.init(&text_buf, text_mod.test_options, &text_mod.test_files);
+    const o: Options = comptime .{ .atlas = .{ 256, 256 }, .images = 64, .label_glyphs = 32 };
+    var buf: [Labels.requiredBytes(o)]u8 align(mem.column_align) = undefined;
+    var labels = Labels.init(&buf, o);
+    var shapes_buf: [Instances.requiredBytes(32, 1, 1, .{})]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &shapes_buf };
+    var shapes = Instances.init(&carver, 32, 1, 1, .{});
+    const em = 13 * per_px;
+    _ = try labels.label(&t, &shapes, words, .{ .origin = .{ 0, 0 }, .px = em });
+    try testing.expect(!labels.overflow);
+    const a = &labels.atlas;
+    const atlas: sw.Image = .{ .alpha8 = a.pixels, .width = a.w, .height = a.h };
+    var pixels: [sw.Framebuffer.len(800, 160)]u32 = undefined;
+    var reference: [800 * 160]u8 = undefined;
+    var node: Node = .{};
+    var edge: [scales.len]f32 = undefined;
+    for (scales, &edge) |s, *width| {
+        var fb: sw.Framebuffer = .init(&pixels, 800, 160, .rgba8);
+        // The baseline 4 px in and an em down.
+        const cam: canvas.Camera = .{ .scale = s / per_px, .offset = .{ 4, 4 + 13 * s } };
+        node.draw(&fb, &shapes, cam, atlas);
+        @memset(&reference, 0);
+        try rasterised(&t.shapers[0], 13 * s, .{ 4, 4 + 13 * s }, &reference, 800);
+        var sum: u64 = 0;
+        var ink: u64 = 0;
+        var partial: [2]u32 = .{ 0, 0 };
+        for (0..160) |y| for (0..800) |x| {
+            const want = reference[y * 800 + x];
+            const got = fb.at(@intCast(x), @intCast(y)).r;
+            sum += @abs(@as(i32, got) - want);
+            ink += @intFromBool(want != 0);
+            partial[0] += @intFromBool(got > 0 and got < 255);
+            partial[1] += @intFromBool(want > 0 and want < 255);
+        };
+        width.* = @as(f32, @floatFromInt(partial[0])) / @as(f32, @floatFromInt(partial[1]));
+        // Levels of 255 per inked pixel: the bench's distance error (11 at 0.5, 4 at 1, 1 to
+        // 2 from 2 up) with room for the anchors' rounding to world units.
+        const mean = @as(f32, @floatFromInt(sum)) / @as(f32, @floatFromInt(ink));
+        errdefer std.debug.print("scale {d}: mean {d:.2}, edge {d:.2}\n", .{ s, mean, width.* });
+        try testing.expect(mean < @as(f32, if (s < 1) 40 else if (s < 2) 16 else 8));
+        try testing.expect(width.* < 1.2);
+    }
+    try testing.expect(edge[4] <= edge[1] + 0.05);
+}
+
+/// `words` in `shaper`'s face at `px`, its first pen at `pen`, rasterised exactly and
+/// composited white over black into `img` (`w` wide).
+fn rasterised(shaper: *const shape.Shaper, px: f32, pen: [2]f32, img: []u8, w: u32) !void {
+    std.debug.assert(img.len % w == 0);
+    var cols: shape.TestRun = .{};
+    var run = cols.run();
+    try shaper.shape(words, &run, .{});
+    var ocols: raster.TestOutline = .{};
+    var acc: [160 * 160]f32 = undefined;
+    var cov: [160 * 160]u8 = undefined;
+    const scale = px / @as(f32, @floatFromInt(shaper.face.units_per_em));
+    const base: i32 = @intFromFloat(@round(pen[1]));
+    var x = pen[0];
+    for (run.glyph[0..run.len], run.advance[0..run.len]) |g, advance| {
+        defer x += @as(f32, @floatFromInt(advance)) * scale;
+        var ol = ocols.outline();
+        try shaper.face.outline(g, &ol);
+        const left = @floor(x);
+        const b = raster.box(&ol, scale, x - left);
+        if (b.w == 0) continue;
+        raster.fill(&ol, scale, x - left, b, &acc);
+        raster.coverage(&acc, &cov, @as(usize, b.w) * b.h);
+        for (0..b.h) |r| for (0..b.w) |col| {
+            const ix = @as(i32, @intFromFloat(left)) + b.left + @as(i32, @intCast(col));
+            const iy = base - b.top + @as(i32, @intCast(r));
+            if (ix < 0 or iy < 0 or ix >= w or iy >= img.len / w) continue;
+            const at = @as(usize, @intCast(iy)) * w + @as(usize, @intCast(ix));
+            const a: u32 = cov[r * b.w + col];
+            img[at] = @intCast(img[at] + (a * (255 - @as(u32, img[at])) + 127) / 255);
+        };
+    }
+}

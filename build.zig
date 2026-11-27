@@ -208,8 +208,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tools/golden/draw.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
+        .imports = &.{
+            .{ .name = "lcgf", .module = lcgf },
+            // The canvas label scene: the text service's distance atlas (src/app/labels.zig).
+            .{ .name = "app_text", .module = appText(b, target, optimize, lcgf, false) },
+        },
     });
+    draw_dump_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
     const draw_dump = b.addRunArtifact(b.addExecutable(.{ .name = "draw-dump", .root_module = draw_dump_mod }));
     draw_dump.addPassthruArgs();
     b.step("draw-dump", "Dump a draw-feature scene: -- <scene> <dir>").dependOn(&draw_dump.step);
@@ -255,20 +260,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
         .imports = &.{
             .{ .name = "lcgf", .module = lcgf_fast },
-            .{ .name = "app_text", .module = b.createModule(.{
-                .root_source_file = b.path("src/app/text.zig"),
-                .target = target,
-                .optimize = .ReleaseFast,
-                .imports = &.{
-                    .{ .name = "lcgf", .module = lcgf_fast },
-                    .{ .name = "font_system", .module = b.createModule(.{
-                        .root_source_file = b.path("src/text/fallback/system.zig"),
-                        .target = target,
-                        .optimize = .ReleaseFast,
-                        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
-                    }) },
-                },
-            }) },
+            .{ .name = "app_text", .module = appText(b, target, .ReleaseFast, lcgf_fast, false) },
         },
     });
     const layout_ttf = b.path("src/text/layout/testdata/layout.ttf");
@@ -283,7 +275,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("bench/micro/canvastext.zig"),
         .target = target,
         .optimize = .ReleaseFast,
-        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf_fast }, .{ .name = "app_text", .module = appText(b, target, .ReleaseFast, lcgf_fast, false) } },
     });
     canvastext_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = layout_ttf });
     const canvastext = b.addExecutable(.{ .name = "canvastext-bench", .root_module = canvastext_mod });
@@ -1385,23 +1377,7 @@ pub fn build(b: *std.Build) void {
     // drawn through it and the software back end. Built with libc too, for fallback-system:
     // asking fontconfig for the system's faces needs libc's loader on Linux.
     for ([_]bool{ false, true }) |libc| {
-        const font_system = b.createModule(.{
-            .root_source_file = b.path("src/text/fallback/system.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = libc,
-            .imports = &.{.{ .name = "lcgf", .module = lcgf }},
-        });
-        const text_mod = b.createModule(.{
-            .root_source_file = b.path("src/app/text.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = libc,
-            .imports = &.{
-                .{ .name = "lcgf", .module = lcgf },
-                .{ .name = "font_system", .module = font_system },
-            },
-        });
+        const text_mod = appText(b, target, optimize, lcgf, libc);
         const test_font = b.path("src/text/layout/testdata/layout.ttf");
         text_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = test_font });
         const text_tests = b.addTest(.{ .name = "app-text-test", .root_module = text_mod });
@@ -1704,4 +1680,23 @@ fn wgslEntryPoints(b: *std.Build, path: std.Build.LazyPath) []const WgslEntry {
         };
     }
     return out.items;
+}
+
+/// The window layer's text service (src/app/text.zig) over `lcgf_mod`, with the platform's
+/// font discovery (src/text/fallback/system.zig), which needs libc on Linux.
+fn appText(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, lcgf_mod: *std.Build.Module, libc: bool) *std.Build.Module {
+    const system = b.createModule(.{
+        .root_source_file = b.path("src/text/fallback/system.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = libc,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_mod }},
+    });
+    return b.createModule(.{
+        .root_source_file = b.path("src/app/text.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = libc,
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf_mod }, .{ .name = "font_system", .module = system } },
+    });
 }

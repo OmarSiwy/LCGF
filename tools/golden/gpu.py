@@ -168,8 +168,15 @@ if any(l[0] == "canvas" for l in lines):
     marks_path = d / "marks.bin"
     mark_buf = buf(marks_path.read_bytes() if marks_path.exists() else bytes(4 * n), V)
     vert_buf = buf(verts, wgpu.BufferUsage.STORAGE)
-    at_tex = device.create_texture(size=(64, 64, 1), format="rgba8unorm", usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST)
-    device.queue.write_texture({"texture": at_tex}, bytes(atlas), {"bytes_per_row": 256, "rows_per_image": 64}, (64, 64, 1))
+    # A `canvas-atlas` line (draw.zig's `labels`): the canvas glyphs' own atlas, alpha bytes,
+    # as white texels at that alpha (the glyph atlas contract); else the stand-in atlas.
+    own = [l for l in lines if l[0] == "canvas-atlas"]
+    aw, ah, apx = 64, 64, bytes(atlas)
+    if own:
+        aw, ah = int(own[0][1]), int(own[0][2])
+        apx = b"".join(b"\xff\xff\xff" + bytes([v]) for v in (d / own[0][3]).read_bytes())
+    at_tex = device.create_texture(size=(aw, ah, 1), format="rgba8unorm", usage=wgpu.TextureUsage.TEXTURE_BINDING | wgpu.TextureUsage.COPY_DST)
+    device.queue.write_texture({"texture": at_tex}, apx, {"bytes_per_row": 4 * aw, "rows_per_image": ah}, (aw, ah, 1))
     cg1 = device.create_bind_group(layout=cbgl1, entries=[{"binding": 0, "resource": at_tex.create_view()}])
     for c in cmds:
         node, cam, marks = c["node"], c["cam"], c["marks"]

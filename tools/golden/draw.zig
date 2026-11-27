@@ -8,6 +8,9 @@
 //! that many times 800x600.
 //!
 //! `paragraphs` draws styled text: glyphs from `MonoParagraphs.quads` over the stand-in atlas.
+//! `labels` draws canvas labels in the repository's test face through the text service's
+//! distance atlas (src/app/labels.zig) at camera scales 0.5 to 8, its atlas in
+//! canvas-atlas.bin (a `canvas-atlas` w h file line: alpha bytes, row by row).
 //!
 //! The shader and instance layout are src/render/shaders/quad.zig's (`lcgf.quad_shader`). ci/jobs/draw-golden.sh renders every scene
 //! and compares it with tools/golden/ref/draw/<scene>.png.
@@ -300,6 +303,57 @@ fn canvasScene(io: std.Io, out_path: []const u8, scale: f32) !void {
     try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = t.buffered() });
 }
 
+const app_text = @import("app_text");
+const label_options: app_text.labels.Options = .{ .atlas = .{ 256, 128 }, .images = 64, .label_glyphs = 32 };
+const text_options: app_text.Options = .{ .atlas = .{ 16, 16 }, .images = 8, .texts = 1, .quads = 8 };
+var label_buf: [app_text.labels.Labels.requiredBytes(label_options)]u8 align(lcgf.mem.column_align) = undefined;
+var text_buf: [app_text.Text.requiredBytes(text_options)]u8 align(lcgf.mem.column_align) = undefined;
+var label_shapes_buf: [lcgf.canvas.Instances.requiredBytes(64, 1, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
+
+/// Canvas labels (src/app/labels.zig): "R1 10k Vout" 13 px tall at camera scale 1, and "GND"
+/// turned a quarter beside it, in five canvas nodes one under the other at camera scales 0.5,
+/// 1, 2, 4 and 8 (the turned label clipped by the taller nodes). A world unit is a hundredth of
+/// a logical pixel at scale 1. Written as `canvasScene` writes the canvas scene, with the
+/// distance atlas in canvas-atlas.bin.
+fn labelScene(io: std.Io, out_path: []const u8, scale: f32) !void {
+    const canvas = lcgf.canvas;
+    const t = try app_text.Text.init(&text_buf, text_options, &.{.{ .bytes = @embedFile("layout.ttf") }});
+    var labels = app_text.labels.Labels.init(&label_buf, label_options);
+    var carver: lcgf.mem.Carver = .{ .buf = &label_shapes_buf };
+    var s = canvas.Instances.init(&carver, 64, 1, 1, .{});
+    _ = try labels.label(&t, &s, "R1 10k Vout", .{ .origin = .{ 0, 0 }, .px = 1300 });
+    _ = try labels.label(&t, &s, "GND", .{ .origin = .{ 7600, -900 }, .px = 1300, .turns = 1 });
+    if (labels.overflow or s.overflow) return error.SceneOverflow;
+    const cwd = std.Io.Dir.cwd();
+    var dir = try cwd.createDirPathOpen(io, out_path, .{});
+    defer dir.close(io);
+    var rows: [64][8]u32 = undefined;
+    for (0..s.len) |i| rows[i] = @as([4]u32, @bitCast(s.c.pos[i])) ++ s.c.look[i];
+    try dir.writeFile(io, .{ .sub_path = "canvas.bin", .data = std.mem.sliceAsBytes(rows[0..s.len]) });
+    try dir.writeFile(io, .{ .sub_path = "verts.bin", .data = &@as([8]u8, @splat(0)) });
+    try dir.writeFile(io, .{ .sub_path = "canvas-atlas.bin", .data = labels.atlas.pixels });
+    try dir.writeFile(io, .{ .sub_path = "canvas.wgsl", .data = lcgf.canvas_shader.wgsl });
+    try dir.writeFile(io, .{ .sub_path = "quad.wgsl", .data = gfx.wgsl });
+    try dir.writeFile(io, .{ .sub_path = "quads.bin", .data = &@as([@sizeOf(Quad)]u8, @splat(0)) });
+    try dir.writeFile(io, .{ .sub_path = "glyphs.bin", .data = &@as([@sizeOf(Quad)]u8, @splat(0)) });
+    var text: [16 * 1024]u8 = undefined;
+    var w = std.Io.Writer.fixed(&text);
+    try w.print("stride {d}\nscale {d}\n", .{ gfx.stride, scale });
+    for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
+    try w.print("canvas-atlas {d} {d} canvas-atlas.bin\n", .{ labels.atlas.w, labels.atlas.h });
+    const white: u32 = @bitCast(Color.white);
+    try w.print("palette 0\nlayer {d} 0 1 2\n", .{white});
+    var top: f32 = 4;
+    for ([_]f32{ 0.5, 1, 2, 4, 8 }) |zoom| {
+        const h = 13 * zoom * 1.4 + 4;
+        try w.print("canvas 4 {d} 796 {d} 4 {d} 796 {d} 1 1 0 0 1 0 0 0 0 0 0\n", .{ top, top + h, top, top + h });
+        try w.print("camera 0 0 {d} 4 {d} 1\n", .{ zoom / 100, 13 * zoom + 2 });
+        try w.print("range 0 {d}\n", .{s.len});
+        top += h + 4;
+    }
+    try dir.writeFile(io, .{ .sub_path = "cmds.txt", .data = w.buffered() });
+}
+
 /// Styled text (MonoParagraphs): a tall line with letter spacing, spans in other sizes and
 /// colours, underline with line-through, and a wrapped paragraph clamped to two lines with an
 /// ellipsis. Its glyph quads are `MonoParagraphs.quads`'s over the stand-in atlas, and the
@@ -400,6 +454,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, name, "canvas")) return canvasScene(io, out_path, scale);
     if (std.mem.eql(u8, name, "paragraphs")) return paragraphScene(io, out_path, scale);
+    if (std.mem.eql(u8, name, "labels")) return labelScene(io, out_path, scale);
     if (!found) return error.UnknownScene;
     lcgf.layout.run(&sc.t, &sc.tx, viewport);
     lcgf.inherit.opacity(&sc.t);
