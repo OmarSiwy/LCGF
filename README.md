@@ -1,6 +1,8 @@
 # LCGF (Lightweight Comptime Graphics Framework)
 
-A Zig GUI framework with runtime and comptime front ends over shared layout, interaction and draw-list data. The application owns its buffers, frame loop and graphics resources.
+A Zig GUI framework with runtime and comptime front ends over shared layout, interaction and draw-list data. The application owns its buffers, frame loop and graphics resources, or hands them to the window layer, `lcgf_app`.
+
+To write a desktop application, call `lcgf_app.run` from `main` (`lcgf.addApp` in build.zig) and leave `-Drender` at its default. `lcgf_app` draws on the GPU where it has a window for it (Vulkan over X11 on Linux today) and falls back to software by itself, so application code names no back end: images go through `lcgf_app.Image`, a widget you draw yourself through `Surface`, 2D primitives through `Frame.canvas`. `-Drender=sw` is for microcontrollers, machines that must not load a GPU driver and the smallest static binary. [A window in one call](docs/guide/runtime.md#a-window-in-one-call) · [examples/app](examples/app/main.zig) · [examples/surface](examples/surface/main.zig)
 
 ## Documentation
 
@@ -28,7 +30,7 @@ Post-release design work is tracked in [TODO.md](TODO.md).
 |---|---|
 | `CLAUDE.md` | Repository conventions and verification commands. |
 | `docs/ZIG_0_17_1.md` | What changed in Zig, verified on the compiler. The single most useful file for an agent. |
-| `docs/DESIGN.md` | Architecture, the four rules, settled decisions, and the three decisions that are yours. |
+| `docs/DESIGN.md` | Architecture, the four rules, the tiers up to the window layer, and the settled decisions. |
 | `docs/CHECKS.md` | How to repeat every measurement, with the recorded output. |
 | `docs/TARGETS.md`, `GATES.md`, `DEPENDENCIES.md`, `REFERENCES.md` | Framework targets, release gates, dependencies and implementation references. |
 | `ci/zigcheck.py` | 70 compile checks behind the Zig notes. Run it on your machine first. |

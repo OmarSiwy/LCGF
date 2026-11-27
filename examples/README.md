@@ -1,4 +1,27 @@
-# Standalone example projects
+# Examples
+
+An application is written against `lcgf_app`: `lcgf_app.run` from `main`,
+`lcgf.addApp` in build.zig, and `-Drender` left at its default. `lcgf_app` draws on
+the GPU where it has a window for it (Vulkan over X11 on Linux) and falls back to
+software by itself, and application code names no back end. Two programs here are
+written that way; start from them:
+
+| Program | What it demonstrates |
+|---|---|
+| [app](app/main.zig) | The hello window in one call, for any desktop target (`zig build app-example` at the checkout root) |
+| [surface](surface/main.zig) | A button beside rings a WGSL shader draws into a `Surface` (`zig build surface-example`; Linux, Vulkan) |
+
+The standalone projects below predate `lcgf_app` and are being moved onto it. They
+run on the software-only example host (`src/example/host.zig`, an X11 window from
+`src/example/window.zig`), and their build scripts call `buildDesktopExample`, which
+builds the package with `-Drender=sw`. Read them for the UI code, not as the pattern
+for a build or a host. `dashboard`, `viewport` and `texture` also draw through
+`render_sw` types (`sw.Framebuffer`, `sw.Image`) in the host's hooks; in an
+`lcgf_app` application that drawing is a `Surface`, `Frame.canvas` or an
+`lcgf_app.Image`. `mcu` and `embedded` use `-Drender=sw` because they target
+microcontrollers, which is what it is for.
+
+## Standalone example projects
 
 Each directory is a Zig application with its own build script, package manifest,
 sources and headless tests. Use the repository's pinned Zig
@@ -26,8 +49,9 @@ runs it and `zig build test` runs its headless checks. The original seven deskto
 programs and the five architecture examples use the software renderer and Linux/X11.
 For interactive timing at large window
 sizes, run `zig build run -Doptimize=ReleaseFast` in the example directory.
-The shared host embeds printable ASCII glyphs from DejaVu Sans Mono and installs
-the font license under `share/licenses/`. The board projects run on a host
+The shared host embeds a bitmap font from DejaVu Sans Mono (the bytes 32 to 255:
+ASCII, then Windows-1252's characters and the infinity sign) and installs the font
+license under `share/licenses/`. The board projects run on a host
 simulator. Their READMEs list the firmware targets and options.
 
 ## Use a project outside this checkout

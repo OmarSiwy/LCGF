@@ -18,7 +18,8 @@ nix develop -c ci/run.sh cross
 | `lanes-2`, `lanes-16` | the root package's tests at a lane count no x86-64 CPU query gives, forced with `-Dlanes=N` |
 | `cross` | `zig build test-build` for aarch64-linux, aarch64-macos, x86_64-windows, wasm32-wasi and riscv64-linux |
 | `windows`, `macos` | what only that OS can show, on a GitHub runner of it (header `# runner: windows` or `# runner: macos`; outside `all`) |
-| `app` | examples/app through `lcgf_app` (one call to a window): for a second on Xvfb and on a headless Weston, and compiled for x86_64-windows and aarch64-macos |
+| `app` | `lcgf_app`'s tests on Xvfb (the GPU window on lavapipe); examples/app for a second on Xvfb and on a headless Weston; examples/surface on Vulkan over Xvfb, failing when no ring was drawn; a `-Drender=sw` build that must not link libc; examples/app compiled for x86_64-windows and aarch64-macos. Golden shell, outside `all` |
+| `x11-gpu` | Vulkan over an X window (`src/shell/x11/gpu.zig`) on Xvfb and lavapipe: a whole frame, a frame damaged in one rect, a resize and an out-of-date swapchain, read back from the server. Golden shell, outside `all` |
 
 A job's header lines choose how it runs: `# shell: <name>` the Nix dev shell (`golden` has
 wgpu-py on lavapipe, Xvfb, weston and Wine), `# all: no` leaves it out of `ci/run.sh all`, and
