@@ -338,7 +338,12 @@ pub const Frame = struct {
     fn animateOne(f: *Frame, id: Id, target: f32, spring: Spring) f32 {
         const ctx = f.ctx;
         const a = &ctx.anims;
-        const i = a.reserve(id, target) catch return target;
+        // `slot` and a compare, not `reserve(...) catch`: Zig 0.18's LLVM passes that error
+        // union through the stack as a 2-byte and a 4-byte store read back as one 8-byte
+        // load, which cannot be forwarded from the stores and waits for them instead. On
+        // bench/vs/lcgf springs (1,000 calls a frame) that load was half the frame.
+        const i = a.slot(id, target);
+        if (i >= a.cap) return target;
         a.c.target[i] = target;
         a.c.stiffness[i] = spring.stiffness;
         a.c.damping[i] = spring.damping;
@@ -369,7 +374,9 @@ pub const Frame = struct {
         const t = &ctx.tweens;
         const total = keyframes.duration(keys);
         // A new row rests at 0, so the first retarget starts the clock's only leg.
-        const i = t.reserve(id, 0) catch return keyframes.sample(keys, total);
+        // `slot` and a compare, as `animateOne` (the error union costs a stalled load).
+        const i = t.slot(id, 0);
+        if (i >= t.cap) return keyframes.sample(keys, total);
         t.retarget(i, total, total, .linear);
         t.c.seen[i] = ctx.frame;
         t.c.node[i] = ctx.stack[ctx.depth - 1];
@@ -416,7 +423,8 @@ pub const Frame = struct {
     fn tweenOne(f: *Frame, id: Id, target: f32, seconds: f32, ease: Ease) f32 {
         const ctx = f.ctx;
         const t = &ctx.tweens;
-        const i = t.reserve(id, target) catch return target;
+        const i = t.slot(id, target);
+        if (i >= t.cap) return target;
         t.retarget(i, target, seconds, ease);
         t.c.seen[i] = ctx.frame;
         t.c.node[i] = ctx.stack[ctx.depth - 1];
