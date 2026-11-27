@@ -219,9 +219,28 @@ pub const Context = struct {
         ctx.redraw_all = true;
     }
 
+    /// `trackDamage` without the cull: `DrawList.damage` says what changed and the list keeps
+    /// every quad. For a host that keeps its pixels and the list's rows (a GPU window whose
+    /// rows stay on the device): a later frame may redraw a rect from those rows that this
+    /// frame did not damage, which a culled list could not serve. Same requirements as
+    /// `trackDamage`.
+    pub fn trackDamageWhole(ctx: *Context) void {
+        std.debug.assert(ctx.limits.damage);
+        ctx.damage_hook = &recordDamageWhole;
+        ctx.redraw_all = true;
+    }
+
     fn recordDamage(ctx: *Context, t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8) void {
         _ = ctx.damage.frame(t, tx, cu, strings);
         damage.cull(&ctx.draw, if (ctx.redraw_all) &damage.Region.everything else &ctx.damage.region);
+        ctx.redraw_all = false;
+    }
+
+    // tidy: allow(line-too-long) the hook's signature; the API index reads one-line ones
+    fn recordDamageWhole(ctx: *Context, t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8) void {
+        std.debug.assert(ctx.limits.damage);
+        _ = ctx.damage.frame(t, tx, cu, strings);
+        ctx.draw.damage = if (ctx.redraw_all) .everything else ctx.damage.region;
         ctx.redraw_all = false;
     }
 
@@ -1151,4 +1170,39 @@ test "initZeroed: Debug checks the buffer's first and last page are zero" {
         var zeroed: [Context.requiredBytes(small)]u8 align(mem.column_align) = @splat(0);
     };
     _ = try Context.initZeroed(&S.zeroed, small);
+}
+
+test "trackDamageWhole: the region is recorded and the list is left whole" {
+    const limits: Limits = .{
+        .nodes = 8,
+        .texts = 1,
+        .customs = 1,
+        .strings = 16,
+        .depth = 4,
+        .damage = true,
+    };
+    const S = struct {
+        var buffer: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+        fn frame(ctx: *Context, in: *const Input, fill: types.Color) *const DrawList {
+            var f = ctx.begin(in);
+            _ = f.leaf(.from("a"), .{ .size = .{ .px(40), .px(30) }, .fill = .rgb(0, 0, 255) });
+            _ = f.leaf(.from("b"), .{ .size = .{ .px(20), .px(10) }, .fill = fill });
+            return f.end(.{}).draw;
+        }
+    };
+    var ctx = try Context.init(&S.buffer, limits);
+    ctx.trackDamageWhole();
+    const in: Input = .{ .viewport = .{ 100, 100 } };
+    // The first frame is whole, and so is its region.
+    var d = S.frame(&ctx, &in, .rgb(255, 0, 0));
+    try testing.expectEqual(@as(u32, 2), d.quad_len);
+    try testing.expectEqual(damage.Region.everything, d.damage);
+    // `b` changes colour: the region is `b`, and `a`, outside it, is still in the list.
+    d = S.frame(&ctx, &in, .rgb(0, 255, 0));
+    try testing.expectEqual(@as(u32, 2), d.quad_len);
+    try testing.expectEqual([4]f32{ 0, 30, 20, 40 }, d.damage.bounds());
+    // Nothing changes: an empty region, the list still whole.
+    d = S.frame(&ctx, &in, .rgb(0, 255, 0));
+    try testing.expectEqual(@as(u32, 2), d.quad_len);
+    try testing.expectEqual(@as(f32, 0), d.damage.pixels());
 }
