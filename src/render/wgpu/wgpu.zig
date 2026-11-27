@@ -286,7 +286,7 @@ pub fn RendererWith(comptime gpu: type, comptime with_canvas: bool) type {
             const cv = if (self.canvas) |*cv| cv else return;
             const dev = cb.device(self.device, queue);
             var up = cb.upload(dev);
-            const atlas = @min(@backingInt(self.glyphs.texture), self.texture_count - 1);
+            const atlas = @min(@backingInt(self.glyphs.canvasTexture()), self.texture_count - 1);
             cv.prepare(dev, &up, draw, 0, scale, self.extent, cb.view(self.views[atlas]), atlas);
         }
 

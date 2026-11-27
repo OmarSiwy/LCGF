@@ -199,7 +199,7 @@ pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
             r.extent = dev_mod.drawableSize(viewport, scale);
             r.list = draw;
             if (canvases) if (r.canvas) |*cv| {
-                const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+                const atlas = @min(@backingInt(glyphs.canvasTexture()), r.texture_count - 1);
                 cv.prepare(.wrap(r.device), null, draw, slot, scale, r.extent, .{ .texture = r.textures[atlas], .width = 0, .height = 0 }, atlas);
             };
         }

@@ -262,7 +262,8 @@ fn Renderer(comptime use: features.Usage, comptime fixed_point: bool, comptime w
 
         fn drawCanvasOf(s: *const Self, t: Target, list: anytype, k: u32) void {
             if (comptime !(with_canvas and @hasField(@typeInfo(@TypeOf(list)).pointer.child, "canvases"))) return;
-            const atlas = if (use.text) s.images[@backingInt(s.glyphs.texture)] else Image.white;
+            const atlas_index = @backingInt(s.glyphs.canvasTexture());
+            const atlas = if (use.text) s.images[atlas_index] else Image.white;
             for (s.bins) |*b| if (b.list == list and b.k == k) return canvas.drawBinned(t, list, k, s.scale, atlas, b);
             canvas.draw(t, list, k, s.scale, atlas);
         }

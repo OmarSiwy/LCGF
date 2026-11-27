@@ -2305,6 +2305,7 @@ canvas: many 2D primitives in caller-owned columns, drawn under a camera with a 
 
 - `Kind = enum(u4) { segment, rect, arc, polygon, glyph }`
 - `Cap = enum(u2) { butt, square, round }`: How a segment or an arc ends: at its end point, half its width past it, or in a half disc.
+- `distance_spread = 4`: Texels either side of the edge a distance glyph's image measures (`bit.distance`); the shaders hold the same number.
 - `Range = extern struct { first: u32, count: u32 }`: Instances `first` to `first + count`, drawn in that order.
 - `Override = extern struct { range: Range, color: u32 }`: Instances of `range` drawn in `color` instead of their layer's (a selection, a diff tint).
 - `fn turn(q: u2) [2]f32`: cos and sin of `q` quarter turns: the turn that takes a glyph's own x axis to the screen's.
@@ -2333,6 +2334,7 @@ The `look[0]` bits, as the module doc lays them out.
 - `stroked: u32 = 1 << 7`
 - `world_width: u32 = 1 << 8`
 - `dead: u32 = 1 << 9`
+- `distance: u32 = 1 << 18`
 
 ### `Layer` (struct)
 One palette row; 16 bytes, so a palette is one GPU uniform array of `vec4u`.
@@ -2372,7 +2374,7 @@ Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `
 - `Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null }`
 - `Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`
 - `Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null }`
-- `Glyph = struct { layer: u8 = 0, turns: u2 = 0 }`
+- `Glyph = struct { layer: u8 = 0, turns: u2 = 0, distance: bool = false }`: `distance`: the atlas image holds distances (`bit.distance`), not coverage.
 - `Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{}, atlas: Atlas = .{} }`: `atlas` is where the glyph texture keeps each byte (a host's font says: the example font's `cells`); the default is `Mono`'s 16 x 16 byte grid.
 - `fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32, o: Options) Instances`: Carves `simd.rows(cap)` instance rows, `verts` polygon vertices, `dirty` dirty ranges and, with `o.marks`, a mark per row from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
 - `fn requiredBytes(cap: u32, verts: u32, dirty: u32, o: Options) usize`
@@ -3125,8 +3127,9 @@ The back-end contract: what every renderer (software, Vulkan, Metal, D3D12, GL E
 ### `Glyphs` (struct)
 Glyph quads for the frame's text runs, produced by `protocol.Mono.quads` or by your own shaper.
 
-Fields: `quads`, `first`, `count`, `texture`
+Fields: `quads`, `first`, `count`, `texture`, `canvas`
 
+- `fn canvasTexture(g: Glyphs) types.Texture`: The texture canvas glyph instances sample.
 - `fn span(g: Glyphs, k: u32) [2]u32`: Run `k`'s quads as `{ first, count }`; `{ 0, 0 }` for a run past `first`, so a frame with text runs and empty `Glyphs` (no shaper yet) draws its quads and no text.
 
 ## `lcgf.render_conformance` (src/render/conformance.zig)

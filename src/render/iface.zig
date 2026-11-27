@@ -73,6 +73,14 @@ pub const Glyphs = struct {
     count: []const u32 = &.{},
     /// The glyph atlas, as the back end registered it.
     texture: types.Texture = .white,
+    /// The atlas canvas glyphs sample (`canvas.Instances.glyph`), when not `texture`: a
+    /// distance atlas that outlives the scale changes that start `texture` again.
+    canvas: ?types.Texture = null,
+
+    /// The texture canvas glyph instances sample.
+    pub fn canvasTexture(g: Glyphs) types.Texture {
+        return g.canvas orelse g.texture;
+    }
 
     /// Run `k`'s quads as `{ first, count }`; `{ 0, 0 }` for a run past `first`, so a frame with
     /// text runs and empty `Glyphs` (no shaper yet) draws its quads and no text. Every back end's

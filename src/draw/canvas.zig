@@ -29,6 +29,7 @@
 //!                            along an arc's centre line from its start)
 //!   bits 14-15 weight - 1    (weight 1..4)
 //!   bits 16-17 quarter turns (glyph rotation, clockwise on screen)
+//!   bit   18   distance      (glyph: the texels are distances, `distance_spread`, not coverage)
 //!   bits 24-31 layer         (row of the palette)
 //!
 //!   kind     pos                      look[1]              look[2]          look[3]
@@ -42,6 +43,14 @@
 //! a u16 fraction of a turn, `sweep` a u16 where 65535 is a full turn. uv are unorm16. A glyph
 //! is the box `w` x `h` from its anchor, turned about it. Polygon vertices are the side column
 //! `verts` (CSR by first and count), any shape, filled by the nonzero rule.
+//!
+//! A glyph samples the glyph atlas (`iface.Glyphs.canvasTexture`) nearest, as its colour times
+//! the stroke colour (a coverage atlas: white at the texel's alpha). A distance glyph instead
+//! reads the alpha channel as a signed distance (src/text/raster/sdf.zig: 128 at the edge, 127
+//! levels per `distance_spread` texels), bilinearly from the four nearest texels, and covers a
+//! pixel by `clamp(d * k + 0.5, 0, 1)`, `k` its physical pixels per texel (at least
+//! 0.5 / `distance_spread`, so a label smaller than its image keeps a solid inside): an edge
+//! a pixel wide at any camera scale.
 //!
 //! ## Width and colour
 //!
@@ -70,7 +79,12 @@ pub const bit = struct {
     pub const stroked: u32 = 1 << 7;
     pub const world_width: u32 = 1 << 8;
     pub const dead: u32 = 1 << 9;
+    pub const distance: u32 = 1 << 18;
 };
+
+/// Texels either side of the edge a distance glyph's image measures (`bit.distance`); the
+/// shaders hold the same number.
+pub const distance_spread = 4;
 
 /// Instances `first` to `first + count`, drawn in that order.
 pub const Range = extern struct { first: u32, count: u32 };
@@ -276,7 +290,8 @@ pub const Instances = struct {
     pub const Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null };
     pub const Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null };
     pub const Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null };
-    pub const Glyph = struct { layer: u8 = 0, turns: u2 = 0 };
+    /// `distance`: the atlas image holds distances (`bit.distance`), not coverage.
+    pub const Glyph = struct { layer: u8 = 0, turns: u2 = 0, distance: bool = false };
     /// `atlas` is where the glyph texture keeps each byte (a host's font says: the example
     /// font's `cells`); the default is `Mono`'s 16 x 16 byte grid.
     pub const Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{}, atlas: Atlas = .{} };
@@ -356,7 +371,11 @@ pub const Instances = struct {
     /// about it by `o.turns` quarter turns; the atlas is the glyph atlas the renderer was given
     /// (`iface.Glyphs.texture`), tinted by the layer's stroke colour.
     pub fn glyph(s: *Instances, anchor: [2]i32, size: [2]u32, uv: [4]f32, o: Glyph) u32 {
-        return s.push(.{ anchor[0], anchor[1], @intCast(size[0]), @intCast(size[1]) }, .{ head(.glyph, o.layer, 1, .butt, false, o.turns), unorm16(uv[0]) | (unorm16(uv[1]) << 16), unorm16(uv[2]) | (unorm16(uv[3]) << 16), 0 });
+        const distance = bit.distance * @intFromBool(o.distance);
+        const h = head(.glyph, o.layer, 1, .butt, false, o.turns) | distance;
+        const from = unorm16(uv[0]) | (unorm16(uv[1]) << 16);
+        const to = unorm16(uv[2]) | (unorm16(uv[3]) << 16);
+        return s.push(.{ anchor[0], anchor[1], @intCast(size[0]), @intCast(size[1]) }, .{ h, from, to, 0 });
     }
 
     /// `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall

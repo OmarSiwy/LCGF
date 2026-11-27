@@ -333,6 +333,9 @@ fn instance(t: sw.Target, p: *const Prep, atlas: sw.Image, i: usize) void {
 }
 
 fn kinds(comptime general: bool, t: sw.Target, p: *const Prep, box: [4]u32, sh: *const canvas.Shape, ink: Ink, atlas: sw.Image, look: [4]u32) void {
+    // Every kind's loop is inlined here, the glyph's three ways: past the default quota.
+    @setEvalBranchQuota(4000);
+    std.debug.assert(box[0] < box[2]);
     const s = p.c.instances;
     const fb = t.fb;
     switch (sh.kind) {
@@ -340,7 +343,14 @@ fn kinds(comptime general: bool, t: sw.Target, p: *const Prep, box: [4]u32, sh: 
             const first = @min(look[1], s.vert_len);
             shade(.polygon, general, fb, p, box, sh, ink, .{ .view = p.v, .verts = s.verts[first..][0..@min(look[2], s.vert_len - first)] });
         },
-        .glyph => if (atlas.alpha8.len != 0)
+        .glyph => if (look[0] & canvas.bit.distance != 0)
+            shade(.glyph, general, fb, p, box, sh, ink, .{
+                .atlas = atlas,
+                .uv = look,
+                .alpha8 = atlas.alpha8.len != 0,
+                .distance = true,
+            })
+        else if (atlas.alpha8.len != 0)
             shade(.glyph, general, fb, p, box, sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = true })
         else
             shade(.glyph, general, fb, p, box, sh, ink, .{ .atlas = atlas, .uv = look, .alpha8 = false }),
@@ -359,6 +369,8 @@ const Extra = struct {
     atlas: sw.Image = sw.Image.white,
     uv: [4]u32 = .{ 0, 0, 0, 0 },
     alpha8: bool = false,
+    /// The texels are distances (`canvas.bit.distance`), read from the alpha channel.
+    distance: bool = false,
 };
 
 inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Framebuffer, p: *const Prep, box: [4]u32, sh: *const canvas.Shape, ink: Ink, x: Extra) void {
@@ -377,7 +389,7 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
     // fills): its 8-bit channels are rounded once here, as `overColor` rounds them per pixel.
     const solid = switch (kind) {
         .segment, .arc => true,
-        .glyph => x.alpha8,
+        .glyph => x.alpha8 or x.distance,
         .rect, .polygon => !ink.stroked,
     };
     const one: [4]f32 = if (kind == .rect or kind == .polygon) (if (ink.filled) ink.fill else .{ ink.stroke[0], ink.stroke[1], ink.stroke[2], 0 }) else ink.stroke;
@@ -392,6 +404,9 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
     const th: f32 = @floatFromInt(x.atlas.height);
     const du = (tu1 - tu0) / @max(sh.p[2], 1e-6);
     const dv = (tv1 - tv0) / @max(sh.p[3], 1e-6);
+    // Distance glyph: physical pixels per texel, and texel to distance (canvas.zig).
+    const spread: f32 = canvas.distance_spread;
+    const ppt = @max(1 / (du * tw), 0.5 / spread);
     for (box[1]..box[3]) |y| {
         const row = fb.pixels[y * fb.stride ..][0..fb.stride];
         const sy = simd.f(@as(f32, @floatFromInt(y)) + 0.5);
@@ -434,6 +449,14 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
                     const inside = (l[0] >= simd.f(0)) & (l[0] < simd.f(sh.p[2])) & (l[1] >= simd.f(0)) & (l[1] < simd.f(sh.p[3]));
                     const u = simd.f(tu0) + l[0] * simd.f(du);
                     const v = simd.f(tv0) + l[1] * simd.f(dv);
+                    if (x.distance) {
+                        const t = bilinear(x, u * simd.f(tw), v * simd.f(th));
+                        const d = (t - simd.f(128)) * simd.f(spread / 127.0);
+                        const cov = @min(@max(d * simd.f(ppt) + simd.f(0.5), simd.f(0)), simd.f(1));
+                        inline for (0..3) |c| color[c] = stroke[c];
+                        color[3] = stroke[3] * cov;
+                        break :a @select(f32, inside, simd.f(1), simd.f(0));
+                    }
                     const tx: U = @intFromFloat(@min(@max(@floor(u * simd.f(tw)), simd.f(0)), simd.f(tw - 1)));
                     const ty: U = @intFromFloat(@min(@max(@floor(v * simd.f(th)), simd.f(0)), simd.f(th - 1)));
                     const idx = ty * simd.u(x.atlas.width) + tx;
@@ -462,6 +485,44 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
             row[at..][0..W].* = @select(u32, mask, out, old);
         }
     }
+}
+
+/// The alpha byte of `x.atlas` at texel position (`fx`, `fy`) (texel centres at halves),
+/// interpolated between the four nearest texels, each clamped to the atlas: canvas.wgsl's
+/// `distance_at`, in the same order.
+fn bilinear(x: Extra, fx: F, fy: F) F {
+    std.debug.assert(x.atlas.width > 0);
+    std.debug.assert(x.atlas.height > 0);
+    const w = simd.f(@floatFromInt(x.atlas.width - 1));
+    const h = simd.f(@floatFromInt(x.atlas.height - 1));
+    const gx = fx - simd.f(0.5);
+    const gy = fy - simd.f(0.5);
+    const x0 = @floor(gx);
+    const y0 = @floor(gy);
+    const ax = gx - x0;
+    const ay = gy - y0;
+    const zero = simd.f(0);
+    const one = simd.f(1);
+    const xs = [2]U{
+        @intFromFloat(@min(@max(x0, zero), w)),
+        @intFromFloat(@min(@max(x0 + one, zero), w)),
+    };
+    const ys = [2]U{
+        @intFromFloat(@min(@max(y0, zero), h)),
+        @intFromFloat(@min(@max(y0 + one, zero), h)),
+    };
+    var t: [4]F = undefined;
+    inline for (0..4) |i| {
+        const idx = ys[i >> 1] * simd.u(x.atlas.width) + xs[i & 1];
+        var b: U = undefined;
+        inline for (0..W) |lane| {
+            b[lane] = if (x.alpha8) x.atlas.alpha8[idx[lane]] else x.atlas.pixels[idx[lane]] >> 24;
+        }
+        t[i] = @floatFromInt(b);
+    }
+    const top = t[0] + (t[1] - t[0]) * ax;
+    const bottom = t[2] + (t[3] - t[2]) * ax;
+    return top + (bottom - top) * ay;
 }
 
 fn unorm16(v: u32) f32 {
@@ -576,6 +637,34 @@ test "sw canvas: overrides recolour ranges, the last match winning; dead rows dr
     try testing.expectEqual(Color.rgb(0, 255, 0), fb.at(8, 8));
     try testing.expectEqual(Color.rgb(255, 255, 0), fb.at(28, 8));
     try testing.expectEqual(Color.black, fb.at(48, 8));
+}
+
+test "sw canvas: a distance glyph's edge is a pixel wide at camera scales 1 to 8" {
+    // An 8 x 1 distance image of a vertical edge at texel x 4, inside to its left (sdf.zig's
+    // encoding, spread 4): column i holds 128 + (4 - centre) * 127 / 4.
+    var texels: [8]u8 = undefined;
+    for (&texels, 0..) |*t, i| {
+        const centre = @as(f32, @floatFromInt(i)) + 0.5;
+        t.* = @intFromFloat(@round(128 + (4 - centre) * 127 / 4));
+    }
+    const atlas: sw.Image = .{ .width = 8, .height = 1, .alpha8 = &texels };
+    var widths: [2]u32 = undefined;
+    for ([_]f32{ 1, 8 }, &widths) |s, *width| {
+        var sc: Scene(1) = .{};
+        sc.init(.{ 0, 0, 64, 32 }, .{ 0, 0, 64, 32 });
+        // 8 x 4 world units, a texel a unit: at scale s the edge is at x 4 s.
+        _ = sc.shapes.glyph(.{ 0, 0 }, .{ 8, 4 }, .{ 0, 0, 1, 1 }, .{ .distance = true });
+        const fb = sc.frame(.{ .scale = s }, .{ 0, 0, 64, 32 }, atlas);
+        try testing.expectEqual(Color.rgb(255, 0, 0), fb.at(0, 1));
+        try testing.expectEqual(Color.black, fb.at(@intFromFloat(8 * s - 1), 1));
+        width.* = 0;
+        for (0..64) |x| {
+            const r = fb.at(@intCast(x), 1).r;
+            width.* += @intFromBool(r > 0 and r < 255);
+        }
+    }
+    try testing.expect(widths[0] <= 2);
+    try testing.expect(widths[1] <= widths[0]);
 }
 
 test "sw canvas: a dashed chain runs on across its joints; a turned glyph samples its texels" {

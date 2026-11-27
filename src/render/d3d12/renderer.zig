@@ -235,7 +235,7 @@ pub fn RendererOf(comptime canvases: bool) type {
             r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
             r.list = draw;
             if (canvases) if (r.canvas) |*cv| {
-                const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+                const atlas = @min(@backingInt(glyphs.canvasTexture()), r.texture_count - 1);
                 cv.prepare(.wrap(r.dev), null, draw, frame, scale, r.extent, .{ .resource = r.resources[atlas], .width = 0, .height = 0 }, atlas);
             };
         }

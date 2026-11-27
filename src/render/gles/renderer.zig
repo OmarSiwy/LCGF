@@ -190,7 +190,7 @@ pub fn RendererOf(comptime canvases: bool) type {
             r.list = draw;
             if (canvases) if (r.canvas) |*cv| {
                 var up: gpu.Upload = .begin(r.device(), {});
-                const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+                const atlas = @min(@backingInt(glyphs.canvasTexture()), r.texture_count - 1);
                 cv.prepare(r.device(), &up, draw, 0, scale, r.extent, .{ .texture = r.textures[atlas], .width = 0, .height = 0 }, atlas);
             };
         }

@@ -76,7 +76,7 @@ struct Frag {
     // aperture (sin, cos), 1 for a full ring (rect, polygon: 1 when stroked), the stroke's
     // half width (0 unstroked)
     @location(3) @interpolate(flat) m2: vec4f,
-    // segment: ux, uy, half length; glyph: texel steps du, dv
+    // segment: ux, uy, half length; glyph: texel steps du, dv, 1 for a distance glyph
     @location(4) @interpolate(flat) m3: vec4f,
     @location(5) @interpolate(flat) stroke: vec4f,
     // inside an outline: the fill, or the stroke at alpha 0 when unfilled
@@ -88,6 +88,8 @@ struct Frag {
 }
 
 const sqrt2 = 1.41421356237309504880;
+// canvas.zig `distance_spread`.
+const spread = 4.0;
 const tau = 6.28318530717958647692;
 
 fn wx(w: i32) -> f32 {
@@ -183,7 +185,8 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
         let tu0 = unorm16(r.look.y);
         let tv0 = unorm16(r.look.y >> 16u);
         out.uv = vec2f(tu0, tv0);
-        m3 = vec4f((unorm16(r.look.z) - tu0) / max(gw, 1e-6), (unorm16(r.look.z >> 16u) - tv0) / max(gh, 1e-6), 0.0, 0.0);
+        let distance = f32((h & 262144u) != 0u);
+        m3 = vec4f((unorm16(r.look.z) - tu0) / max(gw, 1e-6), (unorm16(r.look.z >> 16u) - tv0) / max(gh, 1e-6), distance, 0.0);
     } else {
         box = vec4f(min(corner.x, corner.z) - grow - 1.0, min(corner.y, corner.w) - grow - 1.0,
                     max(corner.x, corner.z) + grow + 1.0, max(corner.y, corner.w) + grow + 1.0);
@@ -214,6 +217,28 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
     let at = select(lo, hi, vec2<bool>((vi & 1u) != 0u, (vi & 2u) != 0u));
     out.position = vec4f(at / u.size * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0), 0.0, 1.0);
     return out;
+}
+
+// The atlas's alpha byte at texel position (fx, fy), texel centres at halves, between the four
+// nearest texels, each clamped to the atlas: sw canvas.zig's `bilinear`.
+fn distance_at(fx: f32, fy: f32, n: vec2f) -> f32 {
+    let gx = fx - 0.5;
+    let gy = fy - 0.5;
+    let x0 = floor(gx);
+    let y0 = floor(gy);
+    let ax = gx - x0;
+    let ay = gy - y0;
+    let xa = u32(min(max(x0, 0.0), n.x - 1.0));
+    let xb = u32(min(max(x0 + 1.0, 0.0), n.x - 1.0));
+    let ya = u32(min(max(y0, 0.0), n.y - 1.0));
+    let yb = u32(min(max(y0 + 1.0, 0.0), n.y - 1.0));
+    let t0 = round(textureLoad(atlas, vec2u(xa, ya), 0).a * 255.0);
+    let t1 = round(textureLoad(atlas, vec2u(xb, ya), 0).a * 255.0);
+    let t2 = round(textureLoad(atlas, vec2u(xa, yb), 0).a * 255.0);
+    let t3 = round(textureLoad(atlas, vec2u(xb, yb), 0).a * 255.0);
+    let top = t0 + (t1 - t0) * ax;
+    let bottom = t2 + (t3 - t2) * ax;
+    return top + (bottom - top) * ay;
 }
 
 fn screen(p: vec2f) -> vec2f {
@@ -375,6 +400,12 @@ fn fs(in: Frag) -> @location(0) vec4f {
         let tx = u32(min(max(floor(tu * n.x), 0.0), n.x - 1.0));
         let ty = u32(min(max(floor(tv * n.y), 0.0), n.y - 1.0));
         colour = in.stroke * textureLoad(atlas, vec2u(tx, ty), 0);
+        if (in.m3.z > 0.5) {
+            // A distance glyph (canvas.zig `bit.distance`): sw canvas.zig's, in its order.
+            let d = (distance_at(tu * n.x, tv * n.y, n) - 128.0) * (spread / 127.0);
+            let ppt = max(1.0 / (in.m3.x * n.x), 0.5 / spread);
+            colour = vec4f(in.stroke.rgb, in.stroke.a * min(max(d * ppt + 0.5, 0.0), 1.0));
+        }
         alpha = select(0.0, 1.0, hit);
     }
     let a = clamp(colour.a * (alpha * keep * u.opacity), 0.0, 1.0);

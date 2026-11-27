@@ -342,7 +342,7 @@ pub fn RendererOf(comptime canvases: bool) type {
             r.scissor = .{ .offset = .{ .x = 0, .y = 0 }, .extent = r.extent };
             r.list = draw;
             if (canvases) if (r.canvas) |*cv| {
-                const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);
+                const atlas = @min(@backingInt(glyphs.canvasTexture()), r.texture_count - 1);
                 cv.prepare(.wrap(r.dev), null, draw, frame, scale, .{ r.extent.width, r.extent.height }, .{ .view = r.views[atlas], .image = null, .width = 0, .height = 0 }, atlas);
             };
         }

@@ -126,6 +126,30 @@ vec2 screen(vec2 p_1) {
     return vec2((((_e4 * p_1.x) + (_e10 * p_1.y)) + _e17), (((_e22 * p_1.x) + (_e28 * p_1.y)) + _e35));
 }
 
+float distance_at(float fx, float fy, vec2 n) {
+    float gx = (fx - 0.5);
+    float gy = (fy - 0.5);
+    float x0_ = floor(gx);
+    float y0_ = floor(gy);
+    float ax_1 = (gx - x0_);
+    float ay_1 = (gy - y0_);
+    uint xa = uint(min(max(x0_, 0.0), (n.x - 1.0)));
+    uint xb = uint(min(max((x0_ + 1.0), 0.0), (n.x - 1.0)));
+    uint ya = uint(min(max(y0_, 0.0), (n.y - 1.0)));
+    uint yb = uint(min(max((y0_ + 1.0), 0.0), (n.y - 1.0)));
+    vec4 _e46 = texelFetch(_group_1_binding_0_fs, ivec2(uvec2(xa, ya)), 0);
+    float t0_ = roundEven((_e46.w * 255.0));
+    vec4 _e54 = texelFetch(_group_1_binding_0_fs, ivec2(uvec2(xb, ya)), 0);
+    float t1_ = roundEven((_e54.w * 255.0));
+    vec4 _e62 = texelFetch(_group_1_binding_0_fs, ivec2(uvec2(xa, yb)), 0);
+    float t2_ = roundEven((_e62.w * 255.0));
+    vec4 _e70 = texelFetch(_group_1_binding_0_fs, ivec2(uvec2(xb, yb)), 0);
+    float t3_ = roundEven((_e70.w * 255.0));
+    float top = (t0_ + ((t1_ - t0_) * ax_1));
+    float bottom = (t2_ + ((t3_ - t2_) * ax_1));
+    return (top + ((bottom - top) * ay_1));
+}
+
 float corner_radius(vec2 p_2, vec2 half_, vec4 radii) {
     float right = ((p_2.y > 0.0) ? radii.z : radii.y);
     float left = ((p_2.y > 0.0) ? radii.w : radii.x);
@@ -191,12 +215,12 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
     uint _e6 = _group_0_binding_0_fs.vert_len;
     uint f = min(first, _e6);
     uint _e10 = _group_0_binding_0_fs.vert_len;
-    uint n = min(count, (_e10 - f));
-    if ((n == 0u)) {
+    uint n_1 = min(count, (_e10 - f));
+    if ((n_1 == 0u)) {
         return 3e38;
     }
     uint _e22 = _group_0_binding_0_fs.vert_base;
-    ivec2 _e27 = vert((((_e22 + f) + n) - 1u));
+    ivec2 _e27 = vert((((_e22 + f) + n_1) - 1u));
     float _e29 = wx(_e27.x);
     ax = _e29;
     float _e32 = wy(_e27.y);
@@ -209,7 +233,7 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
         }
         loop_init_1 = false;
         uint _e36 = j_1;
-        if ((_e36 < n)) {
+        if ((_e36 < n_1)) {
         } else {
             break;
         }
@@ -456,24 +480,30 @@ void main() {
                     local_15 = false;
                 }
                 bool hit = local_15;
-                vec2 n_1 = vec2(uvec2(textureSize(_group_1_binding_0_fs, 0).xy));
+                vec2 n_2 = vec2(uvec2(textureSize(_group_1_binding_0_fs, 0).xy));
                 float tu = (in_.uv.x + (lx_1 * in_.m3_.x));
                 float tv = (in_.uv.y + (ly_1 * in_.m3_.y));
-                uint tx = uint(min(max(floor((tu * n_1.x)), 0.0), (n_1.x - 1.0)));
-                uint ty = uint(min(max(floor((tv * n_1.y)), 0.0), (n_1.y - 1.0)));
+                uint tx = uint(min(max(floor((tu * n_2.x)), 0.0), (n_2.x - 1.0)));
+                uint ty = uint(min(max(floor((tv * n_2.y)), 0.0), (n_2.y - 1.0)));
                 vec4 _e398 = texelFetch(_group_1_binding_0_fs, ivec2(uvec2(tx, ty)), 0);
                 colour = (in_.stroke * _e398);
+                if ((in_.m3_.z > 0.5)) {
+                    float _e408 = distance_at((tu * n_2.x), (tv * n_2.y), n_2);
+                    float d_4 = ((_e408 - 128.0) * 0.031496063);
+                    float ppt = max((1.0 / (in_.m3_.x * n_2.x)), 0.125);
+                    colour = vec4(in_.stroke.xyz, (in_.stroke.w * min(max(((d_4 * ppt) + 0.5), 0.0), 1.0)));
+                }
                 alpha = (hit ? 1.0 : 0.0);
             }
         }
     }
-    float _e404 = colour.w;
-    float _e405 = alpha;
-    float _e406 = keep;
-    float _e410 = _group_0_binding_0_fs.opacity;
-    float a = clamp((_e404 * ((_e405 * _e406) * _e410)), 0.0, 1.0);
-    vec4 _e416 = colour;
-    _fs2p_location0 = vec4((clamp(_e416.xyz, vec3(0.0), vec3(1.0)) * a), a);
+    float _e438 = colour.w;
+    float _e439 = alpha;
+    float _e440 = keep;
+    float _e444 = _group_0_binding_0_fs.opacity;
+    float a = clamp((_e438 * ((_e439 * _e440) * _e444)), 0.0, 1.0);
+    vec4 _e450 = colour;
+    _fs2p_location0 = vec4((clamp(_e450.xyz, vec3(0.0), vec3(1.0)) * a), a);
     return;
 }
 
