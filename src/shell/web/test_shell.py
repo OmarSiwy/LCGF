@@ -64,6 +64,18 @@ def attach(page):
     check("attach: idle, no animation frames", page.eval("window.lcgf.page.frames") == frames)
 
 
+def glyphs(page):
+    """Text draws glyph shapes from the bundled font, not boxes of its colour: of the Reset
+    button's middle (its caption on the control colour), the bright pixels are its letters'
+    strokes, a part of the caption's box. Boxes fill about two thirds of this region."""
+    shot = page.send("Page.captureScreenshot", {"format": "png", "clip": {"x": 12, "y": 14, "width": 50, "height": 22, "scale": 1}})
+    path = Path("zig-out/web-shell-glyphs.png")
+    path.write_bytes(base64.b64decode(shot["data"]))
+    w, h, px = golden.read_png(path)
+    bright = sum(px[i] + px[i + 1] + px[i + 2] > 3 * 160 for i in range(0, w * h * 4, 4))
+    check("glyphs: the caption is drawn as letters, not boxes", 0.02 * w * h < bright < 0.45 * w * h, f"{bright} of {w * h} pixels bright")
+
+
 def frame(page):
     """Waits until the animation frame the last event asked for has run."""
     page.eval("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
@@ -274,7 +286,7 @@ def main(argv):
     server = browser.Server(argv[1])
     # Each group on a fresh page (the replay starts from the example's first frame), in a
     # browser at the group's device pixel ratio, with the group's back end.
-    for scale, query, tests in ((1, "?backend=2d", (attach,)), (1, "?backend=2d", (replay, keys, wheel, touch, cursor, clipboard, ime, timers)),
+    for scale, query, tests in ((1, "?backend=2d", (attach, glyphs)), (1, "?backend=2d", (replay, keys, wheel, touch, cursor, clipboard, ime, timers)),
                                 (2, "?backend=2d", (dpr,)), (1, "", (gpu,))):
         b = browser.Browser(scale=scale)
         try:

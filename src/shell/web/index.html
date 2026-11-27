@@ -49,8 +49,13 @@ if (device) {
     context.configure({ device, format, alphaMode: "opaque" });
     const white = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+    // The bundled font, which the glyph quads sample (main.zig lcgf_font_rgba).
+    const size = ui.exports.lcgf_font_size(), fw = size & 0xffff, fh = size >>> 16;
+    const font = device.createTexture({ size: [fw, fh], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    const texels = ui.u8(ui.exports.lcgf_font_rgba(), fw * fh * 4);
+    device.queue.writeTexture({ texture: font }, texels, { bytesPerRow: fw * 4 }, [fw, fh]);
     const { put } = ui.gpu;
-    ui.exports.lcgf_webgpu_init(put(device), put(device.queue), format === "bgra8unorm" ? 1 : 0, put(white.createView()), put(device.createSampler({ magFilter: "nearest", minFilter: "nearest" })));
+    ui.exports.lcgf_webgpu_init(put(device), put(device.queue), format === "bgra8unorm" ? 1 : 0, put(white.createView()), put(device.createSampler({ magFilter: "nearest", minFilter: "nearest" })), put(font.createView()));
 }
 attach(ui, canvas, page);
 window.lcgf = { ui, page, errors };

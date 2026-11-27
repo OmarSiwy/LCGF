@@ -43,9 +43,10 @@ const host = struct {
     }
     pub fn present(out: *const Output) void {
         const n = font.quads(out.draw, &glyph_quads, .{ .first = &glyph_first, .count = &glyph_count });
-        const glyphs: lcgf.render_iface.Glyphs = .{ .quads = glyph_quads[0..n], .first = &glyph_first, .count = &glyph_count };
+        var glyphs: lcgf.render_iface.Glyphs = .{ .quads = glyph_quads[0..n], .first = &glyph_first, .count = &glyph_count };
         const scale = shell.in.scale;
         if (gpu) |*g| {
+            glyphs.texture = font_texture;
             // The page's pass draws into the canvas's current texture (index.html).
             g.prepare(queue, out.draw, glyphs, shell.in.viewport, scale);
             const pass = imports.gpu_frame_begin();
@@ -57,6 +58,8 @@ const host = struct {
         const w = @max(@min(shell.pixels[0], max_w), 1);
         const h = @max(@min(shell.pixels[1], @as(u32, @intCast(pixels.len / sw.Framebuffer.len(w, 1)))), 1);
         var c: rweb.canvas.Canvas = .init(&pixels, w, h);
+        c.gfx.images = &canvas_images;
+        glyphs.texture = @fromBackingInt(1);
         c.gfx.prepare({}, out.draw, glyphs, shell.in.viewport, scale);
         c.fb.clear(background);
         lcgf.render_iface.render(&c.gfx, c.target(), out.draw);
@@ -85,11 +88,33 @@ const background: lcgf.types.Color = .rgb(0, 0, 0);
 var gpu: ?rweb.webgpu.Renderer = null;
 var queue: u32 = 0;
 
+/// The bundled font (DejaVu Sans Mono in `Mono.atlas`'s 16 x 16 byte grid, the example host's
+/// glyphs repacked: render_sw_font), which the glyph quads `font.quads` makes sample. The 2D
+/// canvas binds it as image 1; WebGPU as a texture the page uploads (`lcgf_font_rgba`).
+const font_image = lcgf.render_sw_font.image;
+const canvas_images = [_]sw.Image{ .white, font_image };
+var font_texture: lcgf.types.Texture = .white;
+var font_rgba: [font_image.width * font_image.height * 4]u8 = undefined;
+
+/// The font as straight RGBA8 (white, coverage in alpha), `lcgf_font_size` texels, for the
+/// page to upload as the WebGPU glyph texture.
+export fn lcgf_font_rgba() [*]const u8 {
+    for (font_image.alpha8, 0..) |a, i| font_rgba[4 * i ..][0..4].* = .{ 255, 255, 255, a };
+    return &font_rgba;
+}
+
+/// The font's width | height << 16, in texels.
+export fn lcgf_font_size() u32 {
+    return font_image.width | (font_image.height << 16);
+}
+
 /// Draw with WebGPU from now on: the page's device, queue, its canvas format (0 rgba8unorm,
-/// 1 bgra8unorm), a 1x1 white texture view and a sampler.
-export fn lcgf_webgpu_init(device: u32, q: u32, format: u32, white: u32, sampler: u32) void {
+/// 1 bgra8unorm), a 1x1 white texture view, a sampler and the font's texture view
+/// (`lcgf_font_rgba`).
+export fn lcgf_webgpu_init(device: u32, q: u32, format: u32, white: u32, sampler: u32, font_view: u32) void {
     queue = q;
     gpu = .init(device, .{ .format = @fromBackingInt(@intCast(format)) }, white, sampler);
+    font_texture = gpu.?.addTexture(device, font_view, sampler);
 }
 
 /// 1 when frames are drawn with WebGPU, 0 with the 2D canvas.
