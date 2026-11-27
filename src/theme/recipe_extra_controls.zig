@@ -103,7 +103,7 @@ const Mark = struct {
         return .{ .nodes = target.tree.len, .extras = target.tree.xlen, .texts = target.texts.len, .strings = target.strings.len, .kids = target.tree.c.nkids[target.parent] };
     }
     fn restore(mark: Mark, target: Target) void {
-        target.tree.len = mark.nodes;
+        target.tree.truncate(mark.nodes);
         target.tree.xlen = mark.extras;
         target.texts.len = mark.texts;
         target.strings.len = mark.strings;

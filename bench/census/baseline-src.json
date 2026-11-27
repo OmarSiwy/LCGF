@@ -390,14 +390,14 @@
     "short_fwd": 0
   },
   "p_tree_push": {
-    "jcc": 2,
-    "back": 0,
-    "short_fwd": 0
+    "jcc": 36,
+    "back": 4,
+    "short_fwd": 21
   },
   "p_tree_push_row": {
-    "jcc": 2,
-    "back": 0,
-    "short_fwd": 0
+    "jcc": 38,
+    "back": 6,
+    "short_fwd": 21
   },
   "p_tween": {
     "back": 1,

@@ -244,6 +244,8 @@ One node's row as `Tree.push` writes it, computed from a `Style`: sizing modes a
 Fields: `min`, `max`, `grow`, `pct`, `pad_lo`, `pad_hi`, `offset`, `scroll`, `main`, `gap`, `flow`, `shrink`, `align_main`, `align_cross`, `clips`, `sense`, `look`, `role`, `value`, `text`, `custom`, `own`, `border`, `uv`, `radii`, `opacity`, `transform`, `transform_origin`, `paint_reference`, `paint_outset`, `prepared_texture`, `paint_revision`, `participation`, `cursor`
 
 - `collapsed = .{ "min", "max", "grow", "pct", "pad_lo", "pad_hi", "flow", "gap" }`: The layout inputs a collapsed node (`Participation.layout` off) has zeroed: `pct` to -1, the others to 0 (`Tree.pushRow`; tools/abi-gen writes the bindings' copy from it).
+- `fn isLean(comptime name: []const u8) bool`: Whether node field `name` is one of `lean`.
+- `fn sameBits(a: anytype, b: @TypeOf(a)) bool`: Whether `a` and `b` are the same bits: what `push` asks of a lean field and its default, so a -0 or a NaN a style sets is still stored.
 - `fn from(s: *const Style) Template`
 
 ### `FlatRow` (struct)
@@ -261,14 +263,15 @@ Fields: `array`
 ### `TreeOf(..)` (generic struct)
 A tree whose node links (`parent`, `end`, `push`'s rows) are `Index`, the smallest integer that fits the capacity, as `Ui().Index` is in prototype/comptime_ui_probe.zig.
 
-Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`, `wide`, `t`, `parent`, `id`
+Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`, `wide`, `filled`, `t`, `parent`, `id`
 
 - `scratch = [_][]const u8{ "fit", "nat", "grow_sum", "grow_inv", "used", "gap_total", "cursor" }`: The layout scratch columns: every layout run rewrites them before reading them (`layout.prepare` zeroes or sets the accumulators, `fit` writes the rest), and nothing outside a layout run reads them.
 - `fn rows(cap: u32) usize`: Rows allocated for `cap` nodes: whole vectors plus one spare, so batch passes may read and write one vector past `len`.
 - `fn init(carver: *mem.Carver, cap: u32) Self`: Carves every column from `carver`.
 - `fn initSharing(carver: *mem.Carver, cap: u32, other: *const Self) Self`: `init`, except the `scratch` columns are `other`'s, not carved: two trees that are never laid out at the same time (the runtime front end's two generations) share them.
 - `fn reset(t: *Self) void`: Empties the tree for the next frame.
-- `fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index`: `push` from a style already turned into its row (`Template.from`, once per style rather than once per node): the row is copied as it is, one store per column.
+- `fn truncate(t: *Self, n: u32) void`: Drops the rows from `n` on, as if they had not been pushed: `len` becomes `n` and their `Template.lean` columns go back to the defaults, which is what `push` expects of a row it has written before.
+- `fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index`: `push` from a style already turned into its row (`Template.from`, once per style rather than once per node): the row is copied as it is, one store per column, or in a row pushed before, per column the node sets or that is not lean (`filled`).
 - `fn cursor(t: *const Self, i: u32) ?types.Cursor`: Effective pointer shape, available while building without an extra ancestor walk.
 - `fn participation(t: *const Self, i: u32) types.Participation`: Effective subtree participation, available immediately while building.
 - `fn border(t: *const Self, i: u32) f32`: Border width of node `i` (`Style.border`).

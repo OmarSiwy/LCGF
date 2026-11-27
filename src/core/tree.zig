@@ -140,6 +140,29 @@ pub const Template = struct {
         break :blk all[0..std.meta.fieldIndex(Template, "own").?];
     };
 
+    /// The fields `Tree.push` stores only for a node that sets them off the default
+    /// (`Tree.filled`): the layout inputs, the scroll, and the semantics and links. Most nodes
+    /// set two or three of the twenty, and a store costs the same whether or not the value is
+    /// the one the column already holds. `look` is not one: nearly every painted node sets it.
+    pub const lean = [_][]const u8{
+        "min",    "max",   "grow", "pct",   "pad_lo", "pad_hi",     "offset",
+        "scroll", "main",  "gap",  "flow",  "shrink", "align_main", "align_cross",
+        "clips",  "sense", "role", "value", "text",   "custom",
+    };
+
+    /// Whether node field `name` is one of `lean`.
+    pub fn isLean(comptime name: []const u8) bool {
+        for (lean) |l| if (std.mem.eql(u8, l, name)) return true;
+        return false;
+    }
+
+    /// Whether `a` and `b` are the same bits: what `push` asks of a lean field and its default,
+    /// so a -0 or a NaN a style sets is still stored.
+    pub inline fn sameBits(a: anytype, b: @TypeOf(a)) bool {
+        const Bits = @Int(.unsigned, @bitSizeOf(@TypeOf(a)));
+        return @as(Bits, @bitCast(a)) == @as(Bits, @bitCast(b));
+    }
+
     /// Bit 0: a node with style `s` has an `Extras` row of its own: a paint extra off its
     /// default, something its subtree inherits (cursor, participation), or a rounded clip.
     /// Bit 1: all it does is clip to square corners. That needs a row only under an ancestor
@@ -337,6 +360,12 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// take a run at a time (`layout/runs.zig`: `survey` sets it, once per frame). Only a
         /// choice between two forms of each pass that write the same columns.
         wide: bool = false,
+        /// Rows below this have been pushed before, and from `len` up to it they hold the
+        /// defaults in the `Template.lean` columns (`reset` and `truncate` put them back), so
+        /// `push` stores a lean field there only when the node sets it. A row from here on
+        /// gets every field. Shorten a tree with `truncate`, not by assigning `len`: the rows
+        /// dropped would keep their values for the next node pushed there.
+        filled: u32 = 0,
 
         /// One column per property, grouped by the pass that reads them, so a pass touches only the
         /// cache lines it needs. Every column has `simd.rows(cap)` rows (the padding contract).
@@ -483,15 +512,77 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             t.reset();
             break :blk t;
         } else {};
-        /// Empties the tree for the next frame. Columns keep their memory and stale rows; every
-        /// row is rewritten before it is read again. Row 0 of `x` is set to the defaults.
+        /// Empties the tree for the next frame. The rows it had go back to the defaults in the
+        /// `Template.lean` columns, which the next push of each row then stores only where its
+        /// node differs (`filled`); the other columns keep their stale rows, and every push
+        /// rewrites them. Row 0 of `x` is set to the defaults.
         pub fn reset(t: *Self) void {
-            t.len = 0;
+            t.truncate(0);
             t.overflow = false;
             t.wide = false;
             t.xlen = 1;
             t.x.node[0] = 0;
             t.x.row[0] = .defaults;
+        }
+
+        /// Drops the rows from `n` on, as if they had not been pushed: `len` becomes `n` and
+        /// their `Template.lean` columns go back to the defaults, which is what `push` expects
+        /// of a row it has written before. The side lists and the parent's child count are the
+        /// caller's to put back.
+        pub fn truncate(t: *Self, n: u32) void {
+            std.debug.assert(n <= t.len);
+            if (lean_push) {
+                const d = comptime Template.from(&.{});
+                inline for (Template.lean) |name| {
+                    const col = &@field(t.c, name);
+                    if (@TypeOf(col.*) == [2]Col(f32)) {
+                        inline for (0..2) |a| @memset(col[a][n..t.len], @field(d, name)[a]);
+                    } else @memset(col.*[n..t.len], @field(d, name));
+                }
+                t.filled = @max(t.filled, t.len);
+            }
+            t.len = n;
+        }
+
+        /// A size build stores every field of every node: the one loop, and no second form.
+        const lean_push = @import("builtin").mode != .small;
+
+        /// Debug and ReleaseSafe: row `i`, which `push` is about to write lean, holds the
+        /// defaults in the lean columns. A row that does not was dropped by assigning `len`
+        /// (use `truncate`), or written before it was pushed.
+        fn assertSettled(t: *const Self, i: usize) void {
+            const d = comptime Template.from(&.{});
+            inline for (Template.lean) |name| {
+                const col = &@field(t.c, name);
+                if (@TypeOf(col.*) == [2]Col(f32)) {
+                    inline for (0..2) |a| std.debug.assert(Template.sameBits(col[a][i], @field(d, name)[a]));
+                } else std.debug.assert(Template.sameBits(col.*[i], @field(d, name)));
+            }
+        }
+
+        /// `row`'s node fields into row `i`, which holds the defaults in the lean columns: a
+        /// lean field is stored only when the node sets it. For a style written where the node
+        /// is made, that test is settled when the call is compiled and the store is not there;
+        /// for one built at run time it is a jump over the store (a select of where to store
+        /// compiled to the same jumps, and to more instructions).
+        inline fn storeSet(t: *Self, i: Index, row: anytype) void {
+            std.debug.assert(i < t.filled);
+            if (std.debug.runtime_safety) t.assertSettled(i);
+            const c = &t.c;
+            const d = comptime Template.from(&.{});
+            inline for (Template.node_fields) |name| {
+                const v = rowField(row, name);
+                const lean = comptime Template.isLean(name);
+                if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
+                    const set = !lean or !Template.sameBits(v[0], @field(d, name)[0]) or
+                        !Template.sameBits(v[1], @field(d, name)[1]);
+                    if (set) {
+                        inline for (0..2) |a| @field(c, name)[a][i] = v[a];
+                    }
+                } else if (!lean or !Template.sameBits(v, @field(d, name))) {
+                    @field(c, name)[i] = v;
+                }
+            }
         }
 
         /// Appends a node as the last child of `parent` and returns its row. One row write
@@ -543,13 +634,17 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         }
 
         /// `push` from a style already turned into its row (`Template.from`, once per style
-        /// rather than once per node): the row is copied as it is, one store per column.
+        /// rather than once per node): the row is copied as it is, one store per column, or
+        /// in a row pushed before, per column the node sets or that is not lean (`filled`).
         /// `row` is a `*const Template` or a `*const FlatRow`.
         pub fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index {
             // Inlined into a caller, the column loop below counts against that caller's quota.
             @setEvalBranchQuota(1_000_000);
             const c = &t.c;
             const i: Index = @intCast(@min(t.len, t.cap - 1));
+            // A row pushed before and since put back to the defaults takes the lean form
+            // below; a full tree rewrites its last row, which is not.
+            const settled = lean_push and i < t.filled and t.len < t.cap;
             t.overflow = simd.orB(t.overflow, t.len >= t.cap);
             t.len = i + 1;
             // Full, the last row is rewritten, and a child of the node open there would be its
@@ -576,8 +671,10 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             // `.all` change nothing, so the other side is only for a node that is taken out. A
             // size build keeps the one loop.
             const everything = active_in == @as(u8, @bitCast(types.Participation.all));
-            if ((comptime @import("builtin").mode != .small) and everything) {
+            if (lean_push and everything and settled) {
                 @branchHint(.likely);
+                t.storeSet(i, row);
+            } else if (lean_push and everything) {
                 inline for (Template.node_fields) |name| {
                     const v = rowField(row, name);
                     if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
@@ -947,6 +1044,85 @@ test "push: an Extras row for a paint extra, a rounded clip, or a square clip un
     t.reset();
     try testing.expectEqual(1, t.xlen);
     try testing.expectEqual(1, t.x.row[0].opacity);
+}
+
+/// Every node field of row `i` as `Template.from(style)` has it: what a push that stored
+/// every field would leave.
+fn expectRow(t: *const Tree, i: u32, style: Style) !void {
+    const want = Template.from(&style);
+    inline for (Template.node_fields) |name| {
+        const col = @field(t.c, name);
+        const field = @field(want, name);
+        if (@TypeOf(col) == [2][]f32) {
+            inline for (0..2) |a| try testing.expect(Template.sameBits(col[a][i], field[a]));
+        } else if (comptime std.mem.eql(u8, name, "look")) {
+            try testing.expectEqual(field, col[i]);
+        } else try testing.expect(Template.sameBits(col[i], field));
+    }
+}
+
+test "push: a field a node does not set is the default, whatever the row held last frame" {
+    var fx: Fixture(8) = .{};
+    var t = fx.tree();
+    const busy: Style = .{
+        .dir = .x,
+        .size = .{ .px(40), .grow(2) },
+        .pad = .{ 1, 2, 3, 4 },
+        .gap = 5,
+        .offset = .{ 6, 7 },
+        .scroll = .{ 8, 9 },
+        .main = .center,
+        .cross = .end,
+        .shrink = true,
+        .float = true,
+        .clip = true,
+        .role = .button,
+        .value = 0.5,
+        .fill = .white,
+    };
+    const plain: Style = .{ .size = .{ .px(-0.0), .fit } };
+    // A row's first push stores every field; the frames after store only what a node sets.
+    for (0..3) |frame| {
+        t.reset();
+        const styles = if (frame % 2 == 0) [2]Style{ busy, plain } else [2]Style{ plain, busy };
+        const root = t.push(0, .none, &.{});
+        for (styles) |style| _ = t.push(root, .none, &style);
+        try testing.expectEqual(@as(u32, if (frame == 0) 0 else 3), t.filled);
+        try expectRow(&t, 0, .{});
+        for (styles, 1..) |style, i| try expectRow(&t, @intCast(i), style);
+    }
+}
+
+test "truncate: the rows dropped are pushed again as if for the first time" {
+    var fx: Fixture(8) = .{};
+    var t = fx.tree();
+    const busy: Style = .{ .pad = @splat(3), .gap = 2, .size = .{ .pct(0.5), .fill }, .role = .button };
+    for (0..2) |_| {
+        t.reset();
+        const root = t.push(0, .none, &.{});
+        _ = t.push(root, .none, &busy);
+        _ = t.push(root, .none, &busy);
+        t.truncate(1);
+        try testing.expectEqual(1, t.len);
+        _ = t.push(root, .none, &.{});
+        _ = t.push(root, .none, &.{ .gap = 9 });
+        try expectRow(&t, 1, .{});
+        try expectRow(&t, 2, .{ .gap = 9 });
+    }
+}
+
+test "push: a full tree rewrites every field of its last row" {
+    var fx: Fixture(2) = .{};
+    var t = fx.tree();
+    for (0..2) |_| {
+        t.reset();
+        const root = t.push(0, .none, &.{});
+        _ = t.push(root, .none, &.{ .pad = @splat(3), .gap = 2, .role = .button });
+        try testing.expect(!t.overflow);
+        _ = t.push(root, .none, &.{ .offset = .{ 1, 1 } });
+        try testing.expect(t.overflow);
+        try expectRow(&t, 1, .{ .offset = .{ 1, 1 } });
+    }
 }
 
 test "push: a paint reference to the node itself or a later row becomes none" {

@@ -146,6 +146,20 @@ jump those merges added was removed). Each remaining jump was read in the disass
   `lanes - 1` on has another parent. On bench/vs/lcgf (x86_64_v3, 3,000 polls) springs took
   421,638 instead of 468,970 instructions a frame; list 102,557 (102,988), form 49,411
   (49,501) and resize 133,859 (132,514), whose long runs are rows of text.
+- `p_tree_push` jcc 2 -> 36, back 0 -> 4, short_fwd 0 -> 21; `p_tree_push_row` 2 -> 38,
+  0 -> 6, 0 -> 21: `push` stores a lean field (`Template.lean`, twenty of the node fields)
+  only when the node sets it off the default, in a row that `reset` has put back to the
+  defaults. The probes push a style they know nothing about, so each of those fields is a test
+  and a short jump over its store, and one more picks this form (a row pushed before, a tree
+  that is not full). A style written where the node is made settles the tests when the call is
+  compiled: the scene's bar keeps four of them, for its animated width. The stores were the
+  build's cost, about one cycle each with the columns' lines to fetch: sampled cycles put 53%
+  of the springs frame in the build, on the stores of defaults. A select of where to store
+  compiled to 14 of the same jumps and more instructions. On bench/vs/lcgf (x86_64_v3, 3,000
+  polls, pinned core, nine interleaved rounds) the median frame went 25.3 -> 22.0 us on
+  springs, 6.6 -> 6.0 on list, 8.0 -> 7.3 on resize, and a built frame of form 10.0 -> 9.4;
+  instructions a frame 406,217 -> 382,354, 102,948 -> 99,837, 127,638 -> 123,128 and
+  49,593 -> 48,267, with the reset's fills of the lean columns counted.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.
