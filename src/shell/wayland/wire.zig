@@ -146,7 +146,7 @@ pub const Conn = struct {
         var control: [cmsgSpace(max_fds)]u8 align(@alignOf(linux.cmsghdr)) = undefined;
         var sent: usize = 0;
         while (sent < c.out_len) {
-            const iov = [1]std.posix.iovec_const{.{ .base = c.out[sent..].ptr, .len = c.out_len - sent }};
+            const iov = [1]linux.iovec_const{.{ .base = c.out[sent..].ptr, .len = c.out_len - sent }};
             var msg: linux.msghdr_const = .{ .name = null, .namelen = 0, .iov = &iov, .iovlen = 1, .control = null, .controllen = 0, .flags = 0 };
             if (c.out_nfds > 0) {
                 const len = cmsgLen(c.out_nfds);
@@ -184,7 +184,7 @@ pub const Conn = struct {
         }
         if (c.in_end == c.in.len) return error.Overflow;
         var control: [cmsgSpace(max_fds)]u8 align(@alignOf(linux.cmsghdr)) = undefined;
-        const iov = [1]std.posix.iovec{.{ .base = c.in[c.in_end..].ptr, .len = c.in.len - c.in_end }};
+        const iov = [1]linux.iovec{.{ .base = c.in[c.in_end..].ptr, .len = c.in.len - c.in_end }};
         var msg: linux.msghdr = .{ .name = null, .namelen = 0, .iov = @constCast(&iov), .iovlen = 1, .control = &control, .controllen = control.len, .flags = 0 };
         const rc = linux.recvmsg(c.fd, &msg, linux.MSG.DONTWAIT | linux.MSG.CMSG_CLOEXEC);
         switch (linux.errno(rc)) {
