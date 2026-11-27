@@ -130,11 +130,12 @@ inline fn resolveGroups(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32, 
     const a = @backingInt(axis);
     if (t.len == 0) return;
     const c = &t.c;
-    const one = simd.f(1);
     const zero = simd.f(0);
     const size = c.size[a];
     const used = c.used[a];
     size[0] = viewport;
+    std.debug.assert(t.len <= lv.cap);
+    const wide = t.wide;
     for (1..lv.count) |d| {
         const end = lv.c.start[d + 1];
         var j: usize = lv.c.start[d];
@@ -143,47 +144,95 @@ inline fn resolveGroups(t: *Tree, lv: *const Levels, axis: Axis, viewport: f32, 
         while (j < end) : (j += W) {
             const i = simd.loadU(lv.c.order, j);
             const p = simd.loadU(lv.c.parent, j);
-            const low = gather(c.min[a], i);
-            const high = gather(c.max[a], i);
-            const fl = gather(c.flow, i);
-            const s = blk: {
-                if (shortcuts and @reduce(.And, (low > zero) & (low == high))) break :blk low;
-
-                const nat = gather(c.nat[a], i);
-                const grow = gather(c.grow[a], i);
-                const pct = gather(c.pct[a], i);
-                const shrink = gather(c.shrink, i);
-                const taken = gather(c.fit[a], p) + gather(c.gap_total, p);
-                const pad = gather(c.pad_lo[a], p) + gather(c.pad_hi[a], p);
-                const inner = @max(gather(size, p) - pad, zero);
-                const free = @max(inner - taken, zero);
-
-                // fit already clamped the natural size. With both parent coefficients
-                // zero and no shrinking, the general expression returns it exactly.
-                // Positive finite values preserve signed zero and avoid zero times infinity.
-                const natural = (nat > zero) & (nat < simd.f(inf)) & (grow == zero) &
-                    (pct == simd.f(-1)) & (shrink == zero) & (inner < simd.f(inf)) & (free < simd.f(inf));
-                if (shortcuts and @reduce(.And, natural)) break :blk nat;
-
-                const main = gather(c.main[a], p);
-                const grow_inv = gather(c.grow_inv[a], p);
-                const has_pct = @select(f32, pct >= zero, one, zero);
-                const keep = one - has_pct;
-                const across = (one - main) * @select(f32, grow > zero, one, zero);
-                const k0 = nat * keep * (one - fl * across);
-                const k1 = has_pct * pct + keep * fl * across;
-                const k2 = keep * fl * main * grow * grow_inv;
-                const room = @select(f32, shrink * fl > zero, main * (taken - nat), simd.f(-inf));
-                var resolved = k0 + k1 * inner + k2 * free;
-                resolved -= @max(resolved - @max(inner - room, zero), zero);
-                break :blk @min(@max(resolved, low), high);
-            };
-            scatter(size, i, s);
             const in_level = simd.iota + simd.u(@intCast(j)) < simd.u(end);
-            const u = @select(f32, in_level, s * fl, zero);
-            inline for (0..W) |l| used[p[l]] += u[l];
+            // In a tree of long runs of siblings (`Tree.wide`) most vectors are rows next to
+            // each other under one parent: their columns are loaded and stored as vectors,
+            // the parent is read once and its `used` summed in a register, in the same order.
+            const run = wide and @reduce(.And, i == simd.u(i[0]) + simd.iota) and
+                @reduce(.And, p == simd.u(p[0]));
+            if (run) {
+                const fl = simd.loadF(c.flow, i[0]);
+                const s = sizesOf(.together, c, a, .{ i, p }, fl, shortcuts);
+                simd.storeF(size, i[0], s);
+                const each: [W]f32 = @select(f32, in_level, s * fl, zero);
+                var sum = used[p[0]];
+                inline for (0..W) |l| sum += each[l];
+                used[p[0]] = sum;
+            } else {
+                const fl = gather(c.flow, i);
+                const s = sizesOf(.apart, c, a, .{ i, p }, fl, shortcuts);
+                scatter(size, i, s);
+                const u = @select(f32, in_level, s * fl, zero);
+                inline for (0..W) |l| used[p[l]] += u[l];
+            }
         }
     }
+}
+
+/// How a vector of a level's rows lies in the columns: `together`, next to each other under
+/// one parent, so a row column is one load at the first row and a parent column one value; or
+/// `apart`, each lane gathered.
+const Lie = enum { together, apart };
+
+/// Final sizes on axis `a` of the rows `at[0]`, whose parents are `at[1]` and whose `flow`
+/// is `fl`.
+// tidy: allow-fn(inline-always-large) the level sweep's body, in its two forms
+inline fn sizesOf(
+    comptime lie: Lie,
+    c: *const Tree.Columns,
+    a: usize,
+    at: [2]U,
+    fl: F,
+    comptime shortcuts: bool,
+) F {
+    std.debug.assert(a < 2);
+    const together = lie == .together;
+    const i = at[0];
+    const p = at[1];
+    const one = simd.f(1);
+    const zero = simd.f(0);
+    const low = rowsOf(together, c.min[a], i);
+    const high = rowsOf(together, c.max[a], i);
+    if (shortcuts and @reduce(.And, (low > zero) & (low == high))) return low;
+
+    const nat = rowsOf(together, c.nat[a], i);
+    const grow = rowsOf(together, c.grow[a], i);
+    const pct = rowsOf(together, c.pct[a], i);
+    const shrink = rowsOf(together, c.shrink, i);
+    const taken = parentsOf(together, c.fit[a], p) + parentsOf(together, c.gap_total, p);
+    const pad = parentsOf(together, c.pad_lo[a], p) + parentsOf(together, c.pad_hi[a], p);
+    const inner = @max(parentsOf(together, c.size[a], p) - pad, zero);
+    const free = @max(inner - taken, zero);
+
+    // fit already clamped the natural size. With both parent coefficients
+    // zero and no shrinking, the general expression returns it exactly.
+    // Positive finite values preserve signed zero and avoid zero times infinity.
+    const natural = (nat > zero) & (nat < simd.f(inf)) & (grow == zero) &
+        (pct == simd.f(-1)) & (shrink == zero) & (inner < simd.f(inf)) & (free < simd.f(inf));
+    if (shortcuts and @reduce(.And, natural)) return nat;
+
+    const main = parentsOf(together, c.main[a], p);
+    const grow_inv = parentsOf(together, c.grow_inv[a], p);
+    const has_pct = @select(f32, pct >= zero, one, zero);
+    const keep = one - has_pct;
+    const across = (one - main) * @select(f32, grow > zero, one, zero);
+    const k0 = nat * keep * (one - fl * across);
+    const k1 = has_pct * pct + keep * fl * across;
+    const k2 = keep * fl * main * grow * grow_inv;
+    const room = @select(f32, shrink * fl > zero, main * (taken - nat), simd.f(-inf));
+    var resolved = k0 + k1 * inner + k2 * free;
+    resolved -= @max(resolved - @max(inner - room, zero), zero);
+    return @min(@max(resolved, low), high);
+}
+
+/// The rows `i` of `col`: one load when they are next to each other.
+inline fn rowsOf(comptime together: bool, col: []const f32, i: U) F {
+    return if (together) simd.loadF(col, i[0]) else gather(col, i);
+}
+
+/// The parents `p` of `col`: one value when they are the same row.
+inline fn parentsOf(comptime together: bool, col: []const f32, p: U) F {
+    return if (together) simd.f(col[p[0]]) else gather(col, p);
 }
 
 const testing = std.testing;
@@ -283,6 +332,42 @@ test "resolve: coefs.resolveK's sizes and used, and so placeK's positions, bit f
             try testing.expectEqualSlices(u32, @ptrCast(want[4 + a][0..n]), @ptrCast(t.c.pos[a][0..n]));
         }
         try testing.expectEqualSlices(u32, @ptrCast(want_cursor[0..n]), @ptrCast(t.c.cursor[0..n]));
+    }
+}
+
+test "resolve: a tree of long runs gets layout.resolve's sizes and used, bit for bit" {
+    var raw: [1024 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 1000);
+    var lv = Levels.init(&carver, 1000);
+    var prng: std.Random.DefaultPrng = .init(0x1e7e15);
+    var want: [4][1000]f32 = undefined;
+    const axes = [2]Axis{ .x, .y };
+    const viewport = [2]f32{ 1280, 800 };
+    for (0..200) |_| {
+        check.randomRuns(&t, prng.random(), 1 + prng.random().uintLessThan(u32, t.cap));
+        const n = t.len;
+        // Reference: row by row.
+        layout.prepare(&t);
+        for (axes, viewport) |axis, vp| {
+            layout.fit(&t, axis);
+            layout.resolve(&t, axis, vp);
+        }
+        const cols = [4][]f32{ t.c.size[0], t.c.size[1], t.c.used[0], t.c.used[1] };
+        for (cols, 0..) |col, k| @memcpy(want[k][0..n], col[0..n]);
+        // By levels, the vectors of rows next to each other taken as such.
+        layout.prepare(&t);
+        for (0..2) |a| @memset(t.c.size[a], std.math.nan(f32));
+        t.wide = true;
+        build(&t, &lv);
+        for (axes, viewport) |axis, vp| {
+            layout.fit(&t, axis);
+            resolve(&t, &lv, axis, vp);
+        }
+        for (cols, 0..) |col, k| {
+            const got: []const u32 = @ptrCast(col[0..n]);
+            try testing.expectEqualSlices(u32, @ptrCast(want[k][0..n]), got);
+        }
     }
 }
 
