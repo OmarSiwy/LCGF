@@ -66,13 +66,24 @@ pub const Discovery = struct {
     /// path, written into `path`, and its index in the file. Null when no face has it, or
     /// when fontconfig fails to build the query.
     pub fn find(d: *Discovery, cp: u21, path: []u8) error{NoSpace}!?Found {
+        return d.findFamily(cp, "sans-serif", path);
+    }
+
+    /// `find` in fontconfig's order for `family`, a name or an alias ("sans-serif",
+    /// "monospace"): the system's monospace face is `findFamily('a', "monospace", path)`.
+    pub fn findFamily(
+        d: *Discovery,
+        cp: u21,
+        family: [*:0]const u8,
+        path: []u8,
+    ) error{NoSpace}!?Found {
         const a = &d.api;
         const pat = a.FcPatternCreate() orelse return null;
         defer a.FcPatternDestroy(pat);
         const want = a.FcCharSetCreate() orelse return null;
         defer a.FcCharSetDestroy(want);
         if (a.FcCharSetAddChar(want, cp) == 0) return null;
-        if (a.FcPatternAddString(pat, "family", "sans-serif") == 0) return null;
+        if (a.FcPatternAddString(pat, "family", family) == 0) return null;
         if (a.FcPatternAddCharSet(pat, "charset", want) == 0) return null;
         if (a.FcConfigSubstitute(d.config, pat, match_pattern) == 0) return null;
         a.FcDefaultSubstitute(pat);

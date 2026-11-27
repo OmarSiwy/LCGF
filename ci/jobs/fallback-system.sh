@@ -14,3 +14,6 @@ echo "$found" | while read -r cp file index; do
     want=$(fc-match -s "sans-serif:charset=${cp#U+}" -f '%{fontformat}\t%{file}\n' | awk -F'\t' '$1 == "TrueType" && !n++ {print $2}')
     [ "$file" = "$want" ] || { echo "$cp: found $file, fc-match gives $want"; exit 1; }
 done
+# The window layer's text service (src/app/text.zig) with the system's default faces, and a
+# face found for each character of its sample they lack: every glyph drawn, none .notdef.
+zig build app-text-system

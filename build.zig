@@ -1624,17 +1624,39 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("app-example", "Build zig-out/bin/app-example: examples/app through lcgf_app (any desktop -Dtarget)").dependOn(&b.addInstallArtifact(app_example, .{}).step);
     // The window layer's text service (src/app/text.zig), headless: the repository's test font
-    // drawn through it and the software back end.
-    const app_text_tests = b.addTest(.{ .name = "app-text-test", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/app/text.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
-    }) });
-    app_text_tests.root_module.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
-    const app_text_run = b.addRunArtifact(app_text_tests);
-    test_step.dependOn(&app_text_run.step);
-    b.step("app-text", "Test the window layer's text service alone").dependOn(&app_text_run.step);
+    // drawn through it and the software back end. Built with libc too, for fallback-system:
+    // asking fontconfig for the system's faces needs libc's loader on Linux.
+    for ([_]bool{ false, true }) |libc| {
+        const font_system = b.createModule(.{
+            .root_source_file = b.path("src/text/fallback/system.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = libc,
+            .imports = &.{.{ .name = "lcgf", .module = lcgf }},
+        });
+        const text_mod = b.createModule(.{
+            .root_source_file = b.path("src/app/text.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = libc,
+            .imports = &.{
+                .{ .name = "lcgf", .module = lcgf },
+                .{ .name = "font_system", .module = font_system },
+            },
+        });
+        const test_font = b.path("src/text/layout/testdata/layout.ttf");
+        text_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = test_font });
+        const text_tests = b.addTest(.{ .name = "app-text-test", .root_module = text_mod });
+        const run = b.addRunArtifact(text_tests);
+        if (libc) {
+            run.has_side_effects = true; // the installed fonts
+            const step = b.step("app-text-system", "Draw text through the service from system fonts");
+            step.dependOn(&run.step);
+        } else {
+            test_step.dependOn(&run.step);
+            b.step("app-text", "Test the window layer's text service alone").dependOn(&run.step);
+        }
+    }
 
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.

@@ -34,9 +34,18 @@
 //!     pub fn init(buf: []align(64) u8, o: Options, files: []const File) InitError!Text
 //!     pub fn addFace(t: *Text, file: File) InitError!void
 //!     pub fn glyphs(t: *Text, d: *const DrawList, tx: *const Texts, scale: f32) Frame
+//!     pub fn addSystemDefaults(t: *Text, gpa: Allocator, io: Io, d: *Discovery) !void
+//!     pub fn cover(t: *Text, gpa: Allocator, io: Io, d: *Discovery, text: []const u8) !u32
+//!     pub fn deinit(t: *Text, gpa: Allocator) void
+//!   pub const Discovery = system.Discovery
+//!   pub const can_discover: bool
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lcgf = @import("lcgf");
+const system = @import("font_system");
+const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const mem = lcgf.mem;
 const opentype = lcgf.opentype;
 const shape = lcgf.shape;
@@ -101,6 +110,15 @@ pub const Frame = struct {
 
 pub const InitError = opentype.Error || error{TooManyFaces};
 
+/// The platform's font discovery (src/text/fallback/system.zig): fontconfig, DirectWrite or
+/// Core Text, opened at run time.
+pub const Discovery = system.Discovery;
+
+/// Whether this build can ask the OS for fonts. On Linux fontconfig is a C library opened
+/// with libc's dynamic loader, so a build without libc (lcgf_app's today) cannot: it draws
+/// with the application's files or the bundled bitmap font.
+pub const can_discover = builtin.os.tag != .linux or builtin.link_libc;
+
 pub const Text = struct {
     /// Shapes, measures and wraps every run whose font is a face here, in logical pixels: the
     /// stack `Frame.endText` takes.
@@ -134,6 +152,13 @@ pub const Text = struct {
     /// A run, glyph or frame did not fit a capacity of `Options` and was drawn short. Reset by
     /// the caller.
     overflow: bool = false,
+    /// Font files read from disk (`addSystemDefaults`, `cover`), freed by `deinit`.
+    loaded: [][]u8,
+    loaded_len: u32 = 0,
+    /// Characters no system face had, so `cover` does not ask again: a ring.
+    missing: []u21,
+    /// Characters remembered so far; the next goes to `missing_at % missing.len`.
+    missing_at: u32 = 0,
 
     /// Bytes of the buffer `init` carves for `o`.
     pub fn requiredBytes(o: Options) usize {
@@ -212,7 +237,92 @@ pub const Text = struct {
         };
     }
 
+    /// Adds the system's default faces as the next two fonts: the proportional face, then the
+    /// monospace one where the platform names it (fontconfig's "monospace"), else the
+    /// proportional face again, so a run in font 1 is still measured. Each file is read into
+    /// memory from `gpa`, once, and freed by `deinit`. Fails when no face is found
+    /// (`error.NoSystemFont`), a file cannot be read, or the faces do not fit `Options.faces`.
+    pub fn addSystemDefaults(t: *Text, gpa: Allocator, io: Io, d: *Discovery) !void {
+        comptime std.debug.assert(can_discover);
+        const before = t.face_len;
+        var path: [4096]u8 = undefined;
+        const sans = (try d.find('a', &path)) orelse return error.NoSystemFont;
+        const file = try t.load(gpa, io, sans);
+        const named = comptime @hasDecl(Discovery, "findFamily");
+        const mono = if (named) try d.findFamily('a', "monospace", &path) else null;
+        if (mono) |found| _ = try t.load(gpa, io, found) else try t.addFace(file);
+        std.debug.assert(t.face_len == before + 2);
+    }
+
+    /// Adds, for each character of `text` that no face has, the system face that draws it
+    /// (`Discovery.find`), so the next frame draws it instead of a box. A character the system
+    /// has no face for is remembered and not asked again. Returns the faces added. Reads each
+    /// new file from `gpa`, freed by `deinit`. Call it with a frame's strings before its
+    /// `endText`: ASCII costs a byte compare, other text a cmap lookup per face.
+    pub fn cover(t: *Text, gpa: Allocator, io: Io, d: *Discovery, text: []const u8) !u32 {
+        comptime std.debug.assert(can_discover);
+        const before = t.face_len;
+        var path: [4096]u8 = undefined;
+        var i: usize = 0;
+        while (i < text.len) {
+            if (text[i] < 0x80) {
+                i += 1;
+                continue;
+            }
+            const c = lcgf.unicode_utf8.decode(text, i);
+            i += c.len;
+            const asked = t.missing[0..@min(t.missing_at, t.missing.len)];
+            if (t.has(c.cp) or std.mem.indexOfScalar(u21, asked, c.cp) != null) continue;
+            const found = (try d.find(c.cp, &path)) orelse {
+                t.remember(c.cp);
+                continue;
+            };
+            if (t.face_len == t.faces.len) return error.TooManyFaces;
+            _ = try t.load(gpa, io, found);
+            // The face found may lack it after all (Core Text answers every character).
+            // ponytail: such a face is loaded anyway; compare paths first if it wastes faces.
+            if (!t.has(c.cp)) t.remember(c.cp);
+        }
+        std.debug.assert(t.face_len >= before);
+        return t.face_len - before;
+    }
+
+    /// Frees the files `addSystemDefaults` and `cover` read. The faces read from them are
+    /// invalid afterwards.
+    pub fn deinit(t: *Text, gpa: Allocator) void {
+        for (t.loaded[0..t.loaded_len]) |bytes| gpa.free(bytes);
+        t.loaded_len = 0;
+    }
+
     // ---- private ----
+
+    /// Whether some face has a glyph for `cp`.
+    fn has(t: *const Text, cp: u21) bool {
+        for (t.faces[0..t.face_len]) |f| if (f.cmap.glyph(cp) != 0) return true;
+        return false;
+    }
+
+    fn remember(t: *Text, cp: u21) void {
+        std.debug.assert(t.missing.len > 0);
+        t.missing[t.missing_at % t.missing.len] = cp;
+        t.missing_at +%= 1;
+    }
+
+    /// Reads the file of `found` and adds its face.
+    fn load(t: *Text, gpa: Allocator, io: Io, found: system.Found) !File {
+        std.debug.assert(t.loaded_len < t.loaded.len);
+        const bytes = try Io.Dir.cwd().readFileAlloc(io, found.path, gpa, .limited(256 << 20));
+        errdefer gpa.free(bytes);
+        const index = if (found.name.len > 0)
+            (try fallback.faceByName(bytes, found.name)) orelse return error.NoSuchFace
+        else
+            found.index;
+        const file: File = .{ .bytes = bytes, .index = index };
+        try t.addFace(file);
+        t.loaded[t.loaded_len] = bytes;
+        t.loaded_len += 1;
+        return file;
+    }
 
     /// What a glyph image that does not fit does: start the atlas again, or draw nothing.
     const WhenFull = enum { reset, drop };
@@ -435,6 +545,8 @@ fn carve(c: *mem.Carver, o: Options) Text {
         .quads = c.slice(Quad, o.quads),
         .first = c.slice(u32, o.texts),
         .count = c.slice(u32, o.texts),
+        .loaded = c.slice([]u8, o.faces),
+        .missing = c.slice(u21, 64),
     };
     if (atlas_pixels.len > 0) t.atlas = .init(o.atlas[0], o.atlas[1], atlas_pixels, sky);
     return t;
@@ -692,4 +804,42 @@ test "no files: the stack serves no run" {
     };
     var buf2: [Text.requiredBytes(small)]u8 align(mem.column_align) = undefined;
     try testing.expectError(error.TooManyFaces, Text.init(&buf2, small, &three));
+}
+
+test "the system's default faces and a face for each character they lack draw text" {
+    // Runs where the build links libc (zig build fallback-system), with the machine's fonts.
+    if (!can_discover) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var ctx_buf: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var ctx = try Context.init(&ctx_buf, limits);
+    var buf: [Text.requiredBytes(test_options)]u8 align(mem.column_align) = undefined;
+    var t = try Text.init(&buf, test_options, &.{});
+    defer t.deinit(gpa);
+    var d = try Discovery.init();
+    defer d.deinit();
+    try t.addSystemDefaults(gpa, testing.io, &d);
+    try testing.expectEqual(2, t.face_len);
+    const sample = paragraph ++ " Բարեւ αβγ";
+    _ = try t.cover(gpa, testing.io, &d, sample);
+    // Each character now has a face, and asking again adds none.
+    var it = (try std.unicode.Utf8View.init(sample)).iterator();
+    while (it.nextCodepoint()) |cp| try testing.expect(cp < 0x80 or t.has(cp));
+    try testing.expectEqual(0, try t.cover(gpa, testing.io, &d, sample));
+    // Laid out and drawn, in the proportional face and the monospace one: no .notdef.
+    const in: lcgf.input.Input = .{ .viewport = view };
+    var f = ctx.begin(&in);
+    _ = f.open(.from("page"), .{ .size = .{ .px(view[0]), .px(view[1]) } });
+    _ = f.text(sample, .{ .px = 15, .wrap = true });
+    _ = f.text("mono: \u{221e}", .{ .px = 15, .font = @fromBackingInt(1) });
+    f.close();
+    const out = f.endText(&t.stack, t.ascent);
+    const frame = t.glyphs(out.draw, out.texts, 1.5);
+    try testing.expect(!t.overflow);
+    try testing.expect(frame.glyphs.quads.len > 60);
+    const bytes = out.draw.strings;
+    const strings: Strings = .{ .buf = @constCast(bytes), .len = @intCast(bytes.len) };
+    for (0..out.draw.run_len) |k| {
+        try t.stack.paragraph(out.texts, &strings, k);
+        for (t.stack.g.glyph[0..t.stack.g.len]) |g| try testing.expect(g != 0);
+    }
 }
