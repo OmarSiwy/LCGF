@@ -5336,6 +5336,7 @@ Dock (tier 2): a docking layout of up to five panes, a left, top, bottom and rig
 - `fn cycle(panes: Panes, from: ?Pane, step: i8) Pane`: The pane that focus moves to from `from` (or from no pane, `null`) by `step` (+1 F6, -1 Shift+F6), wrapping and skipping the panes `panes` lacks.
 - `fn open(f: *Frame, th: *const Theme, id: Id, st: *State, panes: Panes) Dock`: Opens dock `id` with the side panes `panes`, sized by `st`; F6 and Shift+F6 in this frame's events move focus first.
 - `fn openFace(f: *Frame, th: *const Theme, id: Id, st: *State, panes: Panes, face: Style) Dock`: `open` with the dock laid out by `face` instead of `rootStyle(th)`.
+- `fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime field: []const u8, comptime panes: Panes, comptime specs: [5]Spec, comptime firsts: [4]…`: The custom widget (`Spec.widget`) of `ct.dock`: its `step` moves the splits and F6 focus as `open` and the splitters do at run time; its `push` builds the rows they build, with the same ids.
 
 ### `State` (struct)
 The sizes, as the four splitters' fractions (`splitter.open`'s `split`), in the caller's memory, one per dock id.
@@ -5350,6 +5351,17 @@ Fields: `th`, `id`, `st`, `panes`, `next`, `in_pane`
 
 - `fn pane(d: *Dock, f: *Frame, p: Pane) void`: Ends the pane being built, if any, and opens pane `p`, which must exist and come after it; build its children next.
 - `fn close(d: *Dock, f: *Frame) void`: Ends the last pane and the dock.
+
+### `ct` (struct)
+
+- `fn dock(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime panes: Panes, comptime children: anytype) Spec`: Dock `name` with the side panes `panes`, sized by the `State` field `field`; `children` holds one tuple of spec nodes per pane that exists, in `Pane` order (left, top, centre, bottom, right).
+
+### `Comptime(..)` (generic struct)
+The custom widget (`Spec.widget`) of `ct.dock`: its `step` moves the splits and F6 focus as `open` and the splitters do at run time; its `push` builds the rows they build, with the same ids.
+
+- `fn bindError(comptime S: type, comptime bound: []const u8) ?[]const u8`
+- `fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void`
+- `fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`
 
 ## `lcgf.widgets_scroll` (src/widgets/scroll.zig)
 

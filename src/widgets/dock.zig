@@ -179,9 +179,208 @@ pub const Dock = struct {
     }
 };
 
+// ---- comptime front end in base.ComptimeUi ----------------------------------------------------
+
+const spec_zig = @import("../comptime/spec.zig");
+const Spec = spec_zig.Spec;
+const flatten = @import("../comptime/flatten.zig");
+const Axis = types.Axis;
+
+/// The splitters by position: left, right, top, bottom; their axes and handle names' suffixes.
+const split_axes = [4]Axis{ .x, .x, .y, .y };
+const split_names = [4][:0]const u8{ "_split_left", "_split_right", "_split_top", "_split_bottom" };
+
+/// Whether the splitter at position `k` exists in `panes`.
+fn splitOn(panes: Panes, k: usize) bool {
+    return ([4]bool{ panes.left, panes.right, panes.top, panes.bottom })[k];
+}
+
+pub const ct = struct {
+    /// Dock `name` with the side panes `panes`, sized by the `State` field `field`; `children`
+    /// holds one tuple of spec nodes per pane that exists, in `Pane` order (left, top, centre,
+    /// bottom, right). `spec.styled` restyles it as `openFace` does. Its runtime twin is
+    /// `open`, `pane` for each pane, `close`.
+    pub fn dock(comptime th: Theme, comptime name: @EnumLiteral(), comptime field: @EnumLiteral(), comptime panes: Panes, comptime children: anytype) Spec {
+        const id = @tagName(name);
+        var specs: [5]Spec = @splat(.{ .kind = .col });
+        var k: usize = 0;
+        for (0..5) |q| if (has(panes, @fromBackingInt(@intCast(q)))) {
+            specs[q] = spec_zig.col(paneStyle(&th), children[k]);
+            specs[q].id = id ++ "_" ++ @tagName(@as(Pane, @fromBackingInt(@intCast(q))));
+            specs[q].widget = base.FocusStop;
+            k += 1;
+        };
+        if (k != children.len) @compileError("dock '" ++ id ++ "': one tuple of children per pane");
+        var firsts: [4]u32 = @splat(0);
+        var inner = specs[@backingInt(Pane.centre)];
+        if (panes.bottom) {
+            firsts[3] = flatten.count(inner);
+            inner = split(th, .y, id ++ split_names[3], inner, specs[@backingInt(Pane.bottom)]);
+        }
+        if (panes.top) {
+            firsts[2] = flatten.count(specs[@backingInt(Pane.top)]);
+            inner = split(th, .y, id ++ split_names[2], specs[@backingInt(Pane.top)], inner);
+        }
+        if (panes.right) {
+            firsts[1] = flatten.count(inner);
+            inner = split(th, .x, id ++ split_names[1], inner, specs[@backingInt(Pane.right)]);
+        }
+        if (panes.left) {
+            firsts[0] = flatten.count(specs[@backingInt(Pane.left)]);
+            inner = split(th, .x, id ++ split_names[0], specs[@backingInt(Pane.left)], inner);
+        }
+        var s = spec_zig.col(rootStyle(&th), .{inner});
+        s.id = id;
+        s.bind = @tagName(field);
+        s.widget = Comptime(th, id, @tagName(field), panes, specs, firsts);
+        return s;
+    }
+
+    /// A splitter's rows as `splitter.open` and `splitter.handle` build them: the container,
+    /// the first pane holding `first`, the second holding the handle (named `handle`) and the
+    /// body holding `second`.
+    fn split(comptime th: Theme, comptime axis: Axis, comptime handle: [:0]const u8, comptime first: Spec, comptime second: Spec) Spec {
+        const hd: Spec = .{ .kind = .col, .id = handle, .style = splitter.handleStyle(&th, axis), .widget = base.FocusStop };
+        return .{ .kind = .col, .style = splitter.containerStyle(&th, axis), .children = &.{
+            spec_zig.col(splitter.firstStyle(&th, axis, 0), .{first}),
+            .{ .kind = .col, .style = splitter.secondStyle(&th, axis, 0), .children = &.{ hd, spec_zig.col(splitter.bodyStyle(&th), .{second}) } },
+        } };
+    }
+};
+
+/// The custom widget (`Spec.widget`) of `ct.dock`: its `step` moves the splits and F6 focus as
+/// `open` and the splitters do at run time; its `push` builds the rows they build, with the
+/// same ids. `panes` are the pane specs by `Pane` and `firsts` the rows of each splitter's
+/// first pane's content, to find each container's row from its handle's.
+pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime field: []const u8, comptime panes: Panes, comptime specs: [5]Spec, comptime firsts: [4]u32) type {
+    return struct {
+        pub fn bindError(comptime S: type, comptime bound: []const u8) ?[]const u8 {
+            return base.fieldError(S, "dock '" ++ name ++ "'", bound, State);
+        }
+
+        fn rowOf(comptime U: type, comptime id: []const u8) u32 {
+            return @backingInt(@field(U.Events.Widget, id));
+        }
+
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            _ = row;
+            const U = @TypeOf(ui.*);
+            var st: State = @field(ui.signals.state, field);
+            inline for (0..4) |k| if (comptime splitOn(panes, k)) {
+                const hd = comptime rowOf(U, name ++ split_names[k]);
+                const r = base.ctResponse(ui, hd, event, in);
+                // Container, first pane, its content, second pane, handle.
+                const box = ui.lastRect(hd - 3 - firsts[k]);
+                st.splits[k] = splitter.resize(st.splits[k], r.held, splitter.along(box, split_axes[k], in.pointer), r.focused, in);
+            };
+            ui.signals.set(comptime U.field(field), st);
+            // F6 after the handles, which answer for the focus the frame started with.
+            var at: ?Pane = null;
+            if (ui.focus) |w| inline for (0..5) |q| if (comptime has(panes, @fromBackingInt(@intCast(q)))) {
+                const lo = comptime rowOf(U, specs[q].id.?);
+                if (@backingInt(w) >= lo and @backingInt(w) < lo + comptime flatten.count(specs[q])) at = @fromBackingInt(@intCast(q));
+            };
+            var moved = false;
+            for (in.events) |e| if (e.kind == .press and e.code == f6) {
+                at = cycle(panes, at, if (e.mods.shift) -1 else 1);
+                moved = true;
+            };
+            if (moved) inline for (0..5) |q| if (comptime has(panes, @fromBackingInt(@intCast(q)))) {
+                if (at.? == @as(Pane, @fromBackingInt(@intCast(q)))) ui.focus = @field(U.Events.Widget, specs[q].id.?);
+            };
+        }
+
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            const t = &ui.tables.t;
+            const st: State = @field(ui.signals.state, field);
+            const id = Id.hash(name);
+            var stack: [16]u32 = undefined;
+            var top: u32 = 1;
+            stack[0] = t.push(parent, id, &n.style);
+            next.* += 1;
+            const S = struct {
+                fn open(tt: anytype, stk: *[16]u32, tp: *u32, nx: *u32, node: Id, s: Style) void {
+                    stk[tp.*] = tt.push(stk[tp.* - 1], node, &s);
+                    tp.* += 1;
+                    nx.* += 1;
+                }
+                fn close(tt: anytype, stk: *[16]u32, tp: *u32) void {
+                    tp.* -= 1;
+                    tt.seal(stk[tp.*]);
+                }
+            };
+            const splits = struct {
+                fn open(u: anytype, stk: *[16]u32, tp: *u32, nx: *u32, base_id: Id, comptime k: usize, split: f32) void {
+                    const tt = &u.tables.t;
+                    S.open(tt, stk, tp, nx, base_id.with(k + 1), splitter.containerStyle(&th, split_axes[k]));
+                    S.open(tt, stk, tp, nx, .none, splitter.firstStyle(&th, split_axes[k], split));
+                }
+                fn handle(u: anytype, stk: *[16]u32, tp: *u32, nx: *u32, base_id: Id, comptime k: usize, split: f32, inp: *const Input) void {
+                    const tt = &u.tables.t;
+                    const axis = split_axes[k];
+                    S.close(tt, stk, tp);
+                    S.open(tt, stk, tp, nx, .none, splitter.secondStyle(&th, axis, split));
+                    const r = u.response(nx.*, inp);
+                    var hs = splitter.handleStyle(&th, axis);
+                    hs.fill = splitter.handleFill(&th, r);
+                    hs.value = split;
+                    const hd = tt.push(stk[tp.* - 1], base_id.with(k + 1).with(1), &hs);
+                    tt.c.role[hd] = splitter.role;
+                    nx.* += 1;
+                    u.setCursor(splitter.cursors[@backingInt(axis)], r.hovered or r.held);
+                    S.open(tt, stk, tp, nx, .none, splitter.bodyStyle(&th));
+                }
+                fn close(tt: anytype, stk: *[16]u32, tp: *u32) void {
+                    S.close(tt, stk, tp);
+                    S.close(tt, stk, tp);
+                    S.close(tt, stk, tp);
+                }
+            };
+            const L = panes.left;
+            const T = panes.top;
+            const B = panes.bottom;
+            const R = panes.right;
+            const sp = st.splits;
+            inline for (0..6) |step_k| {
+                switch (step_k) {
+                    0 => if (L) splits.open(ui, &stack, &top, next, id, 0, sp[0]),
+                    1 => {
+                        if (L) splits.handle(ui, &stack, &top, next, id, 0, sp[0], in);
+                        if (R) splits.open(ui, &stack, &top, next, id, 1, sp[1]);
+                        if (T) splits.open(ui, &stack, &top, next, id, 2, sp[2]);
+                    },
+                    2 => {
+                        if (T) splits.handle(ui, &stack, &top, next, id, 2, sp[2], in);
+                        if (B) splits.open(ui, &stack, &top, next, id, 3, sp[3]);
+                    },
+                    3 => if (B) splits.handle(ui, &stack, &top, next, id, 3, sp[3], in),
+                    4 => {
+                        if (B) splits.close(t, &stack, &top);
+                        if (T) splits.close(t, &stack, &top);
+                        if (R) splits.handle(ui, &stack, &top, next, id, 1, sp[1], in);
+                    },
+                    else => {
+                        if (R) splits.close(t, &stack, &top);
+                        if (L) splits.close(t, &stack, &top);
+                    },
+                }
+                // Pane `step_k` comes after the step that opens its place.
+                if (step_k < 5 and comptime has(panes, @fromBackingInt(@intCast(step_k)))) {
+                    const pn = specs[step_k];
+                    S.open(t, &stack, &top, next, paneId(id, @fromBackingInt(@intCast(step_k))), pn.style);
+                    inline for (pn.children) |c| ui.push(c, stack[top - 1], next, in);
+                    S.close(t, &stack, &top);
+                }
+            }
+            S.close(t, &stack, &top);
+        }
+    };
+}
+
 // ---- tests ----------------------------------------------------------------------------------
 
 const testing = std.testing;
+const keys_zig = @import("keys.zig");
 const context = @import("../runtime/context.zig");
 const mem = @import("../core/mem.zig");
 
@@ -281,6 +480,77 @@ test "dock: F6 and Shift+F6 move focus between the panes that exist" {
     }
     try testing.expectEqual(Pane.bottom, cycle(.{}, .centre, 1));
     try testing.expectEqual(Pane.right, cycle(.{}, null, -1));
+}
+
+/// The dock restyled as a page does from data: `openFace` against `spec.styled` on `ct.dock`,
+/// with a pane missing, over a drag of each handle, F6 and the arrows on a handle.
+const restyled = struct {
+    const th: Theme = .default;
+    const face: Style = .{ .size = .{ .fill, .fill }, .fill = .rgb(20, 40, 60), .pad = @splat(4) };
+    const panes: Panes = .{ .top = false };
+    const App = struct {
+        dock: State = .{},
+        on: bool = false,
+        pub fn build(app: *App, f: *Frame) void {
+            var d = openFace(f, &th, .from("main"), &app.dock, panes, face);
+            d.pane(f, .left);
+            _ = base.label(f, &th, "Files");
+            d.pane(f, .centre);
+            _ = base.checkbox(f, &th, .from("on"), &app.on, "On");
+            d.pane(f, .bottom);
+            _ = base.label(f, &th, "Log");
+            d.pane(f, .right);
+            _ = base.label(f, &th, "Props");
+            d.close(f);
+        }
+    };
+    const PageState = struct { dock: State = .{}, on: bool = false, on_text: []const u8 = "On" };
+    const spec = spec_zig.styled(ct.dock(th, .main, .dock, panes, .{
+        .{base.ct.label(th, "Files")},
+        .{base.ct.checkbox(th, .on, .on, .on_text)},
+        .{base.ct.label(th, "Log")},
+        .{base.ct.label(th, "Props")},
+    }), face);
+    var h: base.Harness(App, base.ComptimeUi(PageState, spec, th), test_limits) = .{};
+};
+
+test "ct.dock restyled: the same frames as openFace, drags, F6 and keys" {
+    const h = &restyled.h;
+    h.init();
+    var in: Input = .{ .viewport = .{ 400, 300 } };
+    _ = try h.frame(&in);
+    const id: Id = .from("main");
+    // Drag each handle 20 px along its axis.
+    inline for (.{ 1, 2, 4 }, .{ .x, .x, .y }) |k, axis| {
+        const t = &h.ctx.trees[h.ctx.cur];
+        const r = t.rect(t.find(id.with(k).with(1)));
+        in.pointer = .{ (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2 };
+        const d: [2]f32 = if (axis == .x) .{ 20, 0 } else .{ 0, 20 };
+        for ([_]f32{ 0, 0, 1, 1 }, [_]bool{ false, true, true, false }) |m, down| {
+            in.pointer[0] += d[0] * m * 0.5;
+            in.pointer[1] += d[1] * m * 0.5;
+            in.buttons.left = down;
+            _ = try h.frame(&in);
+        }
+    }
+    try testing.expect(h.app.dock.splits[0] > 0.2 and h.app.dock.splits[1] > 0.75 and h.app.dock.splits[3] > 0.75);
+    // Down on the bottom handle, focused by its drag, moves it; then F6 three times from
+    // outside the panes (left, centre, bottom) and Shift+F6 once (centre).
+    const split = h.app.dock.splits[3];
+    const down = [1]Input.Event{.{ .kind = .press, .code = keys_zig.map.down }};
+    in.events = &down;
+    _ = try h.frame(&in);
+    try testing.expectApproxEqAbs(split + 0.05, h.app.dock.splits[3], 1e-6);
+    for ([_]bool{ false, false, false, true }) |shift| {
+        const ev = [1]Input.Event{.{ .kind = .press, .code = f6, .mods = .{ .shift = shift } }};
+        in.events = &ev;
+        _ = try h.frame(&in);
+    }
+    in.events = &.{};
+    _ = try h.frame(&in);
+    try testing.expectEqual(@backingInt(paneId(id, .centre)), h.ctx.inter.focus);
+    try testing.expectEqual(@TypeOf(h.ui).Events.Widget.main_centre, h.ui.focus.?);
+    try testing.expectEqual(h.app.dock, h.ui.signals.state.dock);
 }
 
 test "openFace: the theme's style draws as open" {
