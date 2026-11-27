@@ -116,7 +116,7 @@
   },
   "p_finalize": {
     "back": 2,
-    "jcc": 5,
+    "jcc": 4,
     "short_fwd": 0
   },
   "p_fit": {

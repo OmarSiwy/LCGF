@@ -463,8 +463,19 @@ fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.M
     for (first..last) |i| {
         c.sense[i] &= 0 -% @as(u8, @intFromBool(t.x.row[c.scope[i]].active_participation.hit));
         const local: [4]f32 = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] };
-        const world = if (comptime transformed) geometry.worldAt(t, i) else geometry.identity;
-        const screen: [4]f32 = if (comptime transformed) geometry.transformRect(local, world) else local;
+        const inset = geometry.expand(local, @splat(-xrow[extra[i]].border));
+        // One identity test for both rects (nearly every row: well predicted), where each
+        // `transformRect` made its own. Size builds keep the two calls.
+        var screen = local;
+        var inner_rect = inset;
+        if (comptime transformed) {
+            const world = geometry.worldAt(t, i);
+            if (!inline_passes or !geometry.isIdentity(world)) {
+                @branchHint(.unlikely);
+                screen = geometry.transformRect(local, world);
+                inner_rect = geometry.transformRect(inset, world);
+            }
+        }
         const r = @as(V4, screen) * sign;
         // child_clip[i] feeds the next row whose parent is i, so the path from this load to
         // that store is the pass's latency chain: keep it to one max. The clip-or-not select
@@ -474,8 +485,6 @@ fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.M
         // Children are clipped to the area inside the border. In the
         // (min, -max) form, insetting all four edges is one add.
         const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
-        const inset = geometry.expand(local, @splat(-xrow[extra[i]].border));
-        const inner_rect: [4]f32 = if (comptime transformed) geometry.transformRect(inset, world) else inset;
         const inner = @select(f32, clips, @as(V4, inner_rect) * sign, everything);
         child_clip[i] = simd.maxF(inherited, inner);
         const out = v * sign;
