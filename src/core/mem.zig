@@ -51,16 +51,21 @@ pub const Carver = struct {
     /// it advances `off` and returns an empty slice.
     pub fn slice(c: *Carver, comptime T: type, n: usize) []T {
         comptime std.debug.assert(@alignOf(T) <= column_align);
+        const p: [*]T = @ptrCast(c.bytes(n * @sizeOf(T)) orelse return &.{});
+        return p[0..n];
+    }
+
+    /// `slice` for any element type: the next `size` bytes, or null when counting. One copy,
+    /// out of line, where every column of every table used to inline its own (a context carves
+    /// about 230 columns once; nothing carves per frame).
+    noinline fn bytes(c: *Carver, size: usize) ?[*]align(column_align) u8 {
         std.debug.assert(c.off % column_align == 0);
-        const bytes = std.mem.alignForward(usize, n * @sizeOf(T), column_align);
         const start = c.off;
-        c.off += bytes;
-        const b = c.buf orelse return &.{};
+        c.off += std.mem.alignForward(usize, size, column_align);
+        const b = c.buf orelse return null;
         std.debug.assert(c.off <= b.len);
         if (!c.zeroed) @memset(b[start..c.off], 0);
-        std.debug.assert(@intFromPtr(b.ptr + start) % column_align == 0);
-        const p: [*]T = @ptrCast(@alignCast(b.ptr + start));
-        return p[0..n];
+        return @alignCast(b.ptr + start);
     }
 
     /// Fills a struct whose fields are `[]T` or `[k][]T` with zeroed columns of `n` rows each,
