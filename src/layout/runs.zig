@@ -152,10 +152,178 @@ pub fn place(t: *Tree) void {
     }
 }
 
+/// The columns `fit` reads and writes for each row on one axis, as locals.
+const FitCols = struct {
+    parent: []const u32,
+    fit: []f32,
+    nat: []f32,
+    main: []const f32,
+    gap_total: []const f32,
+    lo: []const f32,
+    hi: []const f32,
+    min: []const f32,
+    max: []const f32,
+    flow: []const f32,
+    grow: []const f32,
+    grow_sum: []f32,
+
+    inline fn of(c: *const Tree.Columns, a: usize) FitCols {
+        return .{
+            .parent = c.parent,
+            .fit = c.fit[a],
+            .nat = c.nat[a],
+            .main = c.main[a],
+            .gap_total = c.gap_total,
+            .lo = c.pad_lo[a],
+            .hi = c.pad_hi[a],
+            .min = c.min[a],
+            .max = c.max[a],
+            .flow = c.flow,
+            .grow = c.grow[a],
+            .grow_sum = c.grow_sum[a],
+        };
+    }
+};
+
+/// What a run folds into its parent: the parent's `fit`, a sum along its main axis or a max
+/// across it, and its `grow_sum`.
+const Fold = struct { fit: f32, grow: f32 };
+
+/// Natural sizes of rows [i, i + L), stored, and each folded into `into`, their parent's sums,
+/// last row first as `layout.fit` folds them. `stacked` is whether the parent stacks its
+/// children along this axis.
+inline fn fitRows(comptime L: comptime_int, k: FitCols, i: usize, stacked: bool, into: Fold) Fold {
+    std.debug.assert(i + L <= k.fit.len);
+    // All descendants have larger rows, so `fit` of these rows is complete here.
+    const content = load(L, k.fit, i) + load(L, k.main, i) * load(L, k.gap_total, i);
+    var nat = content + load(L, k.lo, i) + load(L, k.hi, i);
+    nat = simd.minF(simd.maxF(nat, load(L, k.min, i)), load(L, k.max, i));
+    store(L, k.nat, i, nat);
+    const fl = load(L, k.flow, i);
+    const contrib: [L]f32 = if (L == 1) .{nat * fl} else nat * fl;
+    const grown: [L]f32 = if (L == 1) .{load(L, k.grow, i) * fl} else load(L, k.grow, i) * fl;
+    return fold(L, stacked, contrib, grown, into);
+}
+
+/// `into` with what each of `L` rows gives its parent folded in, last row first: `contrib` by
+/// a sum along the parent's main axis or a max across it, `grown` by a sum.
+inline fn fold(
+    comptime L: comptime_int,
+    stacked: bool,
+    contrib: [L]f32,
+    grown: [L]f32,
+    into: Fold,
+) Fold {
+    comptime std.debug.assert(L >= 1);
+    var f = into;
+    if (L == 1) {
+        // One row: sum and max side by side, then a select, as the row-by-row pass has it.
+        const sum = f.fit + contrib[0];
+        const mx = simd.selF(f.fit < contrib[0], contrib[0], f.fit);
+        return .{ .fit = simd.selF(stacked, sum, mx), .grow = f.grow + grown[0] };
+    }
+    // A vector of rows: the same sum or max, one row after another in a register. Which of
+    // the two is the parent's, so it is one jump for the vector and none for the rows.
+    if (stacked) {
+        inline for (0..L) |r| f.fit += contrib[L - 1 - r];
+    } else {
+        inline for (0..L) |r| {
+            const given = contrib[L - 1 - r];
+            f.fit = simd.selF(f.fit < given, given, f.fit);
+        }
+    }
+    inline for (0..L) |r| f.grow += grown[L - 1 - r];
+    return f;
+}
+
+/// A row and its parent's sums after it: where the fold over a run has got to.
+const Folded = struct { row: usize, into: Fold };
+
+/// The whole vectors of a run, downwards from `from`. Out of line, with its own copy of the
+/// columns, so a short run pays for none of it.
+noinline fn fitWide(
+    c: *const Tree.Columns,
+    a: usize,
+    first: usize,
+    from: usize,
+    p: u32,
+    into: Fold,
+) Folded {
+    std.debug.assert(from > first + W);
+    const k: FitCols = .of(c, a);
+    const stacked = k.main[p] != 0;
+    var i = from;
+    var f = into;
+    // Ends at the run's first row, or at the span's: `i` goes down by a vector a turn.
+    while (i > first + W and @reduce(.And, simd.loadU(k.parent, i - W) == simd.u(p))) {
+        i -= W;
+        f = fitRows(W, k, i, stacked, f);
+    }
+    return .{ .row = i, .into = f };
+}
+
+/// `layout.fit`'s fold over the rows after `first` up to `last`, last row first: each row's
+/// natural size on axis `a`, summed or maxed into its parent, a run of siblings at a time. Row
+/// `first` itself and the reciprocals are the caller's, as in `layout.fit`.
+pub fn fit(t: *Tree, a: usize, first: usize, last: usize) void {
+    std.debug.assert(first < last);
+    std.debug.assert(last <= t.len);
+    const k: FitCols = .of(&t.c, a);
+    const parent = k.parent;
+    var i: usize = last;
+    // Ends when every row after `first` is folded: each turn folds at least row `i - 1`.
+    while (i > first + 1) {
+        const p = parent[i - 1];
+        var into: Fold = .{ .fit = k.fit[p], .grow = k.grow_sum[p] };
+        const wide = W > 1 and i > first + W and parent[i - W] == p and parent[i - 2] == p;
+        if (wide) {
+            const at = fitWide(&t.c, a, first, i, p, into);
+            i = at.row;
+            into = at.into;
+        }
+        const stacked = k.main[p] != 0;
+        while (i > first + 1 and parent[i - 1] == p) {
+            i -= 1;
+            into = fitRows(1, k, i, stacked, into);
+        }
+        k.fit[p] = into.fit;
+        k.grow_sum[p] = into.grow;
+    }
+}
+
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
 const layout = @import("layout.zig");
 const check = @import("check.zig");
+
+test "fit: the row-by-row fold's sizes and sums, bit for bit, on random trees with runs" {
+    var raw: [1024 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 1000);
+    var prng: std.Random.DefaultPrng = .init(0xf17);
+    var want: [3][1000]f32 = undefined;
+    for (0..200) |_| {
+        check.randomRuns(&t, prng.random(), 1 + prng.random().uintLessThan(u32, t.cap));
+        const n = t.len;
+        for (0..2) |a| {
+            // Reference: row by row.
+            layout.prepare(&t);
+            check.fitRef(&t, a, 0, n);
+            const cols = [3][]f32{ t.c.fit[a], t.c.nat[a], t.c.grow_sum[a] };
+            for (cols, 0..) |col, k| @memcpy(want[k][0..n], col[0..n]);
+            // Run by run, from the same inputs.
+            layout.prepare(&t);
+            @memset(t.c.nat[a], std.math.nan(f32));
+            fit(&t, a, 0, n);
+            for (cols, 0..) |col, k| {
+                // Row 0's natural size is the caller's to set.
+                const from: usize = if (k == 1) 1 else 0;
+                const got: []const u32 = @ptrCast(col[from..n]);
+                try testing.expectEqualSlices(u32, @ptrCast(want[k][from..n]), got);
+            }
+        }
+    }
+}
 
 test "place: layout.place's positions and cursors, bit for bit, on random trees with runs" {
     var raw: [1024 * 1024]u8 align(mem.column_align) = undefined;

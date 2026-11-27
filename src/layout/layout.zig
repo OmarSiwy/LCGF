@@ -143,7 +143,11 @@ inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32, comp
     const grow = t.c.grow[a];
     const grow_sum = t.c.grow_sum[a];
 
-    var i: u32 = last;
+    // No flex rules, and a tree whose rows are slices: the fold takes a run of siblings at a
+    // time (runs.zig), the same sums in the same order.
+    const by_runs = comptime !flexed and @TypeOf(t) == *Tree and inline_passes;
+    if (by_runs) runs.fit(t, a, first, last);
+    var i: u32 = if (by_runs) first + 1 else last;
     while (i > first + 1) {
         i -= 1;
         // All descendants have larger rows, so fit_[i] is complete here.

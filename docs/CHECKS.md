@@ -119,6 +119,16 @@ jump those merges added was removed). Each remaining jump was read in the disass
   polls) with both passes by runs, springs (rows of 25 bars) took 491,116 instead of 586,856
   instructions a frame and resize 137,663 instead of 156,938; list and form, whose runs are
   one to three rows, took 103,222 instead of 102,036 and 51,009 instead of 49,061.
+- `p_fit` jcc 4 -> 5, `p_grid_fit` 14 -> 15, and the new `p_runs_fit` (jcc 11, back 2,
+  short_fwd 2): `fit`'s fold by runs, the same trade. The pass calls `runs.fit`, one jump
+  more in each caller. Of the two short forward jumps, one picks the copy of the row loop for
+  a parent that stacks its children along the axis (a sum) or across it (a max), once per run:
+  the optimizer hoisted the row-by-row pass's select out of the loop, which leaves 16
+  instructions a row. The other is that loop's exit. Neither is a select on a row's value.
+  With fit by runs as well, springs took 464,791 instead of 491,116 instructions a frame and
+  resize 131,846 instead of 137,663; list 105,779 instead of 103,222 and form 52,807 instead
+  of 51,009. Frame time on those two did not move: 9.8 and 9.8 us for list, 15.3 and 15.4 us
+  for a built frame of form (pinned core, nine interleaved rounds).
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.

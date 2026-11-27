@@ -29,8 +29,12 @@ export fn p_place(t: *Tree) void {
 export fn p_finalize(t: *Tree) void {
     lcgf.layout.finalize(t);
 }
+// Inlined, so the count is the run loop's and not a call's.
 export fn p_runs_place(t: *Tree) void {
-    lcgf.runs.place(t);
+    @call(.always_inline, lcgf.runs.place, .{t});
+}
+export fn p_runs_fit(t: *Tree) void {
+    @call(.always_inline, lcgf.runs.fit, .{ t, 0, 0, t.len });
 }
 export fn p_coefs(t: *const Tree, k: *lcgf.coefs.Coefs) void {
     lcgf.coefs.coefs(t, k, .x);

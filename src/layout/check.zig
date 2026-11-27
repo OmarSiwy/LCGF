@@ -75,6 +75,30 @@ pub fn randomRuns(t: *Tree, r: std.Random, n: u32) void {
     }
 }
 
+/// `layout.fit`'s fold as it was row by row, kept as the reference for `runs.fit`: rows after
+/// `first` up to `last`, last row first, each into its parent's `fit` and `grow_sum` on axis
+/// `a`.
+pub fn fitRef(t: *Tree, a: usize, first: u32, last: u32) void {
+    std.debug.assert(first < last);
+    std.debug.assert(last <= t.len);
+    const c = &t.c;
+    var i: u32 = last;
+    while (i > first + 1) {
+        i -= 1;
+        const content = c.fit[a][i] + c.main[a][i] * c.gap_total[i];
+        var nat = content + c.pad_lo[a][i] + c.pad_hi[a][i];
+        nat = simd.minF(simd.maxF(nat, c.min[a][i]), c.max[a][i]);
+        c.nat[a][i] = nat;
+        const p = c.parent[i];
+        const contrib = nat * c.flow[i];
+        const fp = c.fit[a][p];
+        const sum = fp + contrib;
+        const mx = simd.selF(fp < contrib, contrib, fp);
+        c.fit[a][p] = simd.selF(c.main[a][p] != 0, sum, mx);
+        c.grow_sum[a][p] += c.grow[a][i] * c.flow[i];
+    }
+}
+
 fn randomStyle(r: std.Random) types.Style {
     var s: types.Style = .{};
     s.dir = if (r.boolean()) .x else .y;
