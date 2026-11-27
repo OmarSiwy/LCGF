@@ -8,7 +8,8 @@
 //!   present  FIFO, the one mode every implementation has; it waits for vblank, so a frame
 //!            loop that blocks in present does no extra work.
 //!   images   minImageCount + 1, at most `max_images`, at most maxImageCount.
-//!   usage    colour attachment, plus transfer source when offered (screenshots, tests).
+//!   usage    colour attachment, plus transfer source and destination when offered
+//!            (screenshots and tests read it; `setup.Window` copies its picture into it).
 //!
 //! For tests and headless hosts, `headlessSurface` makes a VK_EXT_headless_surface surface.
 
@@ -64,7 +65,7 @@ pub const Swapchain = struct {
         if (extent.width == 0 or extent.height == 0 or want.width == 0 or want.height == 0) return error.ZeroExtent;
         var count = @min(caps.minImageCount + 1, max_images);
         if (caps.maxImageCount != 0) count = @min(count, caps.maxImageCount);
-        const usage: c.VkImageUsageFlags = @as(c.VkImageUsageFlags, c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) | (caps.supportedUsageFlags & c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        const usage: c.VkImageUsageFlags = @as(c.VkImageUsageFlags, c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) | (caps.supportedUsageFlags & (c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT));
         const opaque_alpha: c.VkCompositeAlphaFlagBitsKHR = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         const alpha: c.VkCompositeAlphaFlagBitsKHR = if (caps.supportedCompositeAlpha & opaque_alpha != 0)
             opaque_alpha

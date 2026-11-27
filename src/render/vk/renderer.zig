@@ -128,6 +128,10 @@ pub fn RendererOf(comptime canvases: bool) type {
         base: u64 = 0,
         /// Physical pixels: viewport * scale from the last `prepare`.
         extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
+        /// The scissor every quad and text draw sets: the whole `extent` after `prepare`. A
+        /// host that draws only part of its target again (`setup.Window.present`, one damage
+        /// rect at a time) narrows it between `prepare` and the draws.
+        scissor: c.VkRect2D = std.mem.zeroes(c.VkRect2D),
         scale: f32 = 1,
         glyphs: Glyphs = .{},
         /// Set 0 points at the ring's globals; each draw picks the slot with a dynamic offset. Set
@@ -306,7 +310,7 @@ pub fn RendererOf(comptime canvases: bool) type {
             const offset: c.VkDeviceSize = r.base + at;
             d.fns.vkCmdBindVertexBuffers.?(cmd, 0, 1, &r.ring.handle, &offset);
             d.fns.vkCmdSetViewport.?(cmd, 0, 1, &.{ .width = @floatFromInt(r.extent.width), .height = @floatFromInt(r.extent.height), .minDepth = 0, .maxDepth = 1 });
-            d.fns.vkCmdSetScissor.?(cmd, 0, 1, &.{ .extent = r.extent });
+            d.fns.vkCmdSetScissor.?(cmd, 0, 1, &r.scissor);
         }
 
         /// Offsets inside a slot.
@@ -335,6 +339,7 @@ pub fn RendererOf(comptime canvases: bool) type {
             r.glyphs = glyphs;
             r.scale = scale;
             r.extent = .{ .width = @intFromFloat(@round(viewport[0] * scale)), .height = @intFromFloat(@round(viewport[1] * scale)) };
+            r.scissor = .{ .offset = .{ .x = 0, .y = 0 }, .extent = r.extent };
             r.list = draw;
             if (canvases) if (r.canvas) |*cv| {
                 const atlas = @min(@backingInt(glyphs.texture), r.texture_count - 1);

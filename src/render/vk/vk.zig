@@ -35,4 +35,5 @@ test {
     std.testing.refAllDecls(renderer);
     std.testing.refAllDecls(gpu);
     std.testing.refAllDecls(scenes);
+    std.testing.refAllDecls(setup);
 }

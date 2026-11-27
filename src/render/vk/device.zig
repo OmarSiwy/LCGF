@@ -139,6 +139,9 @@ pub const DeviceFns = struct {
     vkCmdSetScissor: c.PFN_vkCmdSetScissor,
     vkCmdPushConstants: c.PFN_vkCmdPushConstants,
     vkCmdDraw: c.PFN_vkCmdDraw,
+    // setup.Window: a damage rect cleared inside the pass, the picture copied to the swapchain.
+    vkCmdClearAttachments: c.PFN_vkCmdClearAttachments,
+    vkCmdCopyImage: c.PFN_vkCmdCopyImage,
     // lcgf_render.gpu (gpu.zig): writes in the upload phase, compute, indexed draws.
     vkCmdUpdateBuffer: c.PFN_vkCmdUpdateBuffer,
     vkCmdCopyBuffer: c.PFN_vkCmdCopyBuffer,
