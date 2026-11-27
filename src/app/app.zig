@@ -20,9 +20,11 @@
 //! and in build.zig, `lcgf.addApp(b, dep, .{ .name = "hello", .root_source_file = b.path("main.zig") })`,
 //! which gives the executable this module (`lcgf_app`) with the shells its target needs. An
 //! `App` with a `theme` field of `widgets_base.Theme` follows the system's light or dark
-//! appearance where the shell reports it. Text is drawn with the bundled bitmap font
-//! (`render_sw.font`, DejaVu Sans Mono under its own licence: ship
-//! src/example/font/LICENSE.txt with the program). An `App` with
+//! appearance where the shell reports it. Text is drawn in the faces of `Options.fonts`, else
+//! in the system's default faces where the build can ask the system for them (text.zig
+//! `can_discover`: not a Linux build without libc), at the window's scale (src/app/text.zig);
+//! else, and on macOS, with the bundled bitmap font (`render_sw.font`, DejaVu Sans Mono under
+//! its own licence: ship src/example/font/LICENSE.txt with the program). An `App` with
 //! `pub fn images(*App) []const Image` gives the UI its images: `Style.texture` k + 1 is
 //! image k. The software shells keep last frame's pixels and redraw only what changed
 //! (`Context.trackDamage`). The buffers are static: nothing is allocated but X11's pixels,
@@ -41,6 +43,9 @@ const sw = lcgf.render_sw;
 const font = lcgf.render_sw_font;
 const Events = lcgf.shell_iface.Events;
 const Event = lcgf.input.Input.Event;
+/// The window's text: real fonts at the window's scale (src/app/text.zig).
+pub const text = @import("text.zig");
+const TextService = text.Text;
 
 /// An application's image, which the UI draws through `Style.texture` (texture k + 1 is image
 /// k of `App.images`). RGBA8 texels (`types.Color` bits), `size[0]` by `size[1]`, row by row;
@@ -62,6 +67,11 @@ pub const Options = struct {
     size: [2]u32 = .{ 800, 600 },
     /// The frame's capacities: `Context` is made with them.
     limits: context.Limits = .{ .nodes = 1024, .texts = 256 },
+    /// Font files, font k of a run (`TextStyle.font`) the k-th: `@embedFile` them. None asks
+    /// the system for its default faces (font 0 proportional, font 1 monospace).
+    fonts: []const text.File = &.{},
+    /// The text service's capacities; its `texts` are `limits.texts`.
+    text: text.Options = .{ .quads = 4096 },
 };
 
 /// Opens a window titled `options.title` and runs `app` in it until the window is closed.
@@ -77,6 +87,11 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     // The software shells keep the last frame's pixels; Metal draws every frame whole.
     if (builtin.os.tag != .macos) ctx.trackDamage();
     const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    // The macOS shell draws its own text with the bitmap font, on Metal: no service there yet.
+    const mac = builtin.os.tag == .macos;
+    const fonts: []const text.File = if (mac) &.{} else options.fonts;
+    var tw = try text.Window.open(&B.service, textOptions(options), fonts, !mac, init.gpa, init.io);
+    defer tw.close();
     switch (builtin.os.tag) {
         .linux => {
             const env = init.minimal.environ;
@@ -92,7 +107,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 };
                 var shell = try wl.Wayland.connect(fd, .{ .title = options.title, .size = .{ @floatFromInt(options.size[0]), @floatFromInt(options.size[1]) } }, .{ .glyphs = &B.glyphs, .first = &B.first, .count = &B.count });
                 defer shell.deinit();
-                return loop(App, app, &shell, &ctx, clock, glyphs);
+                return loop(App, app, &shell, &ctx, clock, glyphs, &tw);
             }
             const x11 = @import("x11");
             const display = init.environ_map.get("DISPLAY") orelse return error.NoDisplay;
@@ -108,7 +123,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
             try w.open(conn, @intCast(options.size[0]), @intCast(options.size[1]), options.title, .{ .pixels = pixels.items, .glyphs = &B.glyphs, .first = &B.first, .count = &B.count });
             defer w.close();
             var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = init.gpa };
-            return loop(App, app, &shell, &ctx, clock, glyphs);
+            return loop(App, app, &shell, &ctx, clock, glyphs, &tw);
         },
         .windows => {
             const Win32 = @import("win32").Win32;
@@ -125,7 +140,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 .count = &B.count,
             });
             defer shell.deinit();
-            return loop(App, app, &shell, &ctx, clock, glyphs);
+            return loop(App, app, &shell, &ctx, clock, glyphs, &tw);
         },
         .macos => {
             const Macos = @import("macos").Macos;
@@ -141,7 +156,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 .count = &B.count,
             });
             defer shell.deinit();
-            return loop(App, app, &shell, &ctx, clock, glyphs);
+            return loop(App, app, &shell, &ctx, clock, glyphs, &tw);
         },
         else => @compileError("lcgf app: no desktop shell for " ++ @tagName(builtin.os.tag) ++ "; the web, Android and iOS start from their shells' examples (src/shell/web, android, ios)"),
     }
@@ -181,13 +196,21 @@ fn limitsOf(comptime options: Options) context.Limits {
     return limits;
 }
 
+/// `options.text` for the frame's runs.
+fn textOptions(comptime options: Options) text.Options {
+    var o = options.text;
+    o.texts = options.limits.texts;
+    return o;
+}
+
 /// Rows for one frame's glyph quads.
 const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
 
 /// What a software shell's renderer samples: the white texture, the application's images, the
-/// bundled font last. Remembers the images' generations, to tell when they change.
+/// bundled font, and the text service's atlas when it draws the text. Remembers the images'
+/// generations, to tell when they change.
 const Textures = struct {
-    rows: [images_max + 2]sw.Image = undefined,
+    rows: [images_max + 3]sw.Image = undefined,
     generations: [images_max]u32 = undefined,
     len: u32 = 0,
     known: bool = false,
@@ -232,6 +255,33 @@ const Textures = struct {
         g.texture = @fromBackingInt(@as(u16, @intCast(rows.len - 1)));
         return g;
     }
+
+    /// The frame's glyphs from the text service (`text.Window.glyphs`), its atlas the row
+    /// after the font; canvas labels keep sampling the bundled font, as their cells are its.
+    fn service(
+        t: *Textures,
+        ctx: *context.Context,
+        images: []const Image,
+        placed: text.Frame,
+    ) lcgf.render_iface.Glyphs {
+        var changed = false;
+        const rows = t.update(images, &changed);
+        if (changed) {
+            ctx.redrawAll();
+            ctx.waker.post();
+        }
+        const a = placed.atlas;
+        t.rows[rows.len] = .{ .alpha8 = a.pixels, .width = a.w, .height = a.h };
+        var g = placed.glyphs;
+        g.texture = @fromBackingInt(@as(u16, @intCast(rows.len)));
+        g.canvas = @fromBackingInt(@as(u16, @intCast(rows.len - 1)));
+        return g;
+    }
+
+    /// The rows the last `frame` or `service` gave the renderer.
+    fn shown(t: *const Textures, service_on: bool) []const sw.Image {
+        return t.rows[0 .. t.len + 2 + @intFromBool(service_on)];
+    }
 };
 
 /// The static buffers of an application with `options`: one set per program.
@@ -242,6 +292,8 @@ fn Buffers(comptime options: Options) type {
         var glyphs: [4096]Quad = undefined;
         var first: [options.limits.texts]u32 = undefined;
         var count: [options.limits.texts]u32 = undefined;
+        const service_bytes = TextService.requiredBytes(textOptions(options));
+        var service: [service_bytes]u8 align(lcgf.mem.column_align) = undefined;
         var text: [512]u8 = undefined;
         var events: [128]Event = undefined;
         var preedit: [256]u8 = undefined;
@@ -266,9 +318,10 @@ const Clock = struct {
 };
 
 /// `shell_iface.run`, with the theme following the system's appearance and a time limit. A
-/// software shell (one with `presentWith`) gets the text in the bundled font, written into
-/// `glyphs`, and the application's images.
+/// software shell (one with `presentWith`) gets the text from `tw` at the window's scale, or
+/// in the bundled font written into `glyphs`, and the application's images.
 // tidy: allow-fn(large-generic-function) one instance per shell a program can open (two on Linux)
+// tidy: allow(too-many-parameters) the run's own inputs, made once in `run`, passed through
 fn loop(
     comptime App: type,
     app: *App,
@@ -276,6 +329,7 @@ fn loop(
     ctx: *context.Context,
     clock: Clock,
     glyphs: Glyphs,
+    tw: *text.Window,
 ) !void {
     const follows = @hasField(App, "theme") and @FieldType(App, "theme") == lcgf.widgets_base.Theme;
     var styled: ?lcgf.input.Input.Appearance = null;
@@ -291,12 +345,15 @@ fn loop(
             if (@hasDecl(@TypeOf(shell.*), "beforeFrame")) try shell.beforeFrame();
             var f = ctx.begin(&ev.in);
             app.build(&f, &ev);
-            const out = f.end(.{});
+            const out = tw.end(&f);
             shell.apply(&out.platform);
             if (@hasDecl(@TypeOf(shell.*), "presentWith")) {
                 const images = if (@hasDecl(App, "images")) app.images() else &.{};
-                const g = textures.frame(ctx, images, out.draw, glyphs);
-                shell.presentWith(&out, g, textures.rows[0 .. textures.len + 2]);
+                const g = if (tw.on())
+                    textures.service(ctx, images, tw.glyphs(ctx, &out, ev.in.scale))
+                else
+                    textures.frame(ctx, images, out.draw, glyphs);
+                shell.presentWith(&out, g, textures.shown(tw.on()));
             } else shell.present(&out);
         }
         const left = clock.left();
@@ -389,10 +446,13 @@ test "app on X11: the app's image and text in the bundled font draw; an idle sec
     var ctx = try context.Context.init(&B.ctx, limitsOf(options));
     ctx.trackDamage();
     const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const gpa = testing.allocator;
+    var tw = try text.Window.open(&B.service, textOptions(options), &.{}, false, gpa, testing.io);
+    defer tw.close();
     var app: ImageApp = .{};
 
     // Until the window has settled: its first frame, and whatever the server's exposes ask.
-    try loop(ImageApp, &app, &shell, &ctx, clockFor(0.3), glyphs);
+    try loop(ImageApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
     try testing.expectEqual(ImageApp.green, try x11.pixel(&w, 20, 20));
     try testing.expectEqual(ImageApp.ground, try x11.pixel(&w, 50, 50));
     // The glyph covers part of its 12 x 25 cell; a box would cover all of it.
@@ -405,8 +465,146 @@ test "app on X11: the app's image and text in the bundled font draw; an idle sec
 
     const presents = w.presents;
     const builds = app.builds;
-    try loop(ImageApp, &app, &shell, &ctx, clockFor(1), glyphs);
+    try loop(ImageApp, &app, &shell, &ctx, clockFor(1), glyphs, &tw);
     try testing.expectEqual(presents, w.presents);
     try testing.expectEqual(builds, app.builds);
     try testing.expectEqual(@as(u32, 0), conn.errors);
+}
+
+/// A line of proportional text over a ground, and a box that `lit` turns white.
+const FontApp = struct {
+    const ground = Color.rgb(30, 30, 30);
+    lit: bool = false,
+
+    pub fn build(a: *FontApp, f: *lcgf.frame.Frame, _: *const Events) void {
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ground });
+        _ = f.textStyled(
+            "Wave office fluff \u{2026}",
+            .{ .px = 15, .color = .white },
+            .{ .float = true, .offset = .{ 8, 8 } },
+        );
+        const box: Color = if (a.lit) .white else .rgb(0, 0, 200);
+        _ = f.leaf(.none, .{
+            .float = true,
+            .offset = .{ 150, 60 },
+            .size = .{ .px(20), .px(20) },
+            .fill = box,
+        });
+        f.close();
+    }
+};
+
+test "app on X11 with a font file: text as the reference draws it, a change sends its damage" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const B = Buffers(font_options);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    for ([_]u16{ 1, 2 }) |k| {
+        const s: f32 = @floatFromInt(k);
+        conn.overrideScale(s);
+        var pixels: std.ArrayList(u32) = .empty;
+        defer pixels.deinit(testing.allocator);
+        var w: x11.Window = undefined;
+        const bufs: x11.Window.Buffers = .{
+            .pixels = pixels.items,
+            .glyphs = &B.glyphs,
+            .first = &B.first,
+            .count = &B.count,
+        };
+        try w.open(conn, 200 * k, 100 * k, "lcgf app text", bufs);
+        defer w.close();
+        var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+        var ctx = try context.Context.init(&B.ctx, limitsOf(font_options));
+        ctx.trackDamage();
+        const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+        const gpa = testing.allocator;
+        var tw = try text.Window.open(&B.service, textOptions(font_options), &font_files, false, gpa, testing.io);
+        defer tw.close();
+        try testing.expect(tw.on());
+        var app: FontApp = .{};
+        try loop(FontApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+        try expectText(&w, &app, s);
+
+        // The box turns white: only its rectangle is drawn and sent, so a pixel of the text
+        // changed behind the window's back stays as the server has it.
+        const probe: u32 = 20 * k;
+        const before = try x11.pixel(&w, @intCast(probe), @intCast(probe));
+        w.fb.fill(.{ probe, probe, probe + 1, probe + 1 }, .rgb(255, 0, 255));
+        app.lit = true;
+        ctx.waker.post();
+        try loop(FontApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+        const box = try x11.pixel(&w, @intCast(160 * k), @intCast(70 * k));
+        try testing.expectEqual(Color.white, box);
+        try testing.expectEqual(before, try x11.pixel(&w, @intCast(probe), @intCast(probe)));
+
+        // Idle: nothing presented.
+        const presents = w.presents;
+        try loop(FontApp, &app, &shell, &ctx, clockFor(1), glyphs, &tw);
+        try testing.expectEqual(presents, w.presents);
+
+        // The scale changes with the window open: the text is drawn again, sharp at it.
+        conn.overrideScale(3 - s);
+        try loop(FontApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+        try expectText(&w, &app, 3 - s);
+    }
+    try testing.expectEqual(@as(u32, 0), conn.errors);
+}
+
+const font_options: Options = .{
+    .limits = .{ .nodes = 16, .texts = 4 },
+    .text = .{
+        .atlas = .{ 256, 256 },
+        .images = 256,
+        .quads = 256,
+        .run_glyphs = 64,
+        .run_lines = 4,
+        .shape_slots = 16,
+    },
+};
+const font_files = [_]text.File{.{ .bytes = @embedFile("layout.ttf") }};
+
+/// The frame `app` builds in window `w` at scale `s`, laid out headless through a service of
+/// its own, its glyphs rasterised straight from the face (text.zig's golden reference) white
+/// over the ground: every pixel of the window's top-left 140 x 40 logical pixels within 2 of it.
+// tidy: allow-fn(large-generic-function) a test helper over the X11 window, one instance
+fn expectText(w: anytype, app: *FontApp, s: f32) !void {
+    const x11 = @import("x11");
+    const Reference = struct {
+        const ctx_bytes = context.Context.requiredBytes(limitsOf(font_options));
+        const service_bytes = TextService.requiredBytes(textOptions(font_options));
+        var ctx: [ctx_bytes]u8 align(lcgf.mem.column_align) = undefined;
+        var service: [service_bytes]u8 align(lcgf.mem.column_align) = undefined;
+        var img: [400 * 200]u8 = undefined;
+    };
+    const pw: u32 = w.width;
+    const ph: u32 = w.height;
+    var rctx = try context.Context.init(&Reference.ctx, limitsOf(font_options));
+    var t = try TextService.init(&Reference.service, textOptions(font_options), &font_files);
+    const view = [2]f32{ @as(f32, @floatFromInt(pw)) / s, @as(f32, @floatFromInt(ph)) / s };
+    const in: lcgf.input.Input = .{ .viewport = view, .scale = s };
+    var f = rctx.begin(&in);
+    app.build(&f, &.{});
+    const out = f.endText(&t.stack, t.ascent);
+    const img = Reference.img[0 .. @as(usize, pw) * ph];
+    @memset(img, 0);
+    _ = try text.drawReference(&t, out, s, img, pw);
+    var bad: u32 = 0;
+    var ink: u32 = 0;
+    const g: u32 = FontApp.ground.r;
+    const rows: u32 = @min(ph, @as(u32, @intFromFloat(40 * s)));
+    const cols: u32 = @min(pw, @as(u32, @intFromFloat(140 * s)));
+    for (0..rows) |y| for (0..cols) |x| {
+        const c: u32 = img[y * pw + x];
+        const want: i32 = @intCast(g + (c * (255 - g) + 127) / 255);
+        const got = try x11.pixel(w, @intCast(x), @intCast(y));
+        ink += @intFromBool(c > 0);
+        bad += @intFromBool(@abs(@as(i32, got.r) - want) > 2);
+    };
+    const at = .{ s, pw, ph, bad, ink };
+    errdefer std.debug.print("scale {d}, window {d} x {d}: {d} bad pixels of {d} inked\n", at);
+    try testing.expectEqual(0, bad);
+    try testing.expect(ink > 200);
 }

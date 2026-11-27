@@ -1365,6 +1365,10 @@ pub fn build(b: *std.Build) void {
         else => lcgf_import,
     };
     const app_mod = b.addModule("lcgf_app", .{ .root_source_file = b.path("src/app/app.zig"), .target = target, .optimize = optimize, .link_libc = target.result.os.tag == .macos, .imports = app_imports });
+    // The text service's font discovery (src/app/text.zig), linking what lcgf_app links, and
+    // the test face of its tests.
+    app_mod.addImport("font_system", appText(b, target, optimize, lcgf, target.result.os.tag == .macos).import_table.get("font_system").?);
+    app_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
     // examples/app: the hello window through lcgf_app, for any desktop target.
     const app_example = b.addExecutable(.{ .name = "app-example", .root_module = b.createModule(.{
         .root_source_file = b.path("examples/app/main.zig"),

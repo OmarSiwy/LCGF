@@ -186,8 +186,11 @@ The kit adds no behaviour: `ui.button(.add, .{ .label = "Add" })` is
 
 `lcgf_app.run(App, &app, init, .{ .title = "Hello" })` opens a desktop window and runs `App`'s
 `build` in it until it closes: Wayland or X11 on Linux, Win32, or AppKit with Metal on macOS,
-chosen from the target and the environment, with the shells' loop above and text from the
-bundled bitmap font. In build.zig, `lcgf.addApp(b, dep, .{ .name = "hello", .root_source_file
+chosen from the target and the environment, with the shells' loop above. Text is drawn in
+real fonts at the window's scale (src/app/text.zig): the files of `Options.fonts`
+(`.fonts = &.{.{ .bytes = @embedFile("Inter.ttf") }}`, font k the k-th), else the system's
+default faces where the build can ask for them (not a Linux build without libc), else, and on
+macOS for now, the bundled bitmap font. In build.zig, `lcgf.addApp(b, dep, .{ .name = "hello", .root_source_file
 = b.path("main.zig"), .target = target, .optimize = optimize })` gives the executable the
 `lcgf_app` module with the shells its target needs. examples/app/main.zig is a whole program;
 `zig build app-example -Dtarget=x86_64-windows` builds it for Windows from anywhere. The web,

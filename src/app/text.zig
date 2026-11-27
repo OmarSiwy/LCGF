@@ -566,6 +566,88 @@ pub const Text = struct {
     }
 };
 
+const Context = lcgf.context.Context;
+
+/// The text of a window `lcgf_app` runs: the service over the application's font files, else
+/// over the system's default faces where the build can ask for them (`can_discover`), else
+/// none, and the window draws with the bundled bitmap font as before. Each frame, `end`
+/// measures and lays it out and `glyphs` places its glyphs at the window's scale.
+pub const Window = struct {
+    /// Null when there is nothing to serve: no file and no way to ask the system, so the
+    /// buffer is never carved and its pages never touched (3 MB of a default service).
+    text: ?Text,
+    discovery: if (can_discover) ?Discovery else void,
+    gpa: Allocator,
+    io: Io,
+    /// The generation of the last frame's glyphs.
+    generation: ?u32 = null,
+
+    /// The service over `buf` (`Text.requiredBytes(o)`) with `files`, else, when `discover`
+    /// and the build can, the system's default faces. Fails when a file is not a face this
+    /// stack reads; a system without fonts (or fontconfig) leaves the window on the bitmap
+    /// font. `gpa` reads system font files, once each.
+    pub fn open(
+        buf: []align(mem.column_align) u8,
+        o: Options,
+        files: []const File,
+        discover: bool,
+        gpa: Allocator,
+        io: Io,
+    ) InitError!Window {
+        // No fontconfig, DirectWrite or Core Text: no system faces, and the bitmap font.
+        const ask = can_discover and discover;
+        const found: ?Discovery = if (ask) Discovery.init() catch null else null;
+        var w: Window = .{
+            .text = if (files.len > 0 or found != null) try Text.init(buf, o, files) else null,
+            .discovery = if (can_discover) found else {},
+            .gpa = gpa,
+            .io = io,
+        };
+        if (can_discover) if (w.discovery) |*d| if (files.len == 0) {
+            // tidy: allow(swallowed-error) a system with no default face draws the bitmap font
+            w.text.?.addSystemDefaults(gpa, io, d) catch {};
+        };
+        if (w.text) |t| std.debug.assert(t.face_len >= files.len);
+        return w;
+    }
+
+    pub fn close(w: *Window) void {
+        if (w.text) |*t| t.deinit(w.gpa);
+        if (can_discover) if (w.discovery) |*d| d.deinit();
+    }
+
+    /// Whether the window draws with the service (it has a face), not the bitmap font.
+    pub fn on(w: *const Window) bool {
+        return if (w.text) |t| t.face_len > 0 else false;
+    }
+
+    /// Ends frame `f`: `Frame.endText` through the service when `on`, else `Frame.end`.
+    pub fn end(w: *Window, f: *lcgf.frame.Frame) lcgf.context.Output {
+        if (!w.on()) return f.end(.{});
+        const t = &w.text.?;
+        return f.endText(&t.stack, t.ascent);
+    }
+
+    /// `Text.glyphs` of `out` at `scale`. When the atlas started again, or a character of the
+    /// frame no face had brought a new face (`cover`), `ctx` redraws the whole window in a
+    /// frame of its own, at once. Asserts `on`.
+    pub fn glyphs(w: *Window, ctx: *Context, out: *const lcgf.context.Output, scale: f32) Frame {
+        std.debug.assert(w.on());
+        const t = &w.text.?;
+        const frame = t.glyphs(out.draw, out.texts, scale);
+        var again = if (w.generation) |g| g != frame.generation else false;
+        w.generation = frame.generation;
+        if (can_discover) if (w.discovery) |*d| {
+            again = again or (t.cover(w.gpa, w.io, d, out.draw.strings) catch 0) > 0;
+        };
+        if (again) {
+            ctx.redrawAll();
+            ctx.waker.post();
+        }
+        return frame;
+    }
+};
+
 /// Where a glyph image is in the atlas, and its box relative to the pen's pixel
 /// (`raster.Box`). `w == 0`: no ink.
 const Slot = struct {
@@ -717,7 +799,6 @@ fn find(keys: []const u64, key: u64) ?usize {
 
 const testing = std.testing;
 const sw = lcgf.render_sw;
-const Context = lcgf.context.Context;
 const Color = lcgf.types.Color;
 
 /// The repository's text test face (Noto Sans subset, src/text/layout/testdata/layout.ttf)
@@ -794,9 +875,10 @@ test "a paragraph through the service and the software back end matches direct r
     }
 }
 
-/// Composites every glyph `out` draws into `img` (`w` wide), rasterised by src/text/raster/ at
-/// the physical pen the service rounds to; returns how many came from a fallback face.
-fn drawReference(t: *Text, out: lcgf.context.Output, scale: f32, img: []u8, w: u32) !u32 {
+/// Test helper, lcgf_app's tests' too: composites every glyph `out` draws into `img` (`w`
+/// wide), rasterised by src/text/raster/ at the physical pen the service rounds to; returns
+/// how many came from a fallback face.
+pub fn drawReference(t: *Text, out: lcgf.context.Output, scale: f32, img: []u8, w: u32) !u32 {
     std.debug.assert(img.len % w == 0);
     const d = out.draw;
     const strings: Strings = .{ .buf = @constCast(d.strings), .len = @intCast(d.strings.len) };
@@ -824,6 +906,8 @@ fn drawReference(t: *Text, out: lcgf.context.Output, scale: f32, img: []u8, w: u
             for (0..b.h) |r| for (0..b.w) |c| {
                 const x = pen.pixel + b.left + @as(i32, @intCast(c));
                 const y = base - b.top + @as(i32, @intCast(r));
+                // Off the picture, as off the window.
+                if (x < 0 or y < 0 or x >= w or y >= img.len / w) continue;
                 const at = @as(usize, @intCast(y)) * w + @as(usize, @intCast(x));
                 // White over what is there, at the glyph's coverage: "over", as the back end
                 // blends overlapping glyphs.
