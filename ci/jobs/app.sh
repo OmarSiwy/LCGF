@@ -30,6 +30,15 @@ fi
 zig build app-example -Drender=sw -p "$dir/sw"
 if readelf -l "$dir/sw/bin/app-example" | grep -q INTERP; then echo "app-example -Drender=sw links libc"; exit 1; fi
 readelf -l zig-out/bin/app-example | grep -q INTERP
+# ...and carries none of the text service, which it can never use (no font files, no libc to
+# ask the system for faces): within 2 % of its 1,187,288 bytes without the service, ReleaseSmall
+# for x86_64_v3. The software build with a font file draws it (the font-file test above, again
+# without libc).
+zig build app-example -Drender=sw -Doptimize=ReleaseSmall -Dtarget=x86_64-linux -Dcpu=x86_64_v3 -p "$dir/small"
+size=$(stat -c %s "$dir/small/bin/app-example")
+echo "app-example -Drender=sw ReleaseSmall: $size bytes"
+[ "$size" -le 1211034 ] || { echo "over 1211034 bytes: the text service is in a program that cannot use it"; exit 1; }
+LCGF_X11_TEST_DISPLAY=":$(cat "$dir/display")" XAUTHORITY=/dev/null zig build app-test -Drender=sw --summary all
 for t in x86_64-windows aarch64-macos; do
     echo "-- $t"
     zig build app-example -Dtarget="$t" -p "$dir/$t"
