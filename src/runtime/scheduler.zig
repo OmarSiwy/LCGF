@@ -120,13 +120,19 @@ pub const Timers = struct {
 };
 
 /// True on the first frame at least `seconds` after the frame that first asked for timer `id`.
-/// Ask for it every frame while you want it; a timer not asked for in a frame is dropped.
-/// `.repeat` restarts it when it fires (a caret blink); `.once` drops it when it fires, so a
-/// one-shot costs exactly one wakeup (asked again later, it starts over). `Output.wake` brings
-/// the host back in time, with no input:
+/// Never in the call that starts it: 0 seconds is the next frame, which `Output.wake` asks the
+/// host for at once. Ask for it every frame while you want it; a timer not asked for in a frame
+/// is dropped. `.repeat` restarts it when it fires (a caret blink); `.once` drops it when it
+/// fires, so a one-shot costs exactly one wakeup. `Output.wake` brings the host back in time,
+/// with no input:
 ///
 ///     if (f.timer(.from("caret"), 0.5, .repeat)) caret_on = !caret_on;
 ///     if (toast and f.timer(.from("toast"), 3, .once)) toast = false;
+///
+/// The call that returns true spends a one-shot: nothing is left to wake the host, even if the
+/// timer is asked for every frame. To keep frames coming while something is busy, ask with
+/// `.repeat`; a one-shot asked for again, later or after it fired in the same frame, starts
+/// over.
 ///
 /// Past `Limits.timers` the last row is shared, so extra timers fire early or late, never out of
 /// bounds.
@@ -142,7 +148,9 @@ pub fn timer(f: *Frame, id: Id, seconds: f32, mode: TimerMode) bool {
     const is_new = simd.orB(missing, t.c.at[i] == inf);
     const now = f.in.time;
     const at = selD(is_new, now + seconds, t.c.at[i]);
-    const fired = now >= at;
+    // Not in the call that starts it: a timer of 0 seconds is due now, so the host is woken
+    // for the next frame, and fires there.
+    const fired = simd.andB(!is_new, now >= at);
     const repeat = mode == .repeat;
     const done = simd.andB(fired, !repeat);
     t.c.id[i] = k;
@@ -452,8 +460,14 @@ test "timer: fires once per period; the earliest deadline is the wake" {
     try testing.expectEqual([2]bool{ true, true }, fired);
     try testing.expectEqual(@as(u32, 1), ctx.timers.len);
     try testing.expectEqual(@as(f64, 12.5), ctx.timers.earliest());
-    // A one-shot asked again starts over, even in the frame it fired. ("fast" was not asked
-    // for in this frame, so it is gone.)
+    // A timer of 0 seconds does not fire in the call that starts it: it is due at once, so the
+    // host is woken for the next frame. ("fast" was not asked for in this frame, so it is gone.)
+    f = ctx.begin(&in);
+    try testing.expect(!f.timer(.from("once"), 0, .once));
+    try testing.expectEqual(@as(f32, 0), f.end(.{}).wake);
+    try testing.expectEqual(@as(f64, 12), ctx.timers.earliest());
+    try testing.expect(ctx.needsFrame(&in));
+    // It fires there. That call spends it; asked again in the same frame, it starts over.
     f = ctx.begin(&in);
     try testing.expect(f.timer(.from("once"), 0, .once));
     try testing.expect(!f.timer(.from("once"), 1, .once));
@@ -461,6 +475,12 @@ test "timer: fires once per period; the earliest deadline is the wake" {
     try testing.expectEqual(@as(f64, 13), ctx.timers.earliest());
     try testing.expectEqual(@as(u32, 1), ctx.timers.len);
 
+    // A one-shot asked for once a frame fires once and leaves no deadline: the host sleeps.
+    in.time = 13;
+    f = ctx.begin(&in);
+    try testing.expect(f.timer(.from("once"), 1, .once));
+    try testing.expectEqual(types.inf, f.end(.{}).wake);
+    try testing.expectEqual(@as(u32, 0), ctx.timers.len);
     // Nobody asks any more: the timers are dropped and the host sleeps.
     f = ctx.begin(&in);
     try testing.expectEqual(types.inf, f.end(.{}).wake);
