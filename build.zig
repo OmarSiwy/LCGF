@@ -278,6 +278,17 @@ pub fn build(b: *std.Build) void {
     const apptext = b.addExecutable(.{ .name = "apptext-bench", .root_module = apptext_mod });
     const apptext_run = b.addRunArtifact(apptext);
     b.step("app-text-bench", "Time the text service's frames (Linux)").dependOn(&apptext_run.step);
+    // Canvas labels under zoom: distance fields against rasterising again (bench/micro/canvastext.zig).
+    const canvastext_mod = b.createModule(.{
+        .root_source_file = b.path("bench/micro/canvastext.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
+    });
+    canvastext_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = layout_ttf });
+    const canvastext = b.addExecutable(.{ .name = "canvastext-bench", .root_module = canvastext_mod });
+    const canvastext_run = b.addRunArtifact(canvastext);
+    b.step("canvas-text-bench", "Measure canvas label candidates under zoom (Linux)").dependOn(&canvastext_run.step);
     // The canvas batch in software: 100k primitives panned and zoomed (bench/micro/canvasbench.zig).
     const canvasbench = b.addExecutable(.{ .name = "canvasbench", .root_module = b.createModule(.{
         .root_source_file = b.path("bench/micro/canvasbench.zig"),
