@@ -530,6 +530,15 @@ test "wayland: without fractional scaling, the integer buffer scale" {
     try testing.expectEqual([2]u32{ 800, 600 }, fake.committedSize());
     try testing.expectEqual(@as(u32, 2), fake.sent(.surface, 8).?.arg0);
     try testing.expectEqual(app.theme.panel, fake.pixel(160, 590));
+    // Moved to a scale-3 output while open: the next frame is 1200 x 900 at buffer scale 3.
+    fake.send(shell.windows[0].surface, 2, .{@as(i32, 3)});
+    fake.flush();
+    _ = turn(&shell, &ctx, &app, &ev).?;
+    fake.pump(&shell);
+    try testing.expectEqual(@as(f32, 3), ev.in.scale);
+    try testing.expectEqual([2]f32{ 400, 300 }, ev.in.viewport);
+    try testing.expectEqual([2]u32{ 1200, 900 }, fake.committedSize());
+    try testing.expectEqual(@as(u32, 3), fake.sent(.surface, 8).?.arg0);
 }
 
 test "wayland: before wl_surface v6, the scale of the output the window entered" {
