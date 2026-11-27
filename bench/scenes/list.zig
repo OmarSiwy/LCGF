@@ -24,7 +24,9 @@ fn input(in: *ui.Input, k: u32) void {
 
 fn build(f: *ui.Frame, th: *const ui.Theme) void {
     const first = scroll / row_h;
-    const end = @min(first + visible, total);
+    // u32 on purpose: `@min` against the constant would give a u17, and the spacer below
+    // multiplies it by the row height.
+    const end: u32 = @min(first + visible, total);
     _ = f.open(ui.Id.from("list"), .{ .size = .{ .fill, .fill }, .clip = true, .scroll = .{ 0, @floatFromInt(scroll) } });
     _ = f.leaf(.none, .{ .size = .{ .fill, .px(@floatFromInt(first * row_h)) } });
     const fills = [2]ui.Color{ th.panel, th.control };
