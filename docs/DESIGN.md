@@ -24,7 +24,8 @@ host GPU pass ◄── renderer ◄── DrawList (flat commands) ◄── pa
 
 Every arrow is plain data owned by the caller. There are no callbacks: text measurement, custom
 drawing and platform effects (cursor, clipboard, IME position) cross the boundary as rows and
-commands the host reads. The host owns the loop, the memory and the GPU objects.
+commands the host reads. The host owns the loop, the memory and the GPU objects. The window
+layer, `lcgf_app`, is one such host, for an application that would rather not be one.
 
 ## Tiers
 
@@ -36,6 +37,7 @@ A tier may use the tiers before it and nothing after it.
 | 1 | A front end that owns the columns and sequences the tier-0 passes. Two exist: runtime (`Context` / `Frame`) and comptime (`Ui(State, spec)`). | `src/runtime/`, `src/comptime/` |
 | 2 | Conveniences written only against the public API of tiers 0 and 1: widgets, themes, reuse, animation helpers. | `src/widgets/`, `src/theme/` |
 | outside | Renderers consume a `DrawList`. Shells produce `Input` and present frames. Neither is imported by tiers 0 to 2. | `src/render/*/`, `src/shell/*/` |
+| 3 | The window layer, `lcgf_app`: an application in a desktop window in one call. It owns the shell, the device, the swapchain, the fonts and the pacing, and uses everything above it in this table, renderers and shells included. Nothing imports it. | `src/app/` |
 
 Granularity rule (from the API guide): every tier-1 or tier-2 call must be replaceable by a few
 tier-0 calls, and the test `tier 0 alone` in `src/layout/layout.zig` exercises that contract.
@@ -62,6 +64,11 @@ above), redundancy (one-call shortcuts exist for the common case), no coupling (
 hidden global state), no retention at the lowest tier (the caller owns all memory), and flow control
 stays with the caller (no callbacks, no framework-owned loop). Write the usage code first: a new
 public function arrives together with the test that uses it.
+
+`lcgf_app` is the one place that owns a loop and calls the application back (`build`, `draw`,
+`images`), and an application chooses it. Everything it does is a few public calls of the layers
+under it (`Context`, the shells, the back end's `Setup.Window.begin` and `present`, `Surface`), so a
+host that needs its own loop makes those calls itself.
 
 ## Two front ends over one core
 
@@ -91,7 +98,8 @@ Both front ends fill the same tier-0 columns and produce the same `DrawList`.
 ## Rendering
 
 The core emits a `DrawList`: instanced quads (rounded-box SDF, clip as coverage, premultiplied
-output), text runs, and `custom` commands that hand a rectangle back to the host. Back ends:
+output), text runs, `canvas` batches (LCGF's own instanced primitives under a camera), and
+`custom` commands that hand a rectangle back to the host. Back ends:
 
 - **Software**: required. It is the floor for memory and the only option on microcontrollers.
 - **Vulkan, Metal, Direct3D 12, GL ES, web**: thin native back ends. They exist because the overhead
@@ -116,9 +124,35 @@ output), text runs, and `custom` commands that hand a rectangle back to the host
   Apple, Direct3D 12 on Windows, Vulkan on Linux and Android, web on wasm32, software on
   freestanding). Only that back end is compiled and nothing dispatches: its `.text` is
   byte-identical to a direct import (ci/jobs/render-select.sh). The host still owns device,
-  queue and pass; for one that brings none, `Setup` (vk, metal, sw) holds what the shells made.
-  A run-time fallback (Vulkan, then GL ES) is left until a target needs it; it must initialise
-  the second back end only after the first fails. docs/guide/backends.md says which to pick.
+  queue and pass; for one that brings none, `Setup` makes them: `vk` (with `vk.setup.Window`,
+  used by the Android shell and the X11 GPU window), `metal` (the iOS shell) and `sw` (the X11,
+  Wayland and Win32 shells). Direct3D 12, GL ES, wgpu and web have none. A run-time fallback
+  between GPU APIs (Vulkan, then GL ES) is left until a target needs it; it must initialise the
+  second back end only after the first fails. docs/guide/backends.md says which to pick.
+- **The window layer keeps the picture.** A window draws again only what changed, so a widget
+  and a surface beside it never redraw each other. `vk.setup.Window` keeps one image of the window's
+  size between frames; `begin` gives the frame's command buffer and upload phase, `present`
+  draws the UI into the picture scissored to each damage rect, from rows that stay on the GPU
+  until a new list replaces them, and copies the picture to the swapchain. The context records
+  damage without culling the list (`Context.trackDamageWhole`), so the rows always describe
+  the whole window. `sw.Setup.draw` does the same in software: the framebuffer is the picture.
+- **An application's own GPU drawing is a `Surface`**: a texture the application renders with
+  `lcgf_render.gpu` in `draw`, shown as an ordinary quad at its node's place in paint order, as
+  a `<canvas>` is in WebGPU. Widgets and surfaces are drawn again independently: a widget
+  frame runs `build` and never `draw`; a surface frame runs `draw` and redraws its rectangle
+  from the rows already on the GPU, with no build and no upload of rows. A window that is not
+  shown gives its frame up and owes the whole window. Inline custom drawing (`Frame.custom`,
+  `drawUntilCustom`) stays below the window layer, for a host that owns its loop and its pass.
+- **Where the window layer has a GPU.** Vulkan over X11 on Linux, the default there (a Wayland
+  session through XWayland when `DISPLAY` is set). Its tests run on Mesa lavapipe in CI and
+  pass on an RTX 5060. On that GPU a presented frame costs about the same CPU time to submit and
+  present whatever it draws, so what the kept picture saves is the build, layout and paint a
+  surface frame skips and the `draw` a widget frame skips (docs/plans/window.md, "Landed").
+  Windows, macOS and native Wayland have no GPU window through `lcgf_app`, and macOS text stays
+  on the bitmap font. `LCGF_RENDER=sw`, no
+  display or no Vulkan device falls back to the software window; an application with `draw`
+  then gets `error.NoGpu`. A GPU build links libc on Linux (the loader is opened at run time);
+  `-Drender=sw` does not. docs/plans/window.md is the plan; docs/guide/surface.md the guide.
 - **Gompute** (CUDA / HIP compute kernels): measured and dropped. Lane render-gompute built it
   (C0418-C0425) and it lost to the Vulkan back end on every measure on an RTX 4060: frame time,
   resident and GPU memory, start-up, vendors, and presenting. docs/research/gompute.md has the
@@ -147,7 +181,8 @@ Do not reopen these inside a commit. If one looks wrong, say so in your report.
   nor touch the OS (`std.hash`, `std.fmt.comptimePrint`, `std.meta`, `std.testing` in tests): no libc,
   no allocator, no `std.Io`. (Widened from simd/math/mem only: the prototype's `Id` hashes with
   `std.hash.Fnv1a_32`.)
-- The caller owns memory (one buffer, carved into columns) and the loop.
+- The caller owns memory (one buffer, carved into columns) and the loop. `lcgf_app` owns them
+  for an application that runs in it, through the same public calls.
 - Ids are hashed from source location or name; state lives in the application, not in widgets.
 - One `DrawList` format for every renderer. Renderers are generic over a small binding namespace.
 - Accessibility is a column set (`role`, `value`) on the same tree, bridged outside the core.

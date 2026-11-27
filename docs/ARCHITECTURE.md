@@ -7,7 +7,8 @@ in the design guide. The original implementation records how these tiers evolved
 
 **A tier uses only the tiers below it.** Code in tier N may import tiers 0 to N-1 and its own tier,
 never a higher tier and never anything outside the tiers. Renderers and shells sit outside: they
-read and write the core's data, and the core never imports them.
+read and write the core's data, and the core never imports them. The window layer sits above
+them all and nothing imports it.
 
 | Tier | What | May use | Directories |
 |---|---|---|---|
@@ -15,6 +16,7 @@ read and write the core's data, and the core never imports them.
 | 1 | Front ends. Each owns the columns and sequences the tier-0 passes. Runtime: `Context` / `Frame`. Comptime: `Ui(State, spec)`. | Tier 0 | `src/runtime/`, `src/comptime/` |
 | 2 | Conveniences written only against the public API of tiers 0 and 1. | Tiers 0 and 1, public API only | `src/widgets/`, `src/theme/` |
 | outside | Renderers consume a `DrawList`. Shells produce `Input` and present frames. Assets decode files (images) and may run work on the host's `std.Io`. | Any tier, plus their platform, GPU or `std.Io` API | `src/render/*/`, `src/shell/*/`, `src/assets/` |
+| 3 | The window layer, `lcgf_app`: opens a window, runs the loop and draws with the build's back end. | Every row above, plus the OS, an allocator and the GPU | `src/app/` |
 
 Two consequences:
 
@@ -56,3 +58,5 @@ exported from `src/lcgf.zig`, so the core never imports it.
 - Tier 0 files import only `std` and other tier-0 files; review rejects anything else.
 - The cross-compile CI job builds the core for targets with no OS support it could lean on.
 - Renderers and shells are built as separate modules that import `lcgf`, never the reverse.
+  So is `lcgf_app` (`src/app/app.zig`), over `lcgf`, the shells its target needs and the back
+  end; `src/lcgf.zig` does not export it.
