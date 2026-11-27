@@ -140,6 +140,8 @@ fn cut(clip: [4]f32, off: @Vector(4, f32), w: [4]f32) [4]f32 {
 /// transforms keep their screen positions relative to the region. Its strings follow the host's
 /// in `strings`, the caller's buffer, which `out.strings` then points into.
 ///
+/// Canvas commands (`Frame.canvas`) of either side keep their batches: `out.canvases` (the
+/// caller's, a row per custom row of both) gets the host's rows, then the guest's.
 /// `out` is the caller's, carved for the host's rows plus the guest's. Nothing is written when
 /// it, or `strings`, is too small, or when the host has no such region. Batches are not merged
 /// across the seams, and `out` has no ops, depth or damage (`.everything`): run `order` or
@@ -152,8 +154,12 @@ pub fn compose(out: *DrawList, host: *const DrawList, guest: *const DrawList, re
     const slot = host.customs[host.cmd.first[at]];
     const cmds = host.cmd_len - 1 + guest.cmd_len;
     const string_bytes = host.strings.len + guest.strings.len;
+    // Canvas commands index `canvases` by their custom row, so either side's canvases need a row
+    // in `out.canvases` for every custom row.
+    const canvases = host.canvases.len != 0 or guest.canvases.len != 0;
     if (host.quad_len + guest.quad_len > out.quads.len or host.run_len + guest.run_len > out.runs.len or
-        host.custom_len + guest.custom_len > out.customs.len or cmds > out.cmd.kind.len or string_bytes > strings.len)
+        host.custom_len + guest.custom_len > out.customs.len or cmds > out.cmd.kind.len or string_bytes > strings.len or
+        (canvases and host.custom_len + guest.custom_len > out.canvases.len))
         return error.NoRoom;
 
     const V4 = @Vector(4, f32);
@@ -187,12 +193,17 @@ pub fn compose(out: *DrawList, host: *const DrawList, guest: *const DrawList, re
         c.rect = @as(V4, g.rect) + o;
         c.clip = cut(g.clip, o, window);
     }
+    // A side without canvases has none among its custom rows: their rows stay unread.
+    if (host.canvases.len != 0) @memcpy(out.canvases[0..hc], host.canvases[0..hc]);
+    const gc = guest.custom_len;
+    if (guest.canvases.len != 0) @memcpy(out.canvases[hc..][0..gc], guest.canvases[0..gc]);
     @memcpy(strings[0..host.strings.len], host.strings);
     @memcpy(strings[host.strings.len..string_bytes], guest.strings);
 
     // Commands: the host's up to the region, the guest's (indices moved past the host's rows),
     // then the rest of the host's.
-    const rebase = [3]u32{ hq, hr, hc }; // by `DrawList.Kind`: quads, text, custom
+    // By `DrawList.Kind`: quads, text, custom, canvas (a custom row).
+    const rebase = [4]u32{ hq, hr, hc, hc };
     inline for (.{ "kind", "first", "count", "key" }) |name| {
         const dst = @field(out.cmd, name);
         const src = @field(host.cmd, name);

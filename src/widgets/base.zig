@@ -2565,3 +2565,183 @@ test "ComptimeUi: a page of a hundred custom widgets builds within its quota" {
     try testing.expectEqual(@as(u32, 102), out.tree.len);
     try testing.expectEqual(@as(f32, 400), out.tree.rect(101).x1);
 }
+
+/// A canvas on either side of `ct_interop.compose`, against the same UI built in one `Frame`,
+/// drawn by the software renderer.
+const MixedCanvas = struct {
+    const interop = @import("../comptime/interop.zig");
+    const canvas = @import("../draw/canvas.zig");
+    const draw_list = @import("../draw/draw_list.zig");
+    const sw = @import("../render/sw/sw.zig");
+    const iface = @import("../render/iface.zig");
+    const w = 240;
+    const h = 160;
+    const bar: Style = .{ .size = .{ .fill, .px(30) }, .fill = .rgb(40, 60, 90) };
+    const plot_style: Style = .{ .size = .{ .px(200), .px(100) } };
+    const panel_style: Style = .{
+        .size = .{ .px(80), .px(40) },
+        .fill = .rgb(200, 120, 40),
+        .radius = 4,
+    };
+    const caps: context.Limits = .{
+        .nodes = 16,
+        .texts = 1,
+        .customs = 4,
+        .strings = 16,
+        .depth = 8,
+    };
+
+    /// The plot: a filled rect and a line, in world units of a camera at scale 0.5.
+    const Plot = struct {
+        buf: [canvas.Instances.requiredBytes(4, 0, 1, .{})]u8 align(mem.column_align) = undefined,
+        shapes: canvas.Instances = undefined,
+        layers: [1]canvas.Layer = .{.of(.{
+            .stroke = .rgb(250, 250, 250),
+            .fill = .rgb(30, 160, 90),
+            .width = 2,
+        })},
+        palette: canvas.Palette = undefined,
+        ranges: [1]canvas.Range = undefined,
+
+        fn init(p: *Plot) void {
+            var carver: mem.Carver = .{ .buf = &p.buf };
+            p.shapes = .init(&carver, 4, 0, 1, .{});
+            _ = p.shapes.rect(.{ 20, 20 }, .{ 200, 120 }, .{});
+            _ = p.shapes.segment(.{ 0, 180 }, .{ 380, 10 }, .{});
+            p.ranges = .{p.shapes.since(0)};
+            p.palette = .{ .layers = &p.layers };
+        }
+
+        fn draw(p: *const Plot, f: *Frame, id: Id) void {
+            _ = f.canvas(id, plot_style, &p.shapes, .{
+                .camera = .{ .scale = 0.5 },
+                .palette = &p.palette,
+                .ranges = &p.ranges,
+            });
+        }
+    };
+
+    /// A runtime frame's context with canvases.
+    const Ctx = struct {
+        buf: [context.Context.requiredBytes(caps)]u8 align(mem.column_align) = undefined,
+        rows: [2 * caps.customs]draw_list.CanvasDraw = undefined,
+        ctx: context.Context = undefined,
+
+        fn init(c: *Ctx) !void {
+            c.ctx = try .init(&c.buf, caps);
+            c.ctx.enableCanvas(&c.rows);
+        }
+    };
+
+    /// The composed draw list, with canvas rows for both sides' custom rows.
+    const Out = struct {
+        buf: [bytes]u8 align(mem.column_align) = undefined,
+        draw: DrawList = undefined,
+        canvases: [8]draw_list.CanvasDraw = undefined,
+        strings: [64]u8 = undefined,
+        const bytes = blk: {
+            var counter: mem.Carver = .{ .buf = null };
+            _ = DrawList.init(&counter, 32, 4, 8);
+            break :blk counter.off;
+        };
+        fn init(o: *Out) void {
+            var carver: mem.Carver = .{ .buf = &o.buf };
+            o.draw = DrawList.init(&carver, 32, 4, 8);
+            o.draw.canvases = &o.canvases;
+        }
+    };
+
+    var pixels: [2][sw.Framebuffer.len(w, h)]u32 = undefined;
+
+    /// `d` drawn by the software renderer into framebuffer `k`.
+    fn render(d: *const DrawList, k: usize) sw.Framebuffer {
+        var fb: sw.Framebuffer = .init(&pixels[k], w, h, .rgba8);
+        fb.clear(.rgb(0, 0, 0));
+        var gfx: sw.Software = .{};
+        gfx.prepare({}, d, .{}, .{ w, h }, 1);
+        iface.render(&gfx, .{ .fb = &fb, .scissor = fb.all() }, d);
+        return fb;
+    }
+
+    fn expectSamePixels(a: *const DrawList, b: *const DrawList) !void {
+        _ = render(a, 0);
+        _ = render(b, 1);
+        try testing.expect(std.mem.eql(u32, &pixels[0], &pixels[1]));
+        // And the plot drew something: its fill's green.
+        var green: u32 = 0;
+        for (pixels[0]) |px| green += @intFromBool(px & 0xff00 == 160 << 8);
+        try testing.expect(green > 100);
+    }
+
+    var plot: Plot = .{};
+    var page_ctx: Ctx = .{};
+    var guest_ctx: Ctx = .{};
+    var out: Out = .{};
+};
+
+test "compose: a runtime region drawing a canvas in a comptime page paints as one Frame" {
+    const M = MixedCanvas;
+    M.plot.init();
+    try M.page_ctx.init();
+    try M.guest_ctx.init();
+    M.out.init();
+    const in: Input = .{ .viewport = .{ M.w, M.h } };
+    const S = struct {
+        const spec = spec_zig.col(.{ .size = .{ .fill, .fill } }, .{
+            spec_zig.row(M.bar, .{}),
+            M.interop.region(.plot, M.plot_style),
+        });
+        var ui: ComptimeUi(struct {}, spec, .default) = .{};
+    };
+    // The comptime page, the plot in its region, composed.
+    const top = S.ui.frame(&in);
+    const r = top.tree.rect(top.tree.find(.from("plot")));
+    const sub = M.interop.regionInput(&in, .{ r.x0, r.y0, r.x1, r.y1 });
+    var g = M.guest_ctx.ctx.begin(&sub);
+    M.plot.draw(&g, .from("plot"));
+    const guest = g.end(.{});
+    const plot_id = @backingInt(Id.from("plot"));
+    try M.interop.compose(&M.out.draw, top.draw, guest.draw, plot_id, &M.out.strings);
+    // The same UI in one Frame.
+    var f = M.page_ctx.ctx.begin(&in);
+    _ = f.open(.none, .{ .size = .{ .fill, .fill } });
+    _ = f.leaf(.none, M.bar);
+    M.plot.draw(&f, .from("plot"));
+    f.close();
+    const one = f.end(.{});
+    try M.expectSamePixels(&M.out.draw, one.draw);
+}
+
+test "compose: a comptime region in a runtime page that draws a canvas paints as one Frame" {
+    const M = MixedCanvas;
+    M.plot.init();
+    try M.page_ctx.init();
+    M.out.init();
+    const in: Input = .{ .viewport = .{ M.w, M.h } };
+    const S = struct {
+        const spec = spec_zig.col(M.panel_style, .{});
+        var ui: ComptimeUi(struct {}, spec, .default) = .{};
+    };
+    // The runtime page with the plot and a region the comptime panel fills.
+    var f = M.page_ctx.ctx.begin(&in);
+    _ = f.open(.none, .{ .size = .{ .fill, .fill } });
+    M.plot.draw(&f, .from("plot"));
+    _ = f.custom(.from("panel"), .{ .size = .{ .px(80), .px(40) } }, 0);
+    f.close();
+    const host = f.end(.{});
+    const r = host.tree.rect(host.tree.find(.from("panel")));
+    const sub = M.interop.regionInput(&in, .{ r.x0, r.y0, r.x1, r.y1 });
+    const guest = S.ui.frame(&sub);
+    const panel_id = @backingInt(Id.from("panel"));
+    try M.interop.compose(&M.out.draw, host.draw, guest.draw, panel_id, &M.out.strings);
+    const composed = M.out.draw;
+    // The same UI in one Frame, in another context.
+    try M.guest_ctx.init();
+    var g = M.guest_ctx.ctx.begin(&in);
+    _ = g.open(.none, .{ .size = .{ .fill, .fill } });
+    M.plot.draw(&g, .from("plot"));
+    _ = g.leaf(.none, M.panel_style);
+    g.close();
+    const one = g.end(.{});
+    try M.expectSamePixels(&composed, one.draw);
+}
