@@ -398,6 +398,9 @@ const Timer = struct {
     wall: u64 = 0,
     cpu: u64 = 0,
     at: [2]u64 = .{ 0, 0 },
+    /// Frames timed, and frames `begin` gave up on (error.NotShown).
+    shown: u32 = 0,
+    missed: u32 = 0,
 
     fn start(t: *Timer) void {
         t.at = .{ clockNs(.MONOTONIC), clockNs(.THREAD_CPUTIME_ID) };
@@ -406,13 +409,15 @@ const Timer = struct {
     fn stop(t: *Timer) void {
         t.wall += clockNs(.MONOTONIC) - t.at[0];
         t.cpu += clockNs(.THREAD_CPUTIME_ID) - t.at[1];
+        t.shown += 1;
     }
 
     fn report(t: *const Timer, fd: i32, name: []const u8) void {
-        const n: f64 = bench_frames * 1000;
+        const n: f64 = @as(f64, @floatFromInt(@max(t.shown, 1))) * 1000;
         const wall_us = @as(f64, @floatFromInt(t.wall)) / n;
         const cpu_us = @as(f64, @floatFromInt(t.cpu)) / n;
-        line(fd, "{s}: wall {d:.1} us, thread cpu {d:.1} us a frame\n", .{ name, wall_us, cpu_us });
+        const format = "{s}: wall {d:.1} us, thread cpu {d:.1} us a frame ({d} not shown)\n";
+        line(fd, format, .{ name, wall_us, cpu_us, t.missed });
     }
 };
 
@@ -458,7 +463,13 @@ test "x11 gpu: frame cost at 2560 x 1440 (LCGF_X11_GPU_BENCH)" {
     // rows, clears the swapchain image and draws the whole list into it.
     var old: Timer = .{};
     for (0..frames) |_| {
-        const fr = try t.frames.begin(d, &t.chain);
+        const fr = t.frames.begin(d, &t.chain) catch |e| switch (e) {
+            error.NotShown => {
+                old.missed += 1;
+                continue;
+            },
+            else => return e,
+        };
         old.start();
         g.gfx.prepare(fr.slot, list, .{}, fx.in.viewport, 1);
         const target: vk.pass.Begin = .{
@@ -474,7 +485,6 @@ test "x11 gpu: frame cost at 2560 x 1440 (LCGF_X11_GPU_BENCH)" {
         _ = try t.frames.present(d, &t.chain, fr);
         old.stop();
     }
-    try t.frames.wait(d);
     old.report(fd, "old whole redraw (into the swapchain image)");
 
     const modes = [_]struct { name: []const u8, rows: bool, damage: Region }{
@@ -489,13 +499,18 @@ test "x11 gpu: frame cost at 2560 x 1440 (LCGF_X11_GPU_BENCH)" {
     for (modes) |m| {
         var tm: Timer = .{};
         for (0..frames) |_| {
-            const f = try t.begin(g, size);
+            const f = t.begin(g, size) catch |e| switch (e) {
+                error.NotShown => {
+                    tm.missed += 1;
+                    continue;
+                },
+                else => return e,
+            };
             tm.start();
             const rows = fx.rows(if (m.rows) list else null);
             try t.present(g, &f, .{ .rows = rows, .damage = m.damage, .clear = clear });
             tm.stop();
         }
-        try t.frames.wait(d);
         tm.report(fd, m.name);
     }
 
@@ -508,12 +523,17 @@ test "x11 gpu: frame cost at 2560 x 1440 (LCGF_X11_GPU_BENCH)" {
         const l = grid(&fx, @intCast(n % 2));
         build.stop();
         try testing.expect(l.damage.pixels() < 2 * 80 * 60);
-        const f = try t.begin(g, size);
+        const f = t.begin(g, size) catch |e| switch (e) {
+            error.NotShown => {
+                draw.missed += 1;
+                continue;
+            },
+            else => return e,
+        };
         draw.start();
         try t.present(g, &f, .{ .rows = fx.rows(l), .damage = l.damage, .clear = clear });
         draw.stop();
     }
-    try t.frames.wait(d);
     draw.report(fd, "one small damage rect, new list");
     build.report(fd, "  (its build, layout and paint)");
 }

@@ -106,6 +106,10 @@ pub const Window = struct {
     /// again.
     stale: bool = false,
 
+    /// How long `begin` waits for the frame two before and for an image. FIFO hands out an
+    /// image within a refresh or two when the window is shown; past this it is not.
+    pub const wait_ns: u64 = 100 * std.time.ns_per_ms;
+
     /// A frame between `begin` and `present`: acquired, its command buffer recording outside
     /// any pass.
     pub const Frame = struct {
@@ -153,7 +157,8 @@ pub const Window = struct {
         if (chain.usage & c.VK_IMAGE_USAGE_TRANSFER_DST_BIT == 0) return error.NoTransferDst;
         var picture = try makePicture(d, &chain);
         errdefer d.destroyImage(&picture);
-        const frames: frame.Frames = try .init(d, g.gfx.desc.frames);
+        var frames: frame.Frames = try .init(d, g.gfx.desc.frames);
+        frames.wait_ns = wait_ns;
         return .{ .surface = surface, .chain = chain, .frames = frames, .picture = picture };
     }
 
@@ -184,6 +189,9 @@ pub const Window = struct {
     /// made again first, and an acquire that finds it out of date makes it again once; either
     /// way the picture is made again and the next `present` draws all of it. Blocks on the
     /// fence of the frame two before and on the acquire (FIFO paces it to the display).
+    /// error.NotShown: no image within `wait_ns` (a hidden, minimised or blanked window, whose
+    /// images the presentation engine keeps); nothing was drawn, the picture and the damage
+    /// owed are as they were, so wait for an event and try again.
     /// error.ZeroExtent: the window is minimised, try again when it has a size;
     /// error.SurfaceLost or DeviceLost: make the window (and for DeviceLost the setup) again.
     pub fn begin(w: *Window, g: *Setup, want: c.VkExtent2D) !Frame {

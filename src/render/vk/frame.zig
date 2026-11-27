@@ -56,6 +56,10 @@ pub const Frames = struct {
     count: u32,
     /// The slot the next `begin` uses.
     next: u32 = 0,
+    /// How long `begin` waits for the slot's last frame and for an image before it gives up
+    /// with error.NotShown. Forever by default; a window that must not block while hidden
+    /// sets a bound (`setup.Window`).
+    wait_ns: u64 = std.math.maxInt(u64),
     pools: [max_frames]c.VkCommandPool = @splat(null),
     cmds: [max_frames]c.VkCommandBuffer = @splat(null),
     fences: [max_frames]c.VkFence = @splat(null),
@@ -104,14 +108,25 @@ pub const Frames = struct {
         f.* = .{ .count = 0 };
     }
 
+    pub const BeginError = Error || error{NotShown};
+
     /// Waits until slot `next` is free, acquires an image and begins the slot's command
     /// buffer. error.OutOfDate: the swapchain must be recreated before drawing (the slot is
-    /// left untouched, so calling again after recreating is fine).
-    pub fn begin(f: *Frames, d: *const Device, chain: *const Swapchain) Error!Frame {
+    /// left untouched, so calling again after recreating is fine). error.NotShown: the slot's
+    /// last frame or an image was not ready within `wait_ns`, as when the presentation engine
+    /// holds every image of a window it is not showing; nothing was touched, so calling again
+    /// later is fine.
+    pub fn begin(f: *Frames, d: *const Device, chain: *const Swapchain) BeginError!Frame {
         const i = f.next;
-        try check(d.fns.vkWaitForFences.?(d.handle, 1, &f.fences[i], c.VK_TRUE, std.math.maxInt(u64)));
+        std.debug.assert(i < f.count);
+        const waited = d.fns.vkWaitForFences.?(d.handle, 1, &f.fences[i], c.VK_TRUE, f.wait_ns);
+        if (waited == c.VK_TIMEOUT) return error.NotShown;
+        try check(waited);
         var index: u32 = 0;
-        try check(d.swapchain.?.vkAcquireNextImageKHR.?(d.handle, chain.handle, std.math.maxInt(u64), f.acquired[i], null, &index));
+        const acquire = d.swapchain.?.vkAcquireNextImageKHR.?;
+        const got = acquire(d.handle, chain.handle, f.wait_ns, f.acquired[i], null, &index);
+        if (got == c.VK_TIMEOUT or got == c.VK_NOT_READY) return error.NotShown;
+        try check(got);
         // Reset only once a submission is sure to follow, or the next wait would never return.
         try check(d.fns.vkResetFences.?(d.handle, 1, &f.fences[i]));
         try check(d.fns.vkResetCommandPool.?(d.handle, f.pools[i], 0));
@@ -186,6 +201,40 @@ const host = @import("host.zig");
 const Renderer = @import("renderer.zig").Renderer;
 const lcgf = @import("lcgf");
 const conformance = lcgf.render_conformance;
+
+test "frame: with every image held elsewhere, begin gives up after wait_ns: NotShown" {
+    var h: swapchain.Headless = undefined;
+    try h.init();
+    defer h.deinit();
+    const d = &h.device;
+    var chain = try Swapchain.init(&h.instance, d, h.surface, .{ .width = 64, .height = 32 }, null);
+    defer chain.deinit(d);
+    var frames = try Frames.init(d, 2);
+    defer frames.deinit(d);
+    frames.wait_ns = 0;
+    // What a compositor does with a window it is not showing: it keeps the images. Here the
+    // test acquires them all itself, with a fence so nothing is left pending.
+    var fence: c.VkFence = null;
+    const info: c.VkFenceCreateInfo = .{ .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+    try check(d.fns.vkCreateFence.?(d.handle, &info, null, &fence));
+    defer d.fns.vkDestroyFence.?(d.handle, fence, null);
+    const acquire = d.swapchain.?.vkAcquireNextImageKHR.?;
+    var held: u32 = 0;
+    while (held < chain.len) : (held += 1) {
+        var index: u32 = 0;
+        const r = acquire(d.handle, chain.handle, 0, null, fence, &index);
+        if (r == c.VK_NOT_READY or r == c.VK_TIMEOUT) break;
+        try check(r);
+        try check(d.fns.vkWaitForFences.?(d.handle, 1, &fence, c.VK_TRUE, std.math.maxInt(u64)));
+        try check(d.fns.vkResetFences.?(d.handle, 1, &fence));
+    }
+    try testing.expect(held >= 1);
+    try testing.expectError(error.NotShown, frames.begin(d, &chain));
+    // Nothing was touched: the slot is the same, and its fence still signalled.
+    try testing.expectEqual(@as(u32, 0), frames.next);
+    const signalled = d.fns.vkWaitForFences.?(d.handle, 1, &frames.fences[0], c.VK_TRUE, 0);
+    try testing.expectEqual(c.VK_SUCCESS, signalled);
+}
 
 test "frame: frames in flight acquire, clear and present a headless swapchain" {
     var h: swapchain.Headless = undefined;
