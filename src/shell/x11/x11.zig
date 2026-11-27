@@ -174,6 +174,15 @@ pub const Connection = struct {
         if (c.extension("RANDR")) |randr| {
             c.randr_event = (try c.reply(c.send(wire.queryExtensionSize("RANDR"), wire.queryExtension, .{"RANDR"})))[10];
             _ = c.send(wire.randr_select_input_size, wire.randrSelectInput, .{ randr, c.setup.root });
+            // The size RandR has now, which the setup's can differ from: Xwayland's setup says
+            // 96 DPI whatever the panel, and its real size would otherwise arrive only with
+            // the first change of the screen.
+            const size = wire.randr_get_screen_info_size;
+            const asked = c.send(size, wire.randrGetScreenInfo, .{ randr, c.setup.root });
+            if (wire.screenInfoSize(try c.reply(asked))) |screen| {
+                c.screen_px = screen.px;
+                c.screen_mm = screen.mm;
+            }
         } else |_| {}
         try c.readScale();
     }
@@ -1753,6 +1762,20 @@ test "x11: the scale follows Xft.dpi and RandR's screen size" {
     try waitScale(&w, 1);
     try testing.expect(w.poll(&ev));
     try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
+
+    // A connection opened while the screen is that size reads it at once, with no change of
+    // the screen to tell it.
+    const half = .{ randr, root, s.width_px, s.height_px, s.width_mm / 2, s.height_mm / 2 };
+    const whole = .{ randr, root, s.width_px, s.height_px, s.width_mm, s.height_mm };
+    _ = c.send(wire.randr_set_screen_size_size, wire.randrSetScreenSize, half);
+    try c.sync();
+    var late: Connection = .{};
+    try late.open(display, "");
+    const opened_at = late.scale;
+    late.close();
+    _ = c.send(wire.randr_set_screen_size_size, wire.randrSetScreenSize, whole);
+    try c.sync();
+    try testing.expectEqual(@as(f32, 2), opened_at);
 }
 
 test "x11: a host's scale override is used in place of the server's, and can be dropped" {

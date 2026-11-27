@@ -526,6 +526,31 @@ pub fn randrSelectInput(b: *Buf, randr: u8, window: u32) void {
     b.zeros(2);
 }
 
+pub const randr_get_screen_info_size = 8;
+
+/// RandR GetScreenInfo (minor 5): the sizes of `window`'s screen and which one is current. The
+/// reply is read by `screenInfoSize`.
+pub fn randrGetScreenInfo(b: *Buf, randr: u8, window: u32) void {
+    b.head(randr, 5, randr_get_screen_info_size / 4);
+    b.int(u32, window);
+}
+
+/// A screen's width in pixels and in millimetres.
+pub const ScreenWidth = struct { px: u16, mm: u16 };
+
+/// The current size in a GetScreenInfo reply, or null when the reply names none: its width in
+/// pixels and millimetres, what a ScreenChangeNotify carries after a change. For a server whose
+/// outputs know their panel (Xwayland), the millimetres are the panel's, where the setup's
+/// are made up to come to 96 DPI.
+pub fn screenInfoSize(r: []const u8) ?ScreenWidth {
+    if (r.len < 32) return null;
+    const sizes: usize = get(u16, r, 20);
+    const current: usize = get(u16, r, 22);
+    const at = 32 + current * 8;
+    if (current >= sizes or r.len < at + 8) return null;
+    return .{ .px = get(u16, r, at), .mm = get(u16, r, at + 4) };
+}
+
 pub const randr_set_screen_size_size = 20;
 
 /// RandR SetScreenSize (minor 7): the screen's size in pixels and millimetres.
@@ -1013,6 +1038,7 @@ test "requests: lengths match the bytes written" {
         .{ change_event_mask_size, changeEventMask, .{ 1, 2 } },
         .{ delete_property_size, deleteProperty, .{ 1, 2 } },
         .{ randr_select_input_size, randrSelectInput, .{ 140, 1 } },
+        .{ randr_get_screen_info_size, randrGetScreenInfo, .{ 140, 1 } },
         .{ openFontSize("cursor"), openFont, .{ 1, "cursor" } },
         .{ create_cursor_size, createCursor, .{ 1, 2, 2 } },
         .{ clear_bitmap_size, clearBitmap, .{ 1, 2 } },
@@ -1054,6 +1080,23 @@ test "resourceDpi: Xft.dpi from the resource string" {
     try testing.expectEqual(@as(?f32, null), resourceDpi("Xft.dpix:\t192\n*dpi: 3\n"));
     try testing.expectEqual(@as(?f32, null), resourceDpi("Xft.dpi:\tbig\n"));
     try testing.expectEqual(@as(?f32, null), resourceDpi(""));
+}
+
+test "screenInfoSize: the current size of a GetScreenInfo reply, null when it names none" {
+    // Two sizes, the second current: 2560 px over 600 mm.
+    var r: [32 + 16]u8 = @splat(0);
+    std.mem.writeInt(u16, r[20..22], 2, .little);
+    std.mem.writeInt(u16, r[22..24], 1, .little);
+    const sizes = [8]u16{ 1280, 720, 300, 169, 2560, 1440, 600, 340 };
+    for (sizes, 0..) |v, k| std.mem.writeInt(u16, r[32 + 2 * k ..][0..2], v, .little);
+    try std.testing.expectEqual(ScreenWidth{ .px = 2560, .mm = 600 }, screenInfoSize(&r).?);
+    try std.testing.expectEqual(@as(f32, 1.25), scale(null, 2560, 600));
+    // A current size past the list, a reply cut short, and no reply body at all.
+    std.mem.writeInt(u16, r[22..24], 2, .little);
+    try std.testing.expectEqual(@as(?ScreenWidth, null), screenInfoSize(&r));
+    std.mem.writeInt(u16, r[22..24], 1, .little);
+    try std.testing.expectEqual(@as(?ScreenWidth, null), screenInfoSize(r[0..44]));
+    try std.testing.expectEqual(@as(?ScreenWidth, null), screenInfoSize(r[0..8]));
 }
 
 test "scale: Xft.dpi wins, then the screen's physical size in quarter steps" {

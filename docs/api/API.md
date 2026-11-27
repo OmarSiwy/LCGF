@@ -7963,6 +7963,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `change_event_mask_size = 16`
 - `delete_property_size = 12`
 - `randr_select_input_size = 12`
+- `randr_get_screen_info_size = 8`
+- `ScreenWidth = struct { px: u16, mm: u16 }`: A screen's width in pixels and in millimetres.
 - `randr_set_screen_size_size = 20`
 - `create_cursor_size = 32`
 - `clear_bitmap_size = 28`
@@ -8009,6 +8011,8 @@ The X11 wire protocol, as far as the X11 shell (x11.zig) needs it: the connectio
 - `fn changeEventMask(b: *Buf, window: u32, mask: u32) void`: Replaces this client's event mask on `window` (used on the root, for PropertyNotify).
 - `fn deleteProperty(b: *Buf, window: u32, property: u32) void`
 - `fn randrSelectInput(b: *Buf, randr: u8, window: u32) void`: RandR SelectInput (minor 4): ScreenChangeNotify events about `window`'s screen, whose code is the extension's first event.
+- `fn randrGetScreenInfo(b: *Buf, randr: u8, window: u32) void`: RandR GetScreenInfo (minor 5): the sizes of `window`'s screen and which one is current.
+- `fn screenInfoSize(r: []const u8) ?ScreenWidth`: The current size in a GetScreenInfo reply, or null when the reply names none: its width in pixels and millimetres, what a ScreenChangeNotify carries after a change.
 - `fn randrSetScreenSize(b: *Buf, randr: u8, window: u32, w: u16, h: u16, mm_w: u32, mm_h: u32) void`: RandR SetScreenSize (minor 7): the screen's size in pixels and millimetres.
 - `fn openFontSize(name: []const u8) usize`
 - `fn openFont(b: *Buf, id: u32, name: []const u8) void`
