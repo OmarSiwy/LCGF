@@ -6,8 +6,12 @@
 //! what the parent accumulates (its cursor) stays in a register until the run ends, and while
 //! the next `simd.lanes` rows are all in the run they are read as vectors straight from the
 //! columns. Each row's arithmetic is `layout.zig`'s, operation for operation, so the columns
-//! come out the same bit for bit: only the order of the loads and stores changes. A run of one
-//! row costs what the row-by-row pass does.
+//! come out the same bit for bit: only the order of the loads and stores changes.
+//!
+//! A run has its own cost, the end of each one, so a tree of short runs is quicker row by row.
+//! `survey` looks at the parents once per frame and sets `Tree.wide` when enough rows are in
+//! runs of a vector or more; the passes that have a run form take it then, and `layout.zig`'s
+//! row-by-row form otherwise.
 
 const std = @import("std");
 const simd = @import("../core/simd.zig");
@@ -37,6 +41,32 @@ inline fn all(comptime L: comptime_int, x: f32) Rows(L) {
 /// the run. One compare of `W` parents.
 pub inline fn whole(parent: []const u32, i: usize, last: usize, p: u32) bool {
     return i + W <= last and @reduce(.And, simd.loadU(parent, i) == simd.u(p));
+}
+
+/// Sets `t.wide`: whether at least an eighth of the rows head a whole vector of siblings, `W`
+/// rows next to each other with one parent. Two compares per vector of rows: which rows have
+/// the next row's parent, then which of those start `W - 1` of them in a row.
+pub fn survey(t: *Tree) void {
+    const n: usize = t.len;
+    std.debug.assert(n <= t.cap);
+    t.wide = false;
+    if (W == 1) return;
+    const Window = @Int(.unsigned, 2 * W);
+    const parent = t.c.parent;
+    var heads: usize = 0;
+    var i: usize = 1;
+    // Bit l: rows i + l and i + l + 1 are siblings.
+    var here: Window = simd.bits(simd.loadU(parent, i) == simd.loadU(parent, i + 1));
+    while (i + 2 * W <= n) : (i += W) {
+        const next: Window = simd.bits(simd.loadU(parent, i + W) == simd.loadU(parent, i + W + 1));
+        // Bit l of `pairs` on to bit l + W - 2: rows i + l to i + l + W - 1 are all siblings.
+        const pairs = here | (next << W);
+        var head = pairs;
+        inline for (1..W - 1) |shift| head &= pairs >> shift;
+        heads += @popCount(@as(simd.Mask, @truncate(head)));
+        here = next;
+    }
+    t.wide = heads * 8 >= n and heads != 0;
 }
 
 /// What `place` reads of a parent, the same for each of its children.
@@ -295,6 +325,34 @@ const testing = std.testing;
 const mem = @import("../core/mem.zig");
 const layout = @import("layout.zig");
 const check = @import("check.zig");
+
+test "survey: wide for a tree of long runs of siblings, not for one of short runs" {
+    var raw: [256 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 256);
+    // Four parents of `2 * W` leaves each.
+    const root = t.push(0, .none, &.{});
+    for (0..4) |_| {
+        const box = t.push(root, .none, &.{});
+        for (0..2 * W) |_| _ = t.push(box, .none, &.{});
+        t.seal(box);
+    }
+    t.seal(root);
+    survey(&t);
+    try testing.expectEqual(W > 1, t.wide);
+    // Twelve parents of one leaf less than a vector each.
+    t.reset();
+    _ = t.push(0, .none, &.{});
+    for (0..12) |_| {
+        const box = t.push(root, .none, &.{});
+        for (0..W - 1) |_| _ = t.push(box, .none, &.{});
+        t.seal(box);
+    }
+    t.seal(root);
+    t.wide = true;
+    survey(&t);
+    try testing.expect(!t.wide);
+}
 
 test "fit: the row-by-row fold's sizes and sums, bit for bit, on random trees with runs" {
     var raw: [1024 * 1024]u8 align(mem.column_align) = undefined;

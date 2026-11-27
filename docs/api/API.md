@@ -261,7 +261,7 @@ Fields: `array`
 ### `TreeOf(..)` (generic struct)
 A tree whose node links (`parent`, `end`, `push`'s rows) are `Index`, the smallest integer that fits the capacity, as `Ui().Index` is in prototype/comptime_ui_probe.zig.
 
-Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`, `t`, `parent`, `id`
+Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`, `wide`, `t`, `parent`, `id`
 
 - `scratch = [_][]const u8{ "fit", "nat", "grow_sum", "grow_inv", "used", "gap_total", "cursor" }`: The layout scratch columns: every layout run rewrites them before reading them (`layout.prepare` zeroes or sets the accumulators, `fit` writes the rest), and nothing outside a layout run reads them.
 - `fn rows(cap: u32) usize`: Rows allocated for `cap` nodes: whole vectors plus one spare, so batch passes may read and write one vector past `len`.
@@ -807,6 +807,7 @@ runs: layout passes over runs of siblings.
 ### Top level
 
 - `fn whole(parent: []const u32, i: usize, last: usize, p: u32) bool`: Whether the `W` rows from `i` are all children of `p` and before `last`: a whole vector of the run.
+- `fn survey(t: *Tree) void`: Sets `t.wide`: whether at least an eighth of the rows head a whole vector of siblings, `W` rows next to each other with one parent.
 - `fn place(t: *Tree) void`: `layout.place` over the whole tree, run by run.
 - `fn fit(t: *Tree, a: usize, first: usize, last: usize) void`: `layout.fit`'s fold over the rows after `first` up to `last`, last row first: each row's natural size on axis `a`, summed or maxed into its parent, a run of siblings at a time.
 

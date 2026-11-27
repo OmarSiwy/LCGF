@@ -333,6 +333,10 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         x: Extras,
         /// Rows of `x` in use, row 0 included.
         xlen: u32 = 1,
+        /// Enough of the rows are in runs of `simd.lanes` siblings or more for the passes to
+        /// take a run at a time (`layout/runs.zig`: `survey` sets it, once per frame). Only a
+        /// choice between two forms of each pass that write the same columns.
+        wide: bool = false,
 
         /// One column per property, grouped by the pass that reads them, so a pass touches only the
         /// cache lines it needs. Every column has `simd.rows(cap)` rows (the padding contract).
@@ -484,6 +488,7 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         pub fn reset(t: *Self) void {
             t.len = 0;
             t.overflow = false;
+            t.wide = false;
             t.xlen = 1;
             t.x.node[0] = 0;
             t.x.row[0] = .defaults;

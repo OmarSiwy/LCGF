@@ -129,6 +129,13 @@ jump those merges added was removed). Each remaining jump was read in the disass
   resize 131,846 instead of 137,663; list 105,779 instead of 103,222 and form 52,807 instead
   of 51,009. Frame time on those two did not move: 9.8 and 9.8 us for list, 15.3 and 15.4 us
   for a built frame of form (pinned core, nine interleaved rounds).
+- `p_finalize` jcc 14 -> 18, back 5 -> 6: one jump per frame on `Tree.wide`, with both forms
+  of the clip loop behind it. `runs.survey` sets the flag when an eighth of the rows head a
+  vector of siblings, and place, fit and finalize take a run at a time only then, so a tree of
+  short runs no longer pays for the ends of its runs: list took 102,988 instead of 105,779
+  instructions a frame and form 49,501 instead of 52,807, against 102,036 and 49,061 before
+  any pass went by runs; springs took 468,970 and resize 132,514, the survey's own cost over
+  464,791 and 131,846.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.

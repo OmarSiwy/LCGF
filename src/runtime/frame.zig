@@ -671,6 +671,9 @@ pub const Frame = struct {
         // each call is its `layout` form). A tree that ran out of rows may have lost them.
         const m = &f.ctx.memos;
         const kept = m.kept[0..simd.selU(t.overflow, 0, m.kept_len)];
+        // Long runs of siblings and nothing kept: the passes take a run at a time
+        // (layout/runs.zig). A size build keeps the one row-by-row copy.
+        if (kept.len == 0 and by_runs) runs.survey(t) else t.wide = false;
         incremental.prepareKept(t, kept);
         incremental.applyTextKept(t, tx, .x, kept);
         incremental.fitKept(t, .x, kept);
@@ -685,7 +688,7 @@ pub const Frame = struct {
         incremental.fitKept(t, .y, kept);
         resolve(t, lv, .y, f.in.viewport[1], kept);
         // Nothing kept: run by run (layout/runs.zig), the same positions bit for bit.
-        if (kept.len == 0 and by_runs) runs.place(t) else incremental.placeKept(t, kept);
+        if (t.wide) runs.place(t) else incremental.placeKept(t, kept);
     }
 
     /// Apply layout transitions after all placement passes, then snap, transform and clip.

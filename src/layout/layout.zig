@@ -143,9 +143,9 @@ inline fn fitOf(t: anytype, fx: anytype, axis: Axis, first: u32, last: u32, comp
     const grow = t.c.grow[a];
     const grow_sum = t.c.grow_sum[a];
 
-    // No flex rules, and a tree whose rows are slices: the fold takes a run of siblings at a
-    // time (runs.zig), the same sums in the same order.
-    const by_runs = comptime !flexed and @TypeOf(t) == *Tree and inline_passes;
+    // No flex rules, and a tree of long runs of siblings (`Tree.wide`): the fold takes a run
+    // at a time (runs.zig), the same sums in the same order.
+    const by_runs = if (comptime !flexed and @TypeOf(t) == *Tree and inline_passes) t.wide else false;
     if (by_runs) runs.fit(t, a, first, last);
     var i: u32 = if (by_runs) first + 1 else last;
     while (i > first + 1) {
@@ -450,7 +450,11 @@ fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.M
         simd.storeF(c.rect[3], j, rounding.vector(mode, y + simd.loadF(c.size[1], j), options.scale, options.origin[1]));
     }
     if (comptime @TypeOf(t) == *Tree) inherit.all(t);
-    clipSpan(t, first, last, comptime @TypeOf(t) == *Tree and inline_passes);
+    if (comptime @TypeOf(t) == *Tree and inline_passes) {
+        // One jump per frame: a tree of long runs of siblings takes a run at a time.
+        if (t.wide) return clipSpan(t, first, last, true);
+    }
+    clipSpan(t, first, last, false);
 }
 
 /// The columns the clip half of finalize touches for each row, read into locals once so its
@@ -938,6 +942,8 @@ test "finalize: run by run and row by row give the same columns, on random trees
             resolve(&t, axis, viewport);
         }
         place(&t);
+        // By runs, whatever the survey would say of this tree.
+        t.wide = true;
         finalize(&t);
         for (0..4) |e| @memcpy(want_vis[e][0..n], t.c.vis[e][0..n]);
         @memcpy(want_clip[0..n], t.c.child_clip[0..n]);
