@@ -277,6 +277,9 @@ restyled with `spec.styled` and `spec.textStyled` (or the overlays' `ct.…Face`
 same frames as their `…Face` twins. A compiled page keeps its fixed parts there and builds the
 parts written at run time in `ct_interop` regions (`fitRegion` when the content sizes the
 region), as the test "regions in a comptime page's dock and toolbar ..." in
-src/widgets/dock.zig does against the same page built all at run time. bench/scenes/data.zig
+src/widgets/dock.zig does against the same page built all at run time. A region's rect is
+snapped to the pixel grid and its content laid out from that corner, so a runtime page that
+builds the same content in place calls `layout.snapSubtree` on the content's node between
+`layoutWith` and `finish` to paint the same pixels at any origin. bench/scenes/data.zig
 times a 450-node table of all 25 kinds (`data`, `data-idle`) and the same table in a comptime
 page's region (`mixed`).

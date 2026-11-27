@@ -583,15 +583,15 @@ const nested = struct {
     const Context = context.Context;
     const items = [_][]const u8{ "R1", "C1", "L1", "Q1" };
     const panes: Panes = .{ .left = false, .top = false, .right = false };
-    // Regions are laid out at whole pixels, so the page puts them there: a toolbar of a fixed
-    // height with the status first, the split at 30% of 480 px.
-    const toolbar: Style = .{ .dir = .x, .size = .{ .fill, .px(40) }, .pad = @splat(6), .gap = 6, .fill = th.panel };
+    // The toolbar centres its items and sizes to its text, so both regions sit at fractional
+    // origins: the status after the button, the list below the toolbar.
+    const toolbar: Style = .{ .dir = .x, .size = .{ .fill, .fit }, .pad = @splat(6), .gap = 6, .cross = .center, .fill = th.panel };
     // A region clips what its owner builds in it, so its run-time twin clips too.
     const status_style: Style = .{ .size = .{ .px(120), .px(24) }, .clip = true };
     const area: Style = .{ .size = .{ .fill, .fill } };
     const PageState = struct { split: f32 = 0.3, dock: State = .{}, files: []const u8 = "Files", log: []const u8 = "Log", save_text: []const u8 = "Save" };
     const spec = spec_zig.col(.{ .size = .{ .fill, .fill } }, .{
-        spec_zig.row(toolbar, .{ interop.region(.status, status_style), base.ct.button(th, .save, .save_text) }),
+        spec_zig.row(toolbar, .{ base.ct.button(th, .save, .save_text), interop.region(.status, status_style) }),
         spec_zig.col(area, .{splitter.ct.splitter(th, .split_handle, .x, .split, .{base.ct.label(th, .files)}, .{ct.dock(th, .main, .dock, panes, .{
             .{interop.fitRegion(.parts, .{})},
             .{base.ct.label(th, .log)},
@@ -609,7 +609,8 @@ const nested = struct {
         _ = f.textf("Selected {d}", .{sel}, base.labelText(&th));
     }
 
-    /// The same page at run time; the regions' places are columns of their styles.
+    /// The same page at run time; the regions' places are columns of their styles, put on the
+    /// pixel grid as a region is (`end`).
     const App = struct {
         split: f32 = 0.3,
         dock: State = .{},
@@ -617,10 +618,10 @@ const nested = struct {
         pub fn build(app: *App, f: *Frame) void {
             _ = f.open(.none, .{ .size = .{ .fill, .fill } });
             _ = f.open(.none, toolbar);
-            _ = f.open(.none, status_style);
+            _ = base.button(f, &th, .from("save"), "Save");
+            _ = f.open(.from("status"), status_style);
             status(f, app.sel);
             f.close();
-            _ = base.button(f, &th, .from("save"), "Save");
             f.close();
             _ = f.open(.none, area);
             splitter.open(f, &th, .from("split"), .x, &app.split);
@@ -628,7 +629,7 @@ const nested = struct {
             splitter.handle(f, &th, .from("split"), .x, app.split);
             var d = open(f, &th, .from("main"), &app.dock, panes);
             d.pane(f, .centre);
-            _ = f.open(.none, .{});
+            _ = f.open(.from("parts_region"), .{});
             parts(f, &app.sel);
             f.close();
             d.pane(f, .bottom);
@@ -638,8 +639,18 @@ const nested = struct {
             f.close();
             f.close();
         }
+
+        /// `Frame.end` with each region's twin snapped as `ct_interop.compose` places a region:
+        /// its rect on the grid, then its content from that corner (`layout.snapSubtree`).
+        pub fn end(_: *App, f: *Frame) context.Output {
+            f.layoutWith(.{});
+            const t = f.tree();
+            inline for (.{ "status", "parts_region" }) |name| layout.snapSubtree(t, t.find(.from(name)));
+            return f.finish();
+        }
     };
 
+    const layout = @import("../layout/layout.zig");
     const page_limits: context.Limits = .{ .nodes = 64, .texts = 16, .customs = 2, .strings = 512, .depth = 24 };
     const guest_limits: context.Limits = .{ .nodes = 16, .texts = 8, .customs = 1, .strings = 128, .depth = 8 };
 
@@ -768,7 +779,7 @@ test "regions in a comptime page's dock and toolbar paint as the page built at r
             const mixed_draw = try mm.frame(i);
             var f = c.begin(i);
             a.build(&f);
-            const out = f.end(.{});
+            const out = a.end(&f);
             try nested.expectSamePaint(out.draw, mixed_draw);
             try testing.expectEqual(a.sel, mm.sel);
         }
@@ -778,9 +789,15 @@ test "regions in a comptime page's dock and toolbar paint as the page built at r
     {
         var f = ctx.begin(&in);
         app.build(&f);
-        _ = f.end(.{});
+        _ = app.end(&f);
     }
     try Step.run(m, &ctx, &app, &in);
+    // Both regions lie off the pixel grid before snapping.
+    const pg = &ctx.trees[ctx.cur];
+    inline for (.{ "status", "parts_region" }) |name| {
+        const node = pg.find(.from(name));
+        try testing.expect(pg.c.pos[1][node] != @round(pg.c.pos[1][node]));
+    }
     // Click the third item: selected in both, focus in the list.
     const t = &ctx.trees[ctx.cur];
     const box = t.rect(t.find(.from("parts")));
