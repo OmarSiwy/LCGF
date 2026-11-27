@@ -107,6 +107,9 @@ pub const Connection = struct {
     /// of Xft.dpi or of the screen asks to read it again at the end of the next `pump`.
     scale: f32 = 1,
     scale_stale: bool = false,
+    /// A scale the host chose (a setting, an environment variable), used in place of what the
+    /// server says: `overrideScale` sets it.
+    scale_override: ?f32 = null,
     /// The screen's size for the fallback, from the setup and then RandR.
     screen_px: u16 = 0,
     screen_mm: u16 = 0,
@@ -178,10 +181,26 @@ pub const Connection = struct {
     fn readScale(c: *Connection) Error!void {
         const r = try c.reply(c.send(wire.get_property_size, wire.getProperty, .{ c.setup.root, c.atoms.RESOURCE_MANAGER, false, 4096 }));
         const len = @min(wire.get(u32, r, 16) * (r[1] / 8), r.len - 32);
-        c.scale = wire.scale(wire.resourceDpi(r[32..][0..len]), c.screen_px, c.screen_mm);
+        const read = wire.scale(wire.resourceDpi(r[32..][0..len]), c.screen_px, c.screen_mm);
+        c.applyScale(c.scale_override orelse read);
+    }
+
+    fn applyScale(c: *Connection, s: f32) void {
+        c.scale = s;
         for (c.windows) |slot| {
-            if (slot) |w| w.setScale(c.scale);
+            if (slot) |w| w.setScale(s);
         }
+    }
+
+    /// Uses `s` physical pixels per logical pixel for every window, now and for those opened
+    /// later, whatever Xft.dpi and the screen's size say: a host's own setting. `null` goes
+    /// back to the server's, read again at the end of the next `pump`.
+    pub fn overrideScale(c: *Connection, s: ?f32) void {
+        c.scale_override = s;
+        if (s) |chosen| {
+            std.debug.assert(chosen > 0);
+            c.applyScale(chosen);
+        } else c.scale_stale = true;
     }
 
     fn loadKeymap(c: *Connection) Error!void {
@@ -1734,6 +1753,17 @@ test "x11: the scale follows Xft.dpi and RandR's screen size" {
     try waitScale(&w, 1);
     try testing.expect(w.poll(&ev));
     try testing.expectEqual([2]f32{ 800, 600 }, ev.in.viewport);
+}
+
+test "x11: a host's scale override is used in place of the server's, and can be dropped" {
+    var c: Connection = .{};
+    c.overrideScale(1.5);
+    try testing.expectEqual(@as(f32, 1.5), c.scale);
+    try testing.expect(!c.scale_stale);
+    // Dropped: the server's scale is read again at the end of the next pump.
+    c.overrideScale(null);
+    try testing.expectEqual(@as(?f32, null), c.scale_override);
+    try testing.expect(c.scale_stale);
 }
 
 test "x11: the cursor the frame asks for is the one the server shows" {
