@@ -28,6 +28,7 @@ const wrap = @import("wrap.zig");
 const baseline = @import("baseline.zig");
 const FlexOptions = @import("flex.zig").FlexOptions;
 const rounding = @import("rounding.zig");
+const runs = @import("runs.zig");
 const Axis = types.Axis;
 
 const W = simd.lanes;
@@ -445,63 +446,179 @@ fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.M
         simd.storeF(c.rect[3], j, rounding.vector(mode, y + simd.loadF(c.size[1], j), options.scale, options.origin[1]));
     }
     if (comptime @TypeOf(t) == *Tree) inherit.all(t);
-    const transformed = comptime @TypeOf(t) == *Tree or (@hasDecl(@TypeOf(t.*), "has_transforms") and @TypeOf(t.*).has_transforms);
-    const V4 = @Vector(4, f32);
-    const sign: V4 = .{ 1, 1, -1, -1 };
-    const everything: V4 = @splat(-inf);
-    const parent = c.parent;
-    const rect = c.rect;
-    const vis = c.vis;
-    const child_clip = c.child_clip;
-    const clips_ = c.clips;
-    const visible = c.visible;
-    const extra = c.extra;
-    const xrow = t.x.row;
+    clipSpan(t, first, last, comptime @TypeOf(t) == *Tree and inline_passes);
+}
+
+/// The columns the clip half of finalize touches for each row, read into locals once so its
+/// loops index them directly instead of reloading each slice from the struct.
+inline fn clipCols(t: anytype) ClipCols(@TypeOf(t)) {
+    return .{
+        .rect = t.c.rect,
+        .vis = t.c.vis,
+        .child_clip = t.c.child_clip,
+        .clips = t.c.clips,
+        .visible = t.c.visible,
+        .extra = t.c.extra,
+        .xrow = t.x.row,
+    };
+}
+
+/// `T`, or what it points at.
+fn Pointee(comptime T: type) type {
+    return if (@typeInfo(T) == .pointer) @typeInfo(T).pointer.child else T;
+}
+
+fn ClipCols(comptime T: type) type {
+    const C = Pointee(@FieldType(Pointee(T), "c"));
+    const X = Pointee(@FieldType(Pointee(T), "x"));
+    return struct {
+        rect: @FieldType(C, "rect"),
+        vis: @FieldType(C, "vis"),
+        child_clip: @FieldType(C, "child_clip"),
+        clips: @FieldType(C, "clips"),
+        visible: @FieldType(C, "visible"),
+        extra: @FieldType(C, "extra"),
+        xrow: @FieldType(X, "row"),
+    };
+}
+
+/// The clip half of finalize over rows [first, last): each row's rect cut to its parent's clip.
+/// `by_runs` takes a run of siblings at a time (`clipRuns`), `*Tree` only; the same columns
+/// either way.
+fn clipSpan(t: anytype, first: u32, last: u32, comptime by_runs: bool) void {
+    std.debug.assert(first < last);
+    std.debug.assert(last <= t.len);
     // The root is its own parent: it reads its own row before writing it, so that row starts as
     // "no clip". This replaces a per-row `i == 0` select on the chain below.
-    if (first == 0) child_clip[0] = everything;
-    for (first..last) |i| {
-        const local: [4]f32 = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] };
-        const inset = geometry.expand(local, @splat(-xrow[extra[i]].border));
-        var screen = local;
-        var inner_rect = inset;
-        // A row whose scope is 0 inherits the defaults: it takes hits and nothing moves it, so
-        // there is no participation to mask by and no matrix to load and test. One jump on
-        // that (nearly every row: well predicted). A size build asks every row, as do the
-        // comptime front end's views, whose scopes are tables.
-        const scoped = !inline_passes or @TypeOf(t) != *Tree or c.scope[i] != 0;
-        if (scoped) {
-            @branchHint(.unlikely);
-            c.sense[i] &= 0 -% @as(u8, @intFromBool(t.x.row[c.scope[i]].active_participation.hit));
-            if (comptime transformed) {
-                const world = geometry.worldAt(t, i);
-                if (!inline_passes or !geometry.isIdentity(world)) {
-                    screen = geometry.transformRect(local, world);
-                    inner_rect = geometry.transformRect(inset, world);
-                }
-            }
-        } else if (std.debug.runtime_safety) {
-            std.debug.assert(t.x.row[0].active_participation.hit);
-            std.debug.assert(geometry.isIdentity(t.x.row[0].world));
-        }
-        const r = @as(V4, screen) * sign;
-        // child_clip[i] feeds the next row whose parent is i, so the path from this load to
-        // that store is the pass's latency chain: keep it to one max. The clip-or-not select
-        // is on the other operand, off the chain (docs/perf/chains.md).
-        const inherited: V4 = child_clip[parent[i]];
-        const v = simd.maxF(r, inherited);
-        // Children are clipped to the area inside the border. In the
-        // (min, -max) form, insetting all four edges is one add.
-        const clips: @Vector(4, bool) = @splat(clips_[i] != 0);
-        const inner = @select(f32, clips, @as(V4, inner_rect) * sign, everything);
-        child_clip[i] = simd.maxF(inherited, inner);
-        const out = v * sign;
-        vis[0][i] = out[0];
-        vis[1][i] = out[1];
-        vis[2][i] = out[2];
-        vis[3][i] = out[3];
-        visible[i] = @intFromBool(out[0] < out[2]) & @intFromBool(out[1] < out[3]);
+    if (first == 0) t.c.child_clip[0] = @splat(-inf);
+    if (by_runs) return clipRuns(t, first, last);
+    const k = clipCols(t);
+    const parent = t.c.parent;
+    for (first..last) |i| clipRow(t, k, i, k.child_clip[parent[i]]);
+}
+
+/// `clipSpan` run by run (runs.zig): a run's rows all take their parent's clip, so it is read
+/// once. The root goes first and alone: its children share its parent row and read what it
+/// writes.
+fn clipRuns(t: *Tree, first: u32, last: u32) void {
+    std.debug.assert(first < last);
+    std.debug.assert(last <= t.len);
+    const k = clipCols(t);
+    const parent = t.c.parent;
+    var i: usize = first;
+    if (first == 0) {
+        clipRow(t, k, 0, k.child_clip[0]);
+        i = 1;
     }
+    // Ends when every row is done: each turn does at least row `i`.
+    while (i < last) {
+        const p = parent[i];
+        const wide = W > 1 and i + W <= last and parent[i + W - 1] == p and parent[i + 1] == p;
+        if (wide) i = clipWide(t, i, last, p);
+        const inherited: Edges = k.child_clip[p];
+        while (i < last and parent[i] == p) : (i += 1) clipRow(t, k, i, inherited);
+    }
+}
+
+/// A rect's four edges, or a clip's, as one value.
+const Edges = @Vector(4, f32); // tidy: allow(fixed-vector-width) a rect's four values, not lanes
+
+/// Row `i`'s screen rect cut to `inherited`, its parent's clip: `vis`, `visible`, and the clip
+/// it hands its own children.
+// tidy: allow-fn(inline-always-large) the pass's row body, shared by its two loops
+// tidy: allow-fn(large-generic-function) one copy per tree type, as the loop it came from
+inline fn clipRow(t: anytype, k: anytype, i: usize, inherited: Edges) void {
+    const transformed = comptime @TypeOf(t) == *Tree or
+        (@hasDecl(@TypeOf(t.*), "has_transforms") and @TypeOf(t.*).has_transforms);
+    const sign: Edges = .{ 1, 1, -1, -1 };
+    const everything: Edges = @splat(-inf);
+    const c = &t.c;
+    std.debug.assert(i < t.len);
+    const local: [4]f32 = .{ k.rect[0][i], k.rect[1][i], k.rect[2][i], k.rect[3][i] };
+    const inset = geometry.expand(local, @splat(-k.xrow[k.extra[i]].border));
+    var screen = local;
+    var inner_rect = inset;
+    // A row whose scope is 0 inherits the defaults: it takes hits and nothing moves it, so
+    // there is no participation to mask by and no matrix to load and test. One jump on
+    // that (nearly every row: well predicted). A size build asks every row, as do the
+    // comptime front end's views, whose scopes are tables.
+    const scoped = !inline_passes or @TypeOf(t) != *Tree or c.scope[i] != 0;
+    if (scoped) {
+        @branchHint(.unlikely);
+        c.sense[i] &= 0 -% @as(u8, @intFromBool(t.x.row[c.scope[i]].active_participation.hit));
+        if (comptime transformed) {
+            const world = geometry.worldAt(t, i);
+            if (!inline_passes or !geometry.isIdentity(world)) {
+                screen = geometry.transformRect(local, world);
+                inner_rect = geometry.transformRect(inset, world);
+            }
+        }
+    } else if (std.debug.runtime_safety) {
+        std.debug.assert(t.x.row[0].active_participation.hit);
+        std.debug.assert(geometry.isIdentity(t.x.row[0].world));
+    }
+    const r = @as(Edges, screen) * sign;
+    // child_clip[i] feeds the next row whose parent is i, so the path from this load to
+    // that store is the pass's latency chain: keep it to one max. The clip-or-not select
+    // is on the other operand, off the chain (docs/perf/chains.md).
+    const v = simd.maxF(r, inherited);
+    // Children are clipped to the area inside the border. In the
+    // (min, -max) form, insetting all four edges is one add.
+    const clips: @Vector(4, bool) = @splat(k.clips[i] != 0);
+    const inner = @select(f32, clips, @as(Edges, inner_rect) * sign, everything);
+    k.child_clip[i] = simd.maxF(inherited, inner);
+    const out = v * sign;
+    k.vis[0][i] = out[0];
+    k.vis[1][i] = out[1];
+    k.vis[2][i] = out[2];
+    k.vis[3][i] = out[3];
+    k.visible[i] = @intFromBool(out[0] < out[2]) & @intFromBool(out[1] < out[3]);
+}
+
+/// `clipRow` for the whole vectors of a run: rows from `first` while each next `W` are all
+/// children of `p` and none has an extras row, its own or inherited (nearly every row: no
+/// border to inset by, nothing that moves it). Returns the row after; `clipRow` takes the rest
+/// of the run. Out of line, so a short run pays for none of it.
+noinline fn clipWide(t: *Tree, first: usize, last: usize, p: u32) usize {
+    std.debug.assert(first + W <= last);
+    std.debug.assert(p < first);
+    const c = &t.c;
+    const k = clipCols(t);
+    const parent = c.parent;
+    const scope = c.scope;
+    const inherited: [4]f32 = k.child_clip[p];
+    // Row 0 of the extras is the defaults, the row `clipRow` reads for each of these.
+    const amount = simd.f(-t.x.row[0].border);
+    const sign = [4]f32{ 1, 1, -1, -1 };
+    const zero = simd.u(0);
+    const no: simd.Bytes = @splat(0);
+    const yes: simd.Bytes = @splat(1);
+    var i = first;
+    while (runs.whole(parent, i, last, p)) : (i += W) {
+        const plain = (simd.loadU(k.extra, i) == zero) & (simd.loadU(scope, i) == zero);
+        if (!@reduce(.And, plain)) break;
+        var local: [4]simd.F = undefined;
+        inline for (0..4) |e| local[e] = simd.loadF(k.rect[e], i);
+        // geometry.expand by `amount` on every edge.
+        var inset: [4]simd.F = undefined;
+        inline for (0..2) |e| inset[e] = local[e] - amount;
+        inline for (2..4) |e| inset[e] = local[e] + amount;
+        const clips = @as(simd.Bytes, k.clips[i..][0..W].*) != no;
+        var out: [4]simd.F = undefined;
+        var handed: [4]simd.F = undefined;
+        inline for (0..4) |e| {
+            const edge = simd.f(inherited[e]);
+            const flip = simd.f(sign[e]);
+            out[e] = simd.maxF(local[e] * flip, edge) * flip;
+            handed[e] = simd.maxF(edge, @select(f32, clips, inset[e] * flip, simd.f(-inf)));
+            simd.storeF(k.vis[e], i, out[e]);
+        }
+        const shown = (out[0] < out[2]) & (out[1] < out[3]);
+        k.visible[i..][0..W].* = @select(u8, shown, yes, no);
+        // Each row's four edges side by side, as the column stores them.
+        k.child_clip[i..][0..W].* = @bitCast(std.simd.interlace(handed));
+    }
+    return i;
 }
 
 /// Diagonal: every pass in order, for text that does not wrap (or whose
@@ -543,6 +660,7 @@ pub fn runFlexOpts(t: *Tree, fx: *const Flex, tx: *Texts, viewport: [2]f32, comp
 
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
+const check = @import("check.zig");
 const Strings = @import("../core/strings.zig").Strings;
 const Id = types.Id;
 
@@ -796,6 +914,44 @@ test "finalize: a clipping parent insets by its border and hides what lies outsi
     try testing.expectEqual(108, c.vis[2][Scene.para]);
     try testing.expectEqual(0, c.visible[Scene.para]);
     try testing.expectEqual(1, c.visible[Scene.col]);
+}
+
+test "finalize: run by run and row by row give the same columns, on random trees with runs" {
+    var raw: [1024 * 1024]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &raw };
+    var t = Tree.init(&carver, 1000);
+    var prng: std.Random.DefaultPrng = .init(0xc11b);
+    var want_vis: [4][1000]f32 = undefined;
+    var want_clip: [1000][4]f32 = undefined;
+    var want_visible: [1000]u8 = undefined;
+    var want_sense: [1000]u8 = undefined;
+    for (0..200) |_| {
+        check.randomRuns(&t, prng.random(), 1 + prng.random().uintLessThan(u32, t.cap));
+        const n = t.len;
+        prepare(&t);
+        for ([2]Axis{ .x, .y }, [2]f32{ 1280, 800 }) |axis, viewport| {
+            fit(&t, axis);
+            resolve(&t, axis, viewport);
+        }
+        place(&t);
+        finalize(&t);
+        for (0..4) |e| @memcpy(want_vis[e][0..n], t.c.vis[e][0..n]);
+        @memcpy(want_clip[0..n], t.c.child_clip[0..n]);
+        @memcpy(want_visible[0..n], t.c.visible[0..n]);
+        @memcpy(want_sense[0..n], t.c.sense[0..n]);
+        // Reference: row by row over the same rects.
+        for (0..4) |e| @memset(t.c.vis[e], std.math.nan(f32));
+        @memset(t.c.visible, 0xff);
+        clipSpan(&t, 0, n, false);
+        for (0..4) |e| {
+            const got: []const u32 = @ptrCast(t.c.vis[e][0..n]);
+            try testing.expectEqualSlices(u32, @ptrCast(want_vis[e][0..n]), got);
+        }
+        const got_clip: []const u32 = @ptrCast(t.c.child_clip[0..n]);
+        try testing.expectEqualSlices(u32, @ptrCast(want_clip[0..n]), got_clip);
+        try testing.expectEqualSlices(u8, want_visible[0..n], t.c.visible[0..n]);
+        try testing.expectEqualSlices(u8, want_sense[0..n], t.c.sense[0..n]);
+    }
 }
 
 test "snapSubtree: a subtree rounds from its root's snapped corner, not the window's" {

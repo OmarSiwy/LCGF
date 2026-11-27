@@ -29,6 +29,9 @@ export fn p_place(t: *Tree) void {
 export fn p_finalize(t: *Tree) void {
     lcgf.layout.finalize(t);
 }
+export fn p_runs_place(t: *Tree) void {
+    lcgf.runs.place(t);
+}
 export fn p_coefs(t: *const Tree, k: *lcgf.coefs.Coefs) void {
     lcgf.coefs.coefs(t, k, .x);
 }

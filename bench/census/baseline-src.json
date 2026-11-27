@@ -115,8 +115,8 @@
     "short_fwd": 0
   },
   "p_finalize": {
-    "back": 2,
-    "jcc": 5,
+    "back": 5,
+    "jcc": 14,
     "short_fwd": 0
   },
   "p_fit": {
@@ -298,6 +298,11 @@
     "jcc": 51,
     "back": 23,
     "short_fwd": 11
+  },
+  "p_runs_place": {
+    "back": 3,
+    "jcc": 9,
+    "short_fwd": 0
   },
   "p_sdf_distances": {
     "back": 9,

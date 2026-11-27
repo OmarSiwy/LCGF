@@ -35,6 +35,46 @@ pub fn randomTree(t: *Tree, r: std.Random, n: u32) void {
     }
 }
 
+/// `randomTree` with runs of siblings: now and then the innermost open node gets up to 40
+/// leaves in a row, so a pass that works run by run (runs.zig) meets runs of every length
+/// around a whole vector. Sizes are fractions, so a sum taken in another order would round
+/// differently, and a few nodes clip or have a border or an opacity (an extras row).
+pub fn randomRuns(t: *Tree, r: std.Random, n: u32) void {
+    std.debug.assert(n > 0);
+    std.debug.assert(n <= t.cap);
+    t.reset();
+    var open: [64]u32 = undefined;
+    var depth: usize = 1;
+    open[0] = t.push(0, .none, &randomStyle(r));
+    while (t.len < n) {
+        if (depth > 1 and (depth == open.len or r.uintLessThan(u32, 4) == 0)) {
+            depth -= 1;
+            t.seal(open[depth]);
+            continue;
+        }
+        if (r.uintLessThan(u32, 3) == 0) {
+            var leaves = 1 + r.uintLessThan(u32, 40);
+            while (leaves > 0 and t.len < n) : (leaves -= 1) {
+                var s = randomStyle(r);
+                s.size[0] = .px(@as(f32, @floatFromInt(1 + r.uintLessThan(u32, 4000))) / 97);
+                s.clip = r.uintLessThan(u32, 16) == 0;
+                if (r.uintLessThan(u32, 24) == 0) s.border = 1.5;
+                if (r.uintLessThan(u32, 24) == 0) s.opacity = 0.5;
+                t.seal(t.push(open[depth - 1], .none, &s));
+            }
+            continue;
+        }
+        var s = randomStyle(r);
+        s.clip = r.uintLessThan(u32, 8) == 0;
+        open[depth] = t.push(open[depth - 1], .none, &s);
+        depth += 1;
+    }
+    while (depth > 0) {
+        depth -= 1;
+        t.seal(open[depth]);
+    }
+}
+
 fn randomStyle(r: std.Random) types.Style {
     var s: types.Style = .{};
     s.dir = if (r.boolean()) .x else .y;

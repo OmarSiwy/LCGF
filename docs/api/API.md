@@ -734,6 +734,7 @@ Checks for rewritten layout passes: random trees, and the prototype's passes kep
 
 - `tolerance: f32 = 4e-3`: How far a regrouped pass may drift from the reference, in pixels.
 - `fn randomTree(t: *Tree, r: std.Random, n: u32) void`: Pushes `n` nodes (n <= t.cap) of random structure and style: every sizing mode, padding, gaps, floating, shrinking, min/max, alignment, offsets and scroll.
+- `fn randomRuns(t: *Tree, r: std.Random, n: u32) void`: `randomTree` with runs of siblings: now and then the innermost open node gets up to 40 leaves in a row, so a pass that works run by run (runs.zig) meets runs of every length around a whole vector.
 - `fn resolveRef(t: *Tree, axis: Axis, viewport: f32) void`: prototype/ui.zig `layout.resolve`, verbatim: the reference for the K-coefficient form.
 - `fn maxDiff(want: []const f32, got: []const f32, n: u32) f32`: Largest absolute difference between two columns over the first `n` rows.
 
@@ -797,6 +798,15 @@ Fields: `cap`, `count`, `c`
 
 Fields: `order`, `parent`, `start`, `depth`
 
+
+## `lcgf.runs` (src/layout/runs.zig)
+
+runs: layout passes over runs of siblings.
+
+### Top level
+
+- `fn whole(parent: []const u32, i: usize, last: usize, p: u32) bool`: Whether the `W` rows from `i` are all children of `p` and before `last`: a whole vector of the run.
+- `fn place(t: *Tree) void`: `layout.place` over the whole tree, run by run.
 
 ## `lcgf.incremental` (src/layout/incremental.zig)
 

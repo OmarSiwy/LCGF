@@ -40,6 +40,9 @@ const scroll = @import("../layout/scroll.zig");
 const rounding = @import("../layout/rounding.zig");
 const incremental = @import("../layout/incremental.zig");
 const levels = @import("../layout/levels.zig");
+const runs = @import("../layout/runs.zig");
+/// A size build keeps the one row-by-row copy of each pass.
+const by_runs = @import("builtin").mode != .small;
 const paint = @import("../draw/paint.zig");
 const outlines = @import("../draw/outline.zig");
 const scheduler = @import("scheduler.zig");
@@ -681,7 +684,8 @@ pub const Frame = struct {
         incremental.applyTextKept(t, tx, .y, kept);
         incremental.fitKept(t, .y, kept);
         resolve(t, lv, .y, f.in.viewport[1], kept);
-        incremental.placeKept(t, kept);
+        // Nothing kept: run by run (layout/runs.zig), the same positions bit for bit.
+        if (kept.len == 0 and by_runs) runs.place(t) else incremental.placeKept(t, kept);
     }
 
     /// Apply layout transitions after all placement passes, then snap, transform and clip.

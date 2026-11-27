@@ -110,6 +110,15 @@ jump those merges added was removed). Each remaining jump was read in the disass
   ones between the two. Without them every node paid for the rows: on bench/vs/lcgf
   (x86_64_v3, 3,000 polls) springs took 741,973 instead of 592,062 instructions a frame and
   list 141,503 instead of 102,181.
+- `p_finalize` jcc 5 -> 14, back 2 -> 5, and the new `p_runs_place` (jcc 9, back 3), no
+  short forward jump: the passes that take a run of siblings at a time (`layout/runs.zig`).
+  Their jumps are the ends of a run and the choice between whole vectors and single rows, one
+  set per run rather than per row; the rows of a whole vector have none. A run's parent is read
+  once and its cursor stays in a register, where the row-by-row pass read the parent again and
+  carried the cursor through memory for every child. On bench/vs/lcgf (x86_64_v3, 3,000
+  polls) with both passes by runs, springs (rows of 25 bars) took 491,116 instead of 586,856
+  instructions a frame and resize 137,663 instead of 156,938; list and form, whose runs are
+  one to three rows, took 103,222 instead of 102,036 and 51,009 instead of 49,061.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.
