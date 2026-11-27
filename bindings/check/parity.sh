@@ -41,7 +41,7 @@ median() { sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
 
 fail=0
 printf '%-8s %-5s %12s %12s %8s %8s\n' scene lang insns/frame cycles/frame insns× cycles×
-for scene in form list text springs resize idle kit canvas; do
+for scene in form list text springs resize idle kit canvas act; do
     for lang in zig cpp rust; do : >"$tmp/$lang.i"; : >"$tmp/$lang.c"; done
     r=0
     while [ $r -lt "$rounds" ]; do

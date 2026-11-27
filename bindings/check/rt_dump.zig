@@ -1,7 +1,7 @@
 //! The Zig side of the runtime front end's gate (bindings/check/run.sh): bench/scenes/' scenes
 //! built with `Context` and `Frame` in Zig, every frame, in the dump format of dump.zig.
 //!
-//!   lcgf-rt-dump <form|list|text|springs|resize|idle|kit> <frames> <out.bin> [nodes depth]
+//!   lcgf-rt-dump <form|list|text|springs|resize|idle|kit|canvas|act> <frames> <out.bin> [nodes depth]
 //!
 //! `kit` is the gate's own scene (`Kit`): formatted text, the widgets by options, and springs
 //! and tweens on a colour and an array, as C++ and Rust write them. `canvas` (`Plot`) is a
@@ -54,7 +54,8 @@ pub fn main(init: std.process.Init) !void {
         return std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = out_path, .data = std.mem.sliceAsBytes(words) });
     }
     const plot_scene = std.mem.eql(u8, name, "canvas");
-    const kit_scene = plot_scene or std.mem.eql(u8, name, "kit");
+    const act_scene = std.mem.eql(u8, name, "act");
+    const kit_scene = plot_scene or act_scene or std.mem.eql(u8, name, "kit");
     const k_scene = if (kit_scene) 0 else for (scenes.vs, 0..) |s, k| {
         if (std.mem.eql(u8, s.name, name)) break k;
     } else return error.UnknownScene;
@@ -78,13 +79,13 @@ pub fn main(init: std.process.Init) !void {
     var in: lcgf.input.Input = .{};
     var out: std.ArrayList(u8) = .empty;
     for (0..frames) |k| {
-        if (plot_scene) Plot.input(&in, @intCast(k)) else if (kit_scene) Kit.input(&in, @intCast(k)) else s.input(&in, @intCast(k));
+        if (plot_scene) Plot.input(&in, @intCast(k)) else if (act_scene) Act.input(&in, @intCast(k)) else if (kit_scene) Kit.input(&in, @intCast(k)) else s.input(&in, @intCast(k));
         // The bench scenes only hover; the gate also presses, so clicks and drags cross too.
         in.buttons = .{ .left = k % 6 < 2 };
         // Whether a frame is needed crosses the seam too (an `int` in lcgf.h).
         try out.appendSlice(arena, std.mem.asBytes(&@as(u32, @intFromBool(ctx.needsFrame(&in)))));
         var f = ctx.begin(&in);
-        if (plot_scene) plot.build(&f, @intCast(k)) else if (kit_scene) kit.build(&f, &th, @intCast(k)) else s.build(&f, &th);
+        if (plot_scene) plot.build(&f, @intCast(k)) else if (act_scene) Act.build(&f, @intCast(k)) else if (kit_scene) kit.build(&f, &th, @intCast(k)) else s.build(&f, &th);
         const o = f.end(.{});
         const d = o.draw;
         const put = struct {
@@ -120,6 +121,40 @@ pub fn main(init: std.process.Init) !void {
     }
     try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = out_path, .data = out.items });
 }
+
+/// The gate's scene for A7's first batch of Frame calls through lcgf.h: interact, set_fill,
+/// set_cursor, drag, last_rect, held_rect, focus_scope, outline, animate_layout, sequence,
+/// transition and set_fill_animated. C++ (rt_check.cpp) and Rust (rt_check.rs) build the same.
+const Act = struct {
+    fn input(in: *lcgf.input.Input, k: u32) void {
+        in.viewport = .{ 400, 300 };
+        in.pointer = .{ @as(f32, @floatFromInt((k * 11) % 300)) + 0.5, @as(f32, @floatFromInt((k * 5) % 120)) + 0.5 };
+        in.dt = 1.0 / 60.0;
+    }
+
+    fn build(f: *lcgf.frame.Frame, k: u32) void {
+        const Key = lcgf.keyframes.Key;
+        _ = f.open(.from("act"), .{ .pad = @splat(8), .gap = 6 });
+        f.focusScope(f.open(.from("row"), .{ .dir = .x, .gap = 6 }), 1);
+        const keys = [_]Key{ .{ .at = 0, .value = 20 }, .{ .at = 0.5, .value = 90, .ease = .out_cubic }, .{ .at = 1, .value = 40 } };
+        const w = f.sequence(.from("seq"), &keys);
+        const hot = f.leaf(.from("hot"), .{ .size = .{ .px(w), .px(30) }, .fill = .rgb(50, 50, 60) });
+        const r = f.interact(hot, .{ .hover = true, .click = true, .drag = true });
+        if (r.hovered) f.setFill(hot, .rgb(200, 120, 40));
+        f.setCursor(.pointer, r.hovered);
+        const d = f.drag(.from("hot"));
+        const card = f.leaf(.from("card"), .{ .size = .{ .px(60 + d[0]), .px(24) }, .fill = .rgb(30, 30, 30) });
+        const tint = f.transition(.from("tint"), if (r.held) .rgb(40, 160, 40) else .rgb(160, 40, 40), .{ .seconds = 0.25 });
+        f.setFillAnimated(card, .from("cardfill"), tint, .{ .seconds = 0.5, .ease = .linear });
+        _ = f.outline(card, .{ .width = 2, .color = .rgb(240, 240, 0), .offset = 1, .radii = if (k % 2 == 0) .{ 3, 3, 3, 3 } else null });
+        f.animateLayout(card, .{});
+        f.close();
+        const last = f.lastRect(.from("card"));
+        const held = f.heldRect();
+        _ = f.leaf(.from("echo"), .{ .size = .{ .px(last.x1 - last.x0 + held.x1 - held.x0), .px(8) }, .fill = .rgb(90, 90, 200) });
+        f.close();
+    }
+};
 
 /// The gate's scene for what lcgf.h's runtime functions add to the reference widgets: a label
 /// formatted into the frame (`lcgf_frame_text_written` with the label style), a text leaf (`lcgf_frame_text_written`),

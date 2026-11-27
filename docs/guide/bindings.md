@@ -144,6 +144,10 @@ A UI built in code each frame, as a Zig program does with `ctx.begin` and `f.ope
   (`lcgf_frame_view`), and `Open` and `Leaf` store the row into them as Zig's inlined `open` does:
   no call. The stores, one per column, are generated from Zig's types (`lcgf/rows.hpp`,
   `rows.rs`, `zig build abi-gen`); only pushRow's few decisions are written by hand. Text, widgets, `Close`, `Custom` and `Animate` are one direct call each.
+- **The rest of the frame is the Zig calls by name**: `Interact`, `Drag`, `LastRect`,
+  `HeldRect`, `SetFill`, `SetCursor`, `FocusScope`, `Outline`, `AnimateLayout`, `Sequence`,
+  `Transition` and `SetFillAnimated` (Rust: `interact`, `drag`, ..., `set_fill_animated`), each
+  one call to its `lcgf_frame_*` (`Frame.interact` and so on).
 - **The C API is generated.** `lcgf.h` comes from src/abi/api.zig (`zig build abi-gen`): each
   call is a Zig function under its mechanical name (`Frame.open` is `lcgf_frame_open`,
   `base.button` is `lcgf_button`), and each type crosses as itself (an extern struct) or as

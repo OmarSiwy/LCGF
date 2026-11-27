@@ -9,7 +9,8 @@ const simd = @import("../core/simd.zig");
 const tweens = @import("tweens.zig");
 const Ease = tweens.Ease;
 
-pub const Key = struct {
+/// An extern struct: C, C++ and Rust pass a list of them as it is (`lcgf_key`).
+pub const Key = extern struct {
     /// Seconds from the start. Non-decreasing along the list.
     at: f32,
     value: f32,

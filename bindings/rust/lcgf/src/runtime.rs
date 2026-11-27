@@ -566,6 +566,51 @@ impl<'f> Frame<'f> {
             i
         }
     }
+    /// `node` answers the pointer as `sense` says (`Frame.interact`): bits of `Sense`
+    /// (1 hover, 2 click, 4 drag, 8 focus).
+    pub fn interact(&mut self, node: u32, sense: u8) -> Response {
+        Response(unsafe { sys::lcgf_frame_interact(self.f, node, sense) })
+    }
+    /// Pointer movement this frame while `id` is dragged (`Frame.drag`).
+    pub fn drag(&mut self, id: Id) -> [f32; 2] {
+        let mut d = [0.0f32; 2];
+        unsafe { sys::lcgf_frame_drag(self.f, id.0, &mut d) };
+        d
+    }
+    /// Where `id` was laid out last frame (`Frame.lastRect`).
+    pub fn last_rect(&mut self, id: Id) -> sys::lcgf_rect {
+        unsafe { sys::lcgf_frame_last_rect(self.f, id.0) }
+    }
+    /// The held widget's rect last frame (`Frame.heldRect`).
+    pub fn held_rect(&mut self) -> sys::lcgf_rect {
+        unsafe { sys::lcgf_frame_held_rect(self.f) }
+    }
+    pub fn set_fill(&mut self, node: u32, color: u32) {
+        unsafe { sys::lcgf_frame_set_fill(self.f, node, color) }
+    }
+    /// `cursor` (a `types.Cursor` tag) while `when` (`Frame.setCursor`).
+    pub fn set_cursor(&mut self, cursor: u32, when: bool) {
+        unsafe { sys::lcgf_frame_set_cursor(self.f, cursor, when) }
+    }
+    pub fn focus_scope(&mut self, node: u32, kind: u8) {
+        unsafe { sys::lcgf_frame_focus_scope(self.f, node, kind) }
+    }
+    pub fn outline(&mut self, node: u32, o: &sys::lcgf_outline) -> u32 {
+        unsafe { sys::lcgf_frame_outline(self.f, node, o) }
+    }
+    pub fn animate_layout(&mut self, node: u32, sp: Spring) {
+        unsafe { sys::lcgf_frame_animate_layout(self.f, node, *c::<Spring, sys::lcgf_spring>(&sp)) }
+    }
+    /// `keys` played once from the first frame that asks for `id` (`Frame.sequence`).
+    pub fn sequence(&mut self, id: Id, keys: &[sys::lcgf_key]) -> f32 {
+        unsafe { sys::lcgf_frame_sequence(self.f, id.0, keys.as_ptr(), keys.len()) }
+    }
+    pub fn transition(&mut self, id: Id, target: u32, tr: &sys::lcgf_transition) -> u32 {
+        unsafe { sys::lcgf_frame_transition(self.f, id.0, target, tr) }
+    }
+    pub fn set_fill_animated(&mut self, node: u32, id: Id, color: u32, tr: &sys::lcgf_transition) {
+        unsafe { sys::lcgf_frame_set_fill_animated(self.f, node, id.0, color, tr) }
+    }
     pub fn text(&mut self, s: &str, ts: &TextStyle) -> u32 {
         unsafe { sys::lcgf_frame_text(self.f, s.as_ptr(), s.len(), c(ts)) }
     }

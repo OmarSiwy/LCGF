@@ -319,6 +319,7 @@ fn header(src: *Sources) ![]const u8 {
         const F = @TypeOf(E.func);
         const C = comptime abi.cParamsOf(F, api.handles);
         inline for (C) |P| try typesOf(a, &o, &done, P);
+        inline for (@typeInfo(F).@"fn".param_types) |P| if (comptime isNamedBits(P.?)) try typesOf(a, &o, &done, P.?);
         try typesOf(a, &o, &done, comptime abi.CResult(@typeInfo(F).@"fn".return_type.?));
         try typesOf(a, &o, &done, @typeInfo(F).@"fn".return_type.?);
     }
@@ -428,8 +429,13 @@ fn params(a: std.mem.Allocator, o: *std.ArrayList(u8), comptime F: type, names: 
     const R = info.return_type.?;
     if (comptime !raw and hasOut(F)) {
         const C = comptime abi.cParamsOf(F, api.handles);
-        const s = comptime spell(C[C.len - 1]);
-        try o.print(a, "{s}{s}{s}", .{ if (first) "" else ", ", s, if (@typeInfo(R) == .pointer) "len" else "out" });
+        const Out = C[C.len - 1];
+        if (comptime arrayOf(Out)) |x| {
+            try o.print(a, "{s}{s} out[{d}]", .{ if (first) "" else ", ", comptime spell(x.child), x.len });
+        } else {
+            const s = comptime spell(Out);
+            try o.print(a, "{s}{s}{s}", .{ if (first) "" else ", ", s, if (@typeInfo(R) == .pointer) "len" else "out" });
+        }
     }
 }
 
@@ -1007,6 +1013,7 @@ fn sysRust(src: *Sources) ![]const u8 {
             try sysTypes(a, &o, &done, @typeInfo(F).@"fn".return_type.?);
         } else {
             inline for (comptime abi.cParamsOf(F, api.handles)) |P| try sysTypes(a, &o, &done, P);
+            inline for (@typeInfo(F).@"fn".param_types) |P| if (comptime isNamedBits(P.?)) try sysTypes(a, &o, &done, P.?);
             try sysTypes(a, &o, &done, comptime abi.CResult(@typeInfo(F).@"fn".return_type.?));
             try sysTypes(a, &o, &done, @typeInfo(F).@"fn".return_type.?);
         }

@@ -74,10 +74,16 @@ fn cField(comptime F: type) []const type {
         .@"struct" => |s| if (s.backing_integer) |B| &.{B} else if (s.layout == .@"extern") &.{F} else &.{Form(F)},
         .@"enum" => |e| &.{e.tag_type},
         // An optional enum is its tag, all ones for null (as in words).
-        .optional => |o| if (@typeInfo(o.child) == .@"enum") &.{@typeInfo(o.child).@"enum".tag_type} else &.{F},
+        // Any other optional value (not a pointer) is the value and a `_set` flag after it.
+        .optional => |o| if (@typeInfo(o.child) == .@"enum") &.{@typeInfo(o.child).@"enum".tag_type} else if (@typeInfo(o.child) == .pointer) &.{F} else &.{ cField(o.child)[0], bool },
         .array => |a| if (isDirect(a.child)) &.{F} else &.{[a.len]cField(a.child)[0]},
         else => &.{F},
     };
+}
+
+/// The name of the second C field a field of type `F` becomes: a slice's length, an optional's flag.
+fn second(comptime F: type) []const u8 {
+    return if (@typeInfo(F) == .optional) "_set" else "_len";
 }
 
 pub fn Fields(comptime T: type) type {
@@ -89,7 +95,7 @@ pub fn Fields(comptime T: type) type {
         names = names ++ &[_][]const u8{n};
         field_types = field_types ++ &[_]type{C[0]};
         if (C.len == 2) {
-            names = names ++ &[_][]const u8{n ++ "_len"};
+            names = names ++ &[_][]const u8{n ++ second(F)};
             field_types = field_types ++ &[_]type{C[1]};
         }
     }
@@ -123,7 +129,11 @@ fn fromField(comptime F: type, c: anytype, comptime n: []const u8) F {
         .pointer => |p| if (p.size == .slice) (if (x) |ptr| ptr[0..@field(c, n ++ "_len")] else &.{}) else x,
         .@"struct" => |s| if (s.backing_integer != null) @bitCast(x) else if (s.layout == .@"extern") x else decode(F, &x),
         .@"enum" => fromC(F, .{}, .{@as(u32, x)}, 0),
-        .optional => |o| if (@typeInfo(o.child) == .@"enum") (if (x == std.math.maxInt(@TypeOf(x))) null else fromC(o.child, .{}, .{@as(u32, x)}, 0)) else x,
+        .optional => |o| if (@typeInfo(o.child) == .@"enum")
+            (if (x == std.math.maxInt(@TypeOf(x))) null else fromC(o.child, .{}, .{@as(u32, x)}, 0))
+        else if (@typeInfo(o.child) == .pointer)
+            x
+        else if (@field(c, n ++ "_set")) fromField(o.child, c, n) else null,
         .array => |a| if (comptime isDirect(a.child)) x else blk: {
             var out: F = undefined;
             for (&out, x) |*o, e| o.* = fromField(a.child, .{ .e = e }, "e");
@@ -149,8 +159,11 @@ fn toField(comptime F: type, v: F, c: anytype, comptime n: []const u8) void {
         .@"enum" => @field(c, n) = @backingInt(v),
         .optional => |o| if (@typeInfo(o.child) == .@"enum") {
             @field(c, n) = if (v) |e| @backingInt(e) else std.math.maxInt(@typeInfo(o.child).@"enum".tag_type);
-        } else {
+        } else if (@typeInfo(o.child) == .pointer) {
             @field(c, n) = v;
+        } else {
+            @field(c, n ++ "_set") = v != null;
+            if (v) |x| toField(o.child, x, c, n) else @field(c, n) = std.mem.zeroes(@FieldType(@TypeOf(c.*), n));
         },
         .array => |a| if (comptime isDirect(a.child)) {
             @field(c, n) = v;
@@ -202,9 +215,15 @@ fn isHandle(comptime T: type, comptime handles: anytype) ?type {
 }
 
 /// A result with no C layout: written to an out parameter as its words.
+/// A result C cannot return: a struct of no C layout (written as its form) or an array.
 fn isWordsResult(comptime T: type) bool {
     const info = @typeInfo(T);
-    return info == .@"struct" and info.@"struct".layout == .auto;
+    return (info == .@"struct" and info.@"struct".layout == .auto) or info == .array;
+}
+
+/// Where an out-parameter result is written: its form, or the array itself.
+fn OutOf(comptime R: type) type {
+    return if (@typeInfo(R) == .array) R else Form(R);
 }
 
 /// The C result of a Zig result `T`; a slice returns its pointer and writes its length out, and
@@ -228,12 +247,13 @@ fn isSlice(comptime T: type) bool {
 /// Every C parameter of `F`'s export, in order: each Zig parameter's, then `*usize` for a slice
 /// result's length or `*Words(R)` for a words result.
 pub fn cParamsOf(comptime F: type, comptime handles: anytype) []const type {
+    @setEvalBranchQuota(20_000);
     const info = @typeInfo(F).@"fn";
     var out: []const type = &.{};
     for (info.param_types) |P| out = out ++ CParams(P.?, handles);
     const R = info.return_type.?;
     if (isSlice(R)) out = out ++ &[_]type{*usize};
-    if (isWordsResult(R)) out = out ++ &[_]type{*Form(R)};
+    if (isWordsResult(R)) out = out ++ &[_]type{*OutOf(R)};
     return out;
 }
 
@@ -288,7 +308,10 @@ fn invoke(comptime f: anytype, comptime handles: anytype, c: anytype) CResult(@t
     }
     const r = @call(.always_inline, f, args);
     if (comptime isSlice(R)) c[at].* = r.len;
-    if (comptime isWordsResult(R)) return encode(R, r, c[at]);
+    if (comptime isWordsResult(R)) {
+        if (comptime @typeInfo(R) == .array) c[at].* = r else encode(R, r, c[at]);
+        return;
+    }
     return toC(R, r);
 }
 

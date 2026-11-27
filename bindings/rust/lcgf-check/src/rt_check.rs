@@ -198,6 +198,121 @@ impl Plot {
     }
 }
 
+/// bindings/check/rt_dump.zig's `Act`: A7's first batch of Frame calls.
+struct Act;
+
+impl Act {
+    fn input(input: &mut lcgf::Input, k: u32) {
+        input.viewport = [400.0, 300.0];
+        input.pointer = [((k * 11) % 300) as f32 + 0.5, ((k * 5) % 120) as f32 + 0.5];
+        input.dt = 1.0 / 60.0;
+    }
+
+    fn build(f: &mut lcgf::runtime::Frame<'_>, k: u32) {
+        use lcgf::runtime::{Dir, Ease, Spring, rgb};
+        use lcgf::sys::{lcgf_key, lcgf_outline, lcgf_transition};
+        f.open(
+            Id::from("act"),
+            &Style {
+                pad: [8.0; 4],
+                gap: 6.0,
+                ..Style::DEFAULT
+            },
+        );
+        let row = f.open(
+            Id::from("row"),
+            &Style {
+                dir: Dir::X,
+                gap: 6.0,
+                ..Style::DEFAULT
+            },
+        );
+        f.focus_scope(row, 1);
+        let key = |at: f32, value: f32, ease: Ease| lcgf_key {
+            at,
+            value,
+            ease: ease as u8,
+        };
+        let keys = [
+            key(0.0, 20.0, Ease::Linear),
+            key(0.5, 90.0, Ease::OutCubic),
+            key(1.0, 40.0, Ease::Linear),
+        ];
+        let w = f.sequence(Id::from("seq"), &keys);
+        let hot = f.leaf(
+            Id::from("hot"),
+            &Style {
+                size: [Size::px(w), Size::px(30.0)],
+                fill: rgb(50, 50, 60),
+                ..Style::DEFAULT
+            },
+        );
+        let r = f.interact(hot, 1 | 2 | 4);
+        if r.hovered() {
+            f.set_fill(hot, rgb(200, 120, 40));
+        }
+        f.set_cursor(1, r.hovered());
+        let d = f.drag(Id::from("hot"));
+        let card = f.leaf(
+            Id::from("card"),
+            &Style {
+                size: [Size::px(60.0 + d[0]), Size::px(24.0)],
+                fill: rgb(30, 30, 30),
+                ..Style::DEFAULT
+            },
+        );
+        let target = if r.held() {
+            rgb(40, 160, 40)
+        } else {
+            rgb(160, 40, 40)
+        };
+        let tint = f.transition(
+            Id::from("tint"),
+            target,
+            &lcgf_transition {
+                seconds: 0.25,
+                ease: Ease::InOut as u32,
+            },
+        );
+        f.set_fill_animated(
+            card,
+            Id::from("cardfill"),
+            tint,
+            &lcgf_transition {
+                seconds: 0.5,
+                ease: Ease::Linear as u32,
+            },
+        );
+        let even = k % 2 == 0;
+        f.outline(
+            card,
+            &lcgf_outline {
+                width: 2.0,
+                color: rgb(240, 240, 0),
+                offset: 1.0,
+                radii: if even { [3.0; 4] } else { [0.0; 4] },
+                radii_set: even,
+            },
+        );
+        f.animate_layout(card, Spring::default());
+        f.close();
+        let last = f.last_rect(Id::from("card"));
+        let held = f.held_rect();
+        f.leaf(
+            Id::from("echo"),
+            &Style {
+                size: [
+                    Size::px(last.x1 - last.x0 + held.x1 - held.x0),
+                    Size::px(8.0),
+                ],
+                fill: rgb(90, 90, 200),
+                ..Style::DEFAULT
+            },
+        );
+        f.close();
+    }
+}
+
 /// bindings/check/rt_dump.zig's `Kit`, in this crate's words.
 struct Kit {
     on: bool,
@@ -416,7 +531,8 @@ fn main() {
         "usage: lcgf-rt-check <scene> <frames> <out.bin>"
     );
     let plot_scene = args[1] == "canvas";
-    let kit_scene = plot_scene || args[1] == "kit";
+    let act_scene = args[1] == "act";
+    let kit_scene = plot_scene || act_scene || args[1] == "kit";
     let scene = scenes::NAMES
         .iter()
         .find(|(n, _)| kit_scene || *n == args[1])
@@ -463,6 +579,8 @@ fn main() {
         for k in 0..frames {
             if plot_scene {
                 Plot::input(&mut input, k);
+            } else if act_scene {
+                Act::input(&mut input, k);
             } else if kit_scene {
                 Kit::input(&mut input, k);
             } else {
@@ -475,6 +593,8 @@ fn main() {
             let mut f = ctx.begin(&input);
             if let Some(p) = plot.as_mut() {
                 p.build(&mut f, k);
+            } else if act_scene {
+                Act::build(&mut f, k);
             } else if kit_scene {
                 kit.build(&mut f, k);
             } else {

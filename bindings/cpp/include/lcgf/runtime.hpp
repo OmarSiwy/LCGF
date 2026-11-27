@@ -393,6 +393,32 @@ public:
         const auto r = std::format_to_n(p, std::ptrdiff_t(room), fmt, std::forward<A>(args)...);
         return {lcgf_frame_text_written(f_, std::size_t(r.size), ts.raw())};
     }
+    /// `node` answers the pointer as `sense` says (`Frame.interact`): bits of `Sense`
+    /// (1 hover, 2 click, 4 drag, 8 focus).
+    Response Interact(Node node, std::uint8_t sense) { return {lcgf_frame_interact(f_, node.row, sense)}; }
+    /// Pointer movement this frame while `id` is dragged (`Frame.drag`).
+    std::array<float, 2> Drag(Id id) {
+        std::array<float, 2> d{};
+        lcgf_frame_drag(f_, id.value, d.data());
+        return d;
+    }
+    /// Where `id` was laid out last frame (`Frame.lastRect`); the held widget's (`heldRect`).
+    lcgf_rect LastRect(Id id) { return lcgf_frame_last_rect(f_, id.value); }
+    lcgf_rect HeldRect() { return lcgf_frame_held_rect(f_); }
+    void SetFill(Node node, std::uint32_t color) { lcgf_frame_set_fill(f_, node.row, color); }
+    /// `cursor` (a `types.Cursor` tag) while `when` (`Frame.setCursor`).
+    void SetCursor(std::uint32_t cursor, bool when) { lcgf_frame_set_cursor(f_, cursor, when); }
+    void FocusScope(Node node, std::uint8_t kind) { lcgf_frame_focus_scope(f_, node.row, kind); }
+    Node Outline(Node node, const lcgf_outline& o) { return {lcgf_frame_outline(f_, node.row, &o)}; }
+    void AnimateLayout(Node node, Spring sp = {}) { lcgf_frame_animate_layout(f_, node.row, *sp.raw()); }
+    /// `keys` played once from the first frame that asks for `id` (`Frame.sequence`).
+    float Sequence(Id id, std::span<const lcgf_key> keys) { return lcgf_frame_sequence(f_, id.value, keys.data(), keys.size()); }
+    std::uint32_t Transition(Id id, std::uint32_t target, const lcgf_transition& tr) {
+        return lcgf_frame_transition(f_, id.value, target, &tr);
+    }
+    void SetFillAnimated(Node node, Id id, std::uint32_t color, const lcgf_transition& tr) {
+        lcgf_frame_set_fill_animated(f_, node.row, id.value, color, &tr);
+    }
     lcgf_frame* raw() const { return f_; }
     /// The context's theme, which the widgets draw with.
     const Theme* theme() const { return theme_; }

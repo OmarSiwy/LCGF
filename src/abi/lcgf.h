@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 /* The layout of every type below the library reads: compare with lcgf_layout(). */
-#define LCGF_LAYOUT 0xd5ac2371u
+#define LCGF_LAYOUT 0x12dc9f38u
 #define LCGF_CONTEXT_ALIGN 64
 #define LCGF_COLUMN_ALIGN 64
 #define LCGF_NO_WIDGET 0xffffffffu
@@ -214,6 +214,48 @@ typedef struct {
 LCGF_STATIC_ASSERT(sizeof(lcgf_text_style) == 4 * 4, "lcgf_text_style: words");
 
 typedef struct {
+    float width;
+    uint32_t color;
+    float offset;
+    float radii[4];
+    bool radii_set;
+} lcgf_outline;
+LCGF_STATIC_ASSERT(sizeof(lcgf_outline) == 32, "lcgf_outline");
+
+/* Bits, from bit 0: hover click drag focus. */
+typedef uint8_t lcgf_sense;
+
+/* Bits, from bit 0: hovered held pressed released clicked focused. */
+typedef uint8_t lcgf_response;
+
+typedef struct {
+    float x0;
+    float y0;
+    float x1;
+    float y1;
+} lcgf_rect;
+LCGF_STATIC_ASSERT(sizeof(lcgf_rect) == 16, "lcgf_rect");
+
+typedef struct {
+    float stiffness;
+    float damping;
+} lcgf_spring;
+LCGF_STATIC_ASSERT(sizeof(lcgf_spring) == 8, "lcgf_spring");
+
+typedef struct {
+    float at;
+    float value;
+    uint8_t ease;
+} lcgf_key;
+LCGF_STATIC_ASSERT(sizeof(lcgf_key) == 12, "lcgf_key");
+
+typedef struct {
+    float seconds;
+    uint32_t ease;
+} lcgf_transition;
+LCGF_STATIC_ASSERT(sizeof(lcgf_transition) == 2 * 4, "lcgf_transition: words");
+
+typedef struct {
     int64_t origin[2];
     float scale;
     float offset[2];
@@ -252,12 +294,6 @@ typedef struct {
     size_t overrides_len;
 } lcgf_canvas_options;
 LCGF_STATIC_ASSERT(sizeof(lcgf_canvas_options) == 88, "lcgf_canvas_options");
-
-typedef struct {
-    float stiffness;
-    float damping;
-} lcgf_spring;
-LCGF_STATIC_ASSERT(sizeof(lcgf_spring) == 8, "lcgf_spring");
 
 typedef struct {
     float rect[4];
@@ -412,9 +448,6 @@ typedef struct {
 } lcgf_theme;
 LCGF_STATIC_ASSERT(sizeof(lcgf_theme) == 40, "lcgf_theme");
 
-/* Bits, from bit 0: hovered held pressed released clicked focused. */
-typedef uint8_t lcgf_response;
-
 typedef struct {
     uint8_t code;
     uint8_t mods;
@@ -509,6 +542,49 @@ uint32_t lcgf_frame_text_written(lcgf_frame *f, size_t n, const lcgf_text_style 
 /// Reserves a rect that the caller draws itself. It comes back in the draw list as
 /// `Cmd.custom`, in paint order, with `data` attached.
 uint32_t lcgf_frame_custom(lcgf_frame *f, uint32_t id, const lcgf_style *style, uint64_t data);
+/// Paint an outside ring at this point in the command order. It follows `node` after
+/// layout without reserving space or replacing the control's border/selected appearance.
+uint32_t lcgf_frame_outline(lcgf_frame *f, uint32_t node, const lcgf_outline *options);
+/// Makes `node` interactive and reports what happened to it this frame. The node must have
+/// been created with an id; anonymous nodes report nothing.
+lcgf_response lcgf_frame_interact(lcgf_frame *f, uint32_t node, lcgf_sense sense);
+/// Pointer movement this frame while `id` is dragged; zero otherwise. A drag starts once the
+/// pointer has moved `Interaction.drag_threshold` (4 px) from the press, and that frame
+/// carries the whole movement so far, so a jittery click never drags (`Interaction.drag`).
+void lcgf_frame_drag(lcgf_frame *f, uint32_t id, float out[2]);
+/// Where `id` was laid out last frame. A zero rect if it did not exist. Scans the id
+/// column (SIMD, O(n)); prefer `heldRect` inside widgets.
+lcgf_rect lcgf_frame_last_rect(lcgf_frame *f, uint32_t id);
+/// Last frame's rect of the widget the pointer is holding. O(1): the interaction step
+/// already knows its row. A zero rect if nothing is held.
+lcgf_rect lcgf_frame_held_rect(lcgf_frame *f);
+void lcgf_frame_set_fill(lcgf_frame *f, uint32_t node, uint32_t color);
+/// Requests `cursor` if `when` holds. The last request in a frame wins.
+void lcgf_frame_set_cursor(lcgf_frame *f, uint32_t cursor, bool when);
+/// Makes `node` a focus scope (`focus.Scopes`): `group` for a composite widget that is one
+/// Tab stop with arrows inside (a toolbar, a radio group), `trap` for a modal layer that
+/// keeps focus among its descendants. Read by the next frame's focus step.
+void lcgf_frame_focus_scope(lcgf_frame *f, uint32_t node, uint8_t kind);
+/// Slides `node` (and its subtree) on a spring whenever its laid-out position changes,
+/// starting from where it was shown last frame. The node needs a stable, non-`none` id.
+/// Position only: a size change still takes effect at once. `end` runs the slide
+/// (`flip.apply` between `layout.place` and `layout.finalize`); callers running layout
+/// themselves call it there too.
+/// Exhaustion keeps settled layout and reports Output.status.flips or .anims.
+void lcgf_frame_animate_layout(lcgf_frame *f, uint32_t node, lcgf_spring spring);
+/// Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
+/// The clock is a linear tween row keyed by `id`, so the host stays awake until the last
+/// key; stop asking for one frame and the next ask plays it again from the start.
+/// Exhaustion returns the final key's value and reports Output.status.tweens.
+float lcgf_frame_sequence(lcgf_frame *f, uint32_t id, const lcgf_key *keys, size_t keys_len);
+/// A colour that moves to `target` along `tr` whenever `target` changes, instead of
+/// jumping: one tween per channel, keyed by `id.with(0..3)`. Returns this frame's colour.
+/// All four keys are preflighted together. Exhaustion settles the whole color and reports
+/// status.tweens, without reserving a partial transition or touching unrelated controls.
+uint32_t lcgf_frame_transition(lcgf_frame *f, uint32_t id, uint32_t target, const lcgf_transition *tr);
+/// `setFill` with a transition: a fill that changes between frames (hover, press, theme)
+/// fades to the new colour along `tr`. `id` keys the transition; use the widget's id.
+void lcgf_frame_set_fill_animated(lcgf_frame *f, uint32_t node, uint32_t id, uint32_t color, const lcgf_transition *tr);
 /// `custom` from a row (`openRow`).
 uint32_t lcgf_frame_custom_row(lcgf_frame *f, uint32_t id, const lcgf_row *row, uint64_t data);
 /// `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of

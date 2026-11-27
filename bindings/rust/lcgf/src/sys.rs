@@ -3,7 +3,7 @@
 // lib.rs as `sys` (`include!`). The lane-named frames are lib.rs's (lcgf_lanes.h).
 
 /// The layout of every type here the library reads: compare with `lcgf_layout()`.
-pub const LCGF_LAYOUT: u32 = 0xd5ac2371;
+pub const LCGF_LAYOUT: u32 = 0x12dc9f38;
 pub const LCGF_CONTEXT_ALIGN: usize = 64;
 pub const LCGF_COLUMN_ALIGN: usize = 64;
 pub const LCGF_NO_WIDGET: u32 = 0xffff_ffff;
@@ -223,6 +223,56 @@ const _: () = assert!(core::mem::size_of::<lcgf_text_style>() == 4 * 4);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct lcgf_outline {
+    pub width: f32,
+    pub color: u32,
+    pub offset: f32,
+    pub radii: [f32; 4],
+    pub radii_set: bool,
+}
+const _: () = assert!(core::mem::size_of::<lcgf_outline>() == 32);
+
+pub type lcgf_sense = u8;
+
+pub type lcgf_response = u8;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lcgf_rect {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+const _: () = assert!(core::mem::size_of::<lcgf_rect>() == 16);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lcgf_spring {
+    pub stiffness: f32,
+    pub damping: f32,
+}
+const _: () = assert!(core::mem::size_of::<lcgf_spring>() == 8);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lcgf_key {
+    pub at: f32,
+    pub value: f32,
+    pub ease: u8,
+}
+const _: () = assert!(core::mem::size_of::<lcgf_key>() == 12);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lcgf_transition {
+    pub seconds: f32,
+    pub ease: u32,
+}
+const _: () = assert!(core::mem::size_of::<lcgf_transition>() == 2 * 4);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct lcgf_camera {
     pub origin: [i64; 2],
     pub scale: f32,
@@ -270,14 +320,6 @@ pub struct lcgf_canvas_options {
     pub overrides_len: usize,
 }
 const _: () = assert!(core::mem::size_of::<lcgf_canvas_options>() == 88);
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct lcgf_spring {
-    pub stiffness: f32,
-    pub damping: f32,
-}
-const _: () = assert!(core::mem::size_of::<lcgf_spring>() == 8);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -450,8 +492,6 @@ pub struct lcgf_theme {
 }
 const _: () = assert!(core::mem::size_of::<lcgf_theme>() == 40);
 
-pub type lcgf_response = u8;
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct lcgf_shortcut {
@@ -564,6 +604,49 @@ unsafe extern "C" {
     /// Reserves a rect that the caller draws itself. It comes back in the draw list as
     /// `Cmd.custom`, in paint order, with `data` attached.
     pub fn lcgf_frame_custom(f: *mut lcgf_frame, id: u32, style: *const lcgf_style, data: u64) -> u32;
+    /// Paint an outside ring at this point in the command order. It follows `node` after
+    /// layout without reserving space or replacing the control's border/selected appearance.
+    pub fn lcgf_frame_outline(f: *mut lcgf_frame, node: u32, options: *const lcgf_outline) -> u32;
+    /// Makes `node` interactive and reports what happened to it this frame. The node must have
+    /// been created with an id; anonymous nodes report nothing.
+    pub fn lcgf_frame_interact(f: *mut lcgf_frame, node: u32, sense: u8) -> u8;
+    /// Pointer movement this frame while `id` is dragged; zero otherwise. A drag starts once the
+    /// pointer has moved `Interaction.drag_threshold` (4 px) from the press, and that frame
+    /// carries the whole movement so far, so a jittery click never drags (`Interaction.drag`).
+    pub fn lcgf_frame_drag(f: *mut lcgf_frame, id: u32, out: *mut [f32; 2]);
+    /// Where `id` was laid out last frame. A zero rect if it did not exist. Scans the id
+    /// column (SIMD, O(n)); prefer `heldRect` inside widgets.
+    pub fn lcgf_frame_last_rect(f: *mut lcgf_frame, id: u32) -> lcgf_rect;
+    /// Last frame's rect of the widget the pointer is holding. O(1): the interaction step
+    /// already knows its row. A zero rect if nothing is held.
+    pub fn lcgf_frame_held_rect(f: *mut lcgf_frame) -> lcgf_rect;
+    pub fn lcgf_frame_set_fill(f: *mut lcgf_frame, node: u32, color: u32);
+    /// Requests `cursor` if `when` holds. The last request in a frame wins.
+    pub fn lcgf_frame_set_cursor(f: *mut lcgf_frame, cursor: u32, when: bool);
+    /// Makes `node` a focus scope (`focus.Scopes`): `group` for a composite widget that is one
+    /// Tab stop with arrows inside (a toolbar, a radio group), `trap` for a modal layer that
+    /// keeps focus among its descendants. Read by the next frame's focus step.
+    pub fn lcgf_frame_focus_scope(f: *mut lcgf_frame, node: u32, kind: u8);
+    /// Slides `node` (and its subtree) on a spring whenever its laid-out position changes,
+    /// starting from where it was shown last frame. The node needs a stable, non-`none` id.
+    /// Position only: a size change still takes effect at once. `end` runs the slide
+    /// (`flip.apply` between `layout.place` and `layout.finalize`); callers running layout
+    /// themselves call it there too.
+    /// Exhaustion keeps settled layout and reports Output.status.flips or .anims.
+    pub fn lcgf_frame_animate_layout(f: *mut lcgf_frame, node: u32, spring: lcgf_spring);
+    /// Plays `keys` once, from the first frame that asks for `id`, and returns its value now.
+    /// The clock is a linear tween row keyed by `id`, so the host stays awake until the last
+    /// key; stop asking for one frame and the next ask plays it again from the start.
+    /// Exhaustion returns the final key's value and reports Output.status.tweens.
+    pub fn lcgf_frame_sequence(f: *mut lcgf_frame, id: u32, keys: *const lcgf_key, keys_len: usize) -> f32;
+    /// A colour that moves to `target` along `tr` whenever `target` changes, instead of
+    /// jumping: one tween per channel, keyed by `id.with(0..3)`. Returns this frame's colour.
+    /// All four keys are preflighted together. Exhaustion settles the whole color and reports
+    /// status.tweens, without reserving a partial transition or touching unrelated controls.
+    pub fn lcgf_frame_transition(f: *mut lcgf_frame, id: u32, target: u32, tr: *const lcgf_transition) -> u32;
+    /// `setFill` with a transition: a fill that changes between frames (hover, press, theme)
+    /// fades to the new colour along `tr`. `id` keys the transition; use the widget's id.
+    pub fn lcgf_frame_set_fill_animated(f: *mut lcgf_frame, node: u32, id: u32, color: u32, tr: *const lcgf_transition);
     /// `custom` from a row (`openRow`).
     pub fn lcgf_frame_custom_row(f: *mut lcgf_frame, id: u32, row: *const lcgf_row, data: u64) -> u32;
     /// `Frame.canvas`: `shapes` under the options' camera, palette, ranges and overrides, all of

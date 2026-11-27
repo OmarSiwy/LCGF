@@ -7545,6 +7545,7 @@ Keyframes: a value that passes through a list of stops at given times, each segm
 - `fn duration(keys: []const Key) f32`: Time of the last key: how long the sequence plays.
 
 ### `Key` (struct)
+An extern struct: C, C++ and Rust pass a list of them as it is (`lcgf_key`).
 
 Fields: `at`, `value`, `ease`
 

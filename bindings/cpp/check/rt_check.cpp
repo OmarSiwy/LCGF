@@ -77,6 +77,40 @@ int ids(const char* path) {
     if (bad) std::fprintf(stderr, "%zu of %zu ids differ\n", bad, n);
     return bad || n == 0 ? 1 : 0;
 }
+// bindings/check/rt_dump.zig's `Act`: A7's first batch of Frame calls.
+struct Act {
+    static void input(lcgf::Input& in, std::uint32_t k) {
+        in.viewport[0] = 400, in.viewport[1] = 300;
+        in.pointer[0] = float((k * 11) % 300) + 0.5f, in.pointer[1] = float((k * 5) % 120) + 0.5f;
+        in.dt = 1.0f / 60.0f;
+    }
+
+    static void build(lcgf::Frame& f, std::uint32_t k) {
+        using namespace lcgf;
+        f.Open(Id::From("act"), {.pad = {8, 8, 8, 8}, .gap = 6});
+        f.FocusScope(f.Open(Id::From("row"), {.dir = Dir::x, .gap = 6}), 1);
+        const lcgf_key keys[3] = {{0, 20, 0}, {0.5f, 90, std::uint8_t(Ease::out_cubic)}, {1, 40, 0}};
+        const float w = f.Sequence(Id::From("seq"), keys);
+        const Node hot = f.Leaf(Id::From("hot"), {.size = {Size::Px(w), Size::Px(30)}, .fill = Rgb(50, 50, 60)});
+        const Response r = f.Interact(hot, 1 | 2 | 4);
+        if (r.hovered()) f.SetFill(hot, Rgb(200, 120, 40));
+        f.SetCursor(1, r.hovered());
+        const auto d = f.Drag(Id::From("hot"));
+        const Node card = f.Leaf(Id::From("card"), {.size = {Size::Px(60 + d[0]), Size::Px(24)}, .fill = Rgb(30, 30, 30)});
+        const std::uint32_t tint = f.Transition(Id::From("tint"), r.held() ? Rgb(40, 160, 40) : Rgb(160, 40, 40), {0.25f, std::uint32_t(Ease::in_out)});
+        f.SetFillAnimated(card, Id::From("cardfill"), tint, {0.5f, std::uint32_t(Ease::linear)});
+        lcgf_outline o{2, Rgb(240, 240, 0), 1, {3, 3, 3, 3}, k % 2 == 0};
+        if (k % 2 != 0) o.radii[0] = o.radii[1] = o.radii[2] = o.radii[3] = 0;
+        f.Outline(card, o);
+        f.AnimateLayout(card);
+        f.Close();
+        const lcgf_rect last = f.LastRect(Id::From("card"));
+        const lcgf_rect held = f.HeldRect();
+        f.Leaf(Id::From("echo"), {.size = {Size::Px(last.x1 - last.x0 + held.x1 - held.x0), Size::Px(8)}, .fill = Rgb(90, 90, 200)});
+        f.Close();
+    }
+};
+
 // bindings/check/rt_dump.zig's `Kit`, in this header's words.
 struct Kit {
     bool on = false;
@@ -174,7 +208,8 @@ int main(int argc, char** argv) {
     if (argc == 3 && std::strcmp(argv[1], "ids") == 0) return ids(argv[2]);
     if (argc != 4 && argc != 6) return 2;
     const bool plot_scene = std::strcmp(argv[1], "canvas") == 0;
-    const bool kit_scene = plot_scene || std::strcmp(argv[1], "kit") == 0;
+    const bool act_scene = std::strcmp(argv[1], "act") == 0;
+    const bool kit_scene = plot_scene || act_scene || std::strcmp(argv[1], "kit") == 0;
     int s = 0;
     while (!kit_scene && s < scenes::count && std::strcmp(scenes::names[s], argv[1]) != 0) ++s;
     if (s == scenes::count) return 2;
@@ -208,6 +243,7 @@ int main(int argc, char** argv) {
     lcgf::Input in;
     for (std::uint32_t k = 0; k < frames; ++k) {
         if (plot_scene) Plot::input(in, k);
+        else if (act_scene) Act::input(in, k);
         else if (kit_scene) Kit::input(in, k);
         else scenes::input(scene, in, k);
         // The bench scenes only hover; the gate also presses, so clicks and drags cross too.
@@ -216,6 +252,7 @@ int main(int argc, char** argv) {
         put(out, ctx.NeedsFrame(in) ? 1 : 0);
         lcgf::Frame f = ctx.Begin(in);
         if (plot_scene) plot->build(f, k);
+        else if (act_scene) Act::build(f, k);
         else if (kit_scene) kit.build(f, k);
         else scenes::build(scene, f, ctx.theme());
         const lcgf::DrawList& d = ctx.End();

@@ -182,7 +182,7 @@ echo "ok   ids: 4096 names, the same id and child id in Zig, $langs"
 
 # The runtime front end: bench/scenes' scenes (and the gate's `kit` and `canvas`) built each frame from C++ (lcgf/runtime.hpp) and
 # Rust (lcgf::runtime), against the same scenes built in Zig.
-for scene in form list text springs resize idle kit canvas; do
+for scene in form list text springs resize idle kit canvas act; do
     "$prefix/bin/lcgf-rt-dump" "$scene" 120 "$work/rt-$scene.zig.bin"
     "$work/cpp/lcgf-cpp-rt-check" "$scene" 120 "$work/rt-$scene.cpp.bin"
     cmp "$work/rt-$scene.zig.bin" "$work/rt-$scene.cpp.bin"
