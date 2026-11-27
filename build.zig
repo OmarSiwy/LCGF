@@ -361,6 +361,8 @@ pub fn build(b: *std.Build) void {
     // The package root built ReleaseFast, for the branch census and the benchmark.
     const lcgf_fast = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = .ReleaseFast });
     lcgf_fast.addOptions("build_options", options);
+    // The data scene's text fields segment text (bench/scenes/data.zig).
+    lcgf_fast.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
     const census_probe = b.addObject(.{ .name = "census_src", .root_module = b.createModule(.{
         .root_source_file = b.path("src/census_probes.zig"),
         .target = target,

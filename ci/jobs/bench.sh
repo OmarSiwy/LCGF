@@ -11,5 +11,5 @@ busy=$(awk -v n="$(nproc)" '{ print ($1 > n / 4) }' /proc/loadavg)
 [ "$busy" = 1 ] && echo "bench: load $(cut -d' ' -f1 /proc/loadavg) on $(nproc) CPUs, gate not applied"
 python3 bench/micro/compare.py bench/micro/baseline.json zig-out/bench.json || [ -n "${GITHUB_ACTIONS-}" ] || [ "$busy" = 1 ]
 # bench/scenes/: printed, not gated (no baseline yet).
-for scene in form list text springs resize idle; do zig build bench -- --scene "$scene"; done
+for scene in form list text springs resize idle data data-idle mixed; do zig build bench -- --scene "$scene"; done
 zig build size

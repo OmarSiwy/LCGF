@@ -31,7 +31,10 @@ pub const all = [_]Scene{
     @import("springs.zig").scene,
     @import("resize.zig").scene,
     @import("idle.zig").scene,
+    @import("data.zig").scene,
+    @import("data.zig").idle,
+    @import("data.zig").mixed,
 };
 
 /// The scenes of the comparison (bench/vs/harness.h), in its order.
-pub const vs = all[1..].*;
+pub const vs = all[1..7].*;
