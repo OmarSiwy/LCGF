@@ -180,8 +180,13 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
         let c = array<f32, 4>(1.0, 0.0, -1.0, 0.0);
         m1 = vec4f(0.0, 0.0, c[q], c[(q + 3u) & 3u]);
         p = vec4f(corner.x, corner.y, gw, gh);
-        let e = max(gw, gh);
-        box = vec4f(corner.x - e - 1.0, corner.y - e - 1.0, corner.x + e + 1.0, corner.y + e + 1.0);
+        // canvas.zig: the turned box, its x axis (c w, s w) from the anchor, its y (-s h, c h).
+        let ax = m1.z * gw;
+        let ay = m1.w * gw;
+        let bx = -m1.w * gh;
+        let by = m1.z * gh;
+        box = vec4f(corner.x + min(ax, 0.0) + min(bx, 0.0) - 1.0, corner.y + min(ay, 0.0) + min(by, 0.0) - 1.0,
+                    corner.x + max(ax, 0.0) + max(bx, 0.0) + 1.0, corner.y + max(ay, 0.0) + max(by, 0.0) + 1.0);
         let tu0 = unorm16(r.look.y);
         let tv0 = unorm16(r.look.y >> 16u);
         out.uv = vec2f(tu0, tv0);

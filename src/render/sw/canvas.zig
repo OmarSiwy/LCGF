@@ -447,6 +447,8 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
                 .glyph => a: {
                     const l = canvas.glyphLocal(F, px, py, sh);
                     const inside = (l[0] >= simd.f(0)) & (l[0] < simd.f(sh.p[2])) & (l[1] >= simd.f(0)) & (l[1] < simd.f(sh.p[3]));
+                    // A vector past the glyph's edges reads no texel.
+                    if (!@reduce(.Or, inside)) continue;
                     const u = simd.f(tu0) + l[0] * simd.f(du);
                     const v = simd.f(tv0) + l[1] * simd.f(dv);
                     if (x.distance) {
@@ -490,7 +492,8 @@ inline fn shade(comptime kind: canvas.Kind, comptime general: bool, fb: *sw.Fram
 /// The alpha byte of `x.atlas` at texel position (`fx`, `fy`) (texel centres at halves),
 /// interpolated between the four nearest texels, each clamped to the atlas: canvas.wgsl's
 /// `distance_at`, in the same order.
-fn bilinear(x: Extra, fx: F, fy: F) F {
+// tidy: allow(inline-always-large) per vector; out of line +9% a frame (canvas-text-bench)
+inline fn bilinear(x: Extra, fx: F, fy: F) F {
     std.debug.assert(x.atlas.width > 0);
     std.debug.assert(x.atlas.height > 0);
     const w = simd.f(@floatFromInt(x.atlas.width - 1));

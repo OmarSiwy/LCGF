@@ -526,8 +526,17 @@ pub const Shape = struct {
                 const gh = v.len(@bitCast(pos[3]));
                 sh.mid = turn(@truncate(h >> 16));
                 sh.p = .{ corner[0], corner[1], w, gh };
-                const e = @max(w, gh);
-                sh.box = .{ corner[0] - e - 1, corner[1] - e - 1, corner[0] + e + 1, corner[1] + e + 1 };
+                // The turned box: its x axis runs (c w, s w) from the anchor, its y (-s h, c h).
+                const ax = sh.mid[0] * w;
+                const ay = sh.mid[1] * w;
+                const bx = -sh.mid[1] * gh;
+                const by = sh.mid[0] * gh;
+                sh.box = .{
+                    corner[0] + @min(ax, 0) + @min(bx, 0) - 1,
+                    corner[1] + @min(ay, 0) + @min(by, 0) - 1,
+                    corner[0] + @max(ax, 0) + @max(bx, 0) + 1,
+                    corner[1] + @max(ay, 0) + @max(by, 0) + 1,
+                };
                 return sh;
             },
         }
