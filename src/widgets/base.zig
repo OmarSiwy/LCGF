@@ -1267,6 +1267,29 @@ pub fn sameDraw(a: *const DrawList, b: *const DrawList) bool {
     return true;
 }
 
+/// Checks that `build(f, 0)` and `build(f, 1)` draw the same list, each in its own context of
+/// `caps`, over three frames in a 400 x 300 window with the pointer at `at`: at rest, pressed
+/// and released. For a widget's theme function against its `…Face` given the theme's styles.
+pub fn expectSameFace(comptime caps: context.Limits, comptime build: fn (*Frame, u1) void, at: [2]f32) !void {
+    const S = struct {
+        var buffers: [2][context.Context.requiredBytes(caps)]u8 align(mem.column_align) = undefined;
+    };
+    var ctx: [2]context.Context = undefined;
+    for (&ctx, &S.buffers) |*c, *b| c.* = try .init(b, caps);
+    var in: Input = .{ .viewport = .{ 400, 300 }, .pointer = at };
+    for ([_]bool{ false, true, false }) |down| {
+        in.buttons.left = down;
+        var outs: [2]context.Output = undefined;
+        for (&ctx, &outs, 0..) |*c, *o, k| {
+            var f = c.begin(&in);
+            build(&f, @intCast(k));
+            o.* = f.end(.{});
+        }
+        try std.testing.expect(outs[0].status.ok() and outs[0].draw.cmd_len > 0);
+        try std.testing.expect(sameDraw(outs[0].draw, outs[1].draw));
+    }
+}
+
 /// Runs one UI through both front ends, frame by frame, and checks they agree. `App` is the
 /// runtime side: plain data with defaults and `pub fn build(*App, *Frame) void`, and optionally
 /// `pub fn end(*App, *Frame, Mono) context.Output` to end the frame itself (`Frame.endFlex`

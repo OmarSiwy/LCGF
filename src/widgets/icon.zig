@@ -31,7 +31,12 @@ pub const Icon = struct {
 
 /// Draws `ic` as one leaf of its size.
 pub fn icon(f: *Frame, th: *const Theme, ic: Icon) Node {
-    return f.leaf(.none, style(th, ic));
+    return iconFace(f, style(th, ic));
+}
+
+/// An icon laid out by `face` instead of `style(th, ic)`: its size, texture, uv and tint.
+pub fn iconFace(f: *Frame, face: Style) Node {
+    return f.leaf(.none, face);
 }
 
 /// The icon's node: exactly its size, one quad sampling `ic.texture` over `ic.uv`, tinted
@@ -129,6 +134,17 @@ const rows = struct {
     const button = 5;
     const large = 6;
 };
+
+test "iconFace: the theme's style draws as icon" {
+    const S = struct {
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            const ic: Icon = .{ .size = .{ 20, 20 } };
+            _ = if (k == 0) icon(f, th, ic) else iconFace(f, style(th, ic));
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 8, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 10, 10 });
+}
 
 test "icon: both front ends build one leaf of the icon's size" {
     const h = &harness;

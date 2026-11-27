@@ -335,6 +335,13 @@ pub fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, text: []c
 /// it at the root's depth, after the rest of the page, so it is drawn on top. Returns the item
 /// chosen this frame plus one, or 0 (also left in `st.chosen`).
 pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *MenuState, texts: []const []const u8) u8 {
+    return showFace(f, th, name, def, st, texts, listStyle(th, .{}), base.labelText(th));
+}
+
+/// `show` with the list and the submenu laid out by `face` instead of `listStyle` and the
+/// items' text drawn in `text`; they still float where `listStyle` and `subStyle` place them
+/// (`popover.anchored`), and the items' fill still follows the highlight.
+pub fn showFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *MenuState, texts: []const []const u8, face: Style, text: types.TextStyle) u8 {
     std.debug.assert(texts.len == def.count());
     // Every response is asked for before anything is built, so the state the rows show is
     // the frame's final state, as in the comptime front end.
@@ -344,27 +351,27 @@ pub fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def
     st.* = advance(def, st.*, hits, f.in.events);
     if (!st.open) return st.chosen;
     _ = f.interact(f.open(.from(partName(name, "scrim")), popover.scrimStyle(f.in.viewport)), popover.overlay_sense);
-    const list = f.open(.from(partName(name, "panel")), listStyle(th, f.lastRect(.from(name))));
+    const list = f.open(.from(partName(name, "panel")), popover.anchored(face, listStyle(th, f.lastRect(.from(name)))));
     _ = f.interact(list, popover.overlay_sense);
     f.tree().c.role[list.ix()] = @backingInt(a11y.Role.menu);
-    inline for (0..def.items.len) |k| buildItem(f, th, name, def, st, k, texts[k]);
+    inline for (0..def.items.len) |k| buildItem(f, th, name, def, st, k, texts[k], text);
     f.close();
     if (def.sub_at) |at| if (st.sub) {
-        const sub = f.open(.from(partName(name, "sub")), subStyle(th, f.lastRect(.from(partName(name, def.items[at])))));
+        const sub = f.open(.from(partName(name, "sub")), popover.anchored(face, subStyle(th, f.lastRect(.from(partName(name, def.items[at]))))));
         _ = f.interact(sub, popover.overlay_sense);
         f.tree().c.role[sub.ix()] = @backingInt(a11y.Role.menu);
-        inline for (def.items.len..comptime def.count()) |k| buildItem(f, th, name, def, st, k, texts[k]);
+        inline for (def.items.len..comptime def.count()) |k| buildItem(f, th, name, def, st, k, texts[k], text);
         f.close();
     };
     f.close();
     return st.chosen;
 }
 
-fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *const MenuState, comptime k: u8, text: []const u8) void {
+fn buildItem(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *const MenuState, comptime k: u8, str: []const u8, text: types.TextStyle) void {
     const row = f.open(.from(partName(name, def.name(k))), itemStyle(th, highlighted(def, st.*, k)));
     _ = f.interact(row, popover.overlay_sense);
     f.tree().c.role[row.ix()] = @backingInt(a11y.Role.menu_item);
-    _ = base.label(f, th, text);
+    _ = f.text(str, text);
     f.close();
 }
 
@@ -531,6 +538,19 @@ const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
+
+test "showFace: the theme's styles draw as show" {
+    const S = struct {
+        var st: [2]MenuState = .{ .{ .open = true, .sub = true, .active = 2 }, .{ .open = true, .sub = true, .active = 2 } };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            _ = trigger(f, th, "file", "File");
+            _ = if (k == 0) show(f, th, "file", file_menu, &st[k], &file_texts) else showFace(f, th, "file", file_menu, &st[k], &file_texts, listStyle(th, .{}), base.labelText(th));
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 8 }, S.build, .{ 20, 60 });
+    try testing.expectEqual(S.st[0], S.st[1]);
+}
 
 test "Menu: the page agrees in both front ends, closed, open and with the submenu" {
     const h = &harness;

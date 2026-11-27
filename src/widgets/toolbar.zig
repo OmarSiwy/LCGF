@@ -28,6 +28,12 @@ const a11y = @import("../a11y/tree.zig");
 /// keyboard focus first (`rove`); it is clamped into range. Returns the index of the button
 /// activated this frame, or `none`.
 pub fn bar(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const u8, current: *u32) u32 {
+    return barFace(f, th, ids, titles, current, barStyle(th), base.labelText(th));
+}
+
+/// `bar` laid out by `face` instead of `barStyle(th)`, its buttons' titles drawn in `text`; the
+/// buttons' fill still follows their state.
+pub fn barFace(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const u8, current: *u32, face: Style, text: types.TextStyle) u32 {
     std.debug.assert(ids.len == titles.len and ids.len > 0);
     var clicked: u32 = none;
     var focused: u32 = none;
@@ -39,14 +45,14 @@ pub fn bar(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const
     const m = rove(current.*, @intCast(ids.len), clicked, focused, f.in);
     current.* = m.current;
     if (m.focus != none) f.ctx.inter.focus = @backingInt(ids[m.focus]);
-    const row = f.open(.none, barStyle(th));
+    const row = f.open(.none, face);
     f.tree().c.role[row.ix()] = role;
     for (ids, titles, 0..) |id, title, k| {
         const item = f.open(id, itemStyle(th));
         const r = f.interact(item, sense(k == current.*));
         f.setFill(item, base.buttonFill(th, r));
         f.setCursor(.pointer, r.hovered);
-        _ = base.label(f, th, title);
+        _ = f.text(title, text);
         f.close();
     }
     f.close();
@@ -232,6 +238,20 @@ const rows = struct {
     const bar = 2;
     const item = [3]u32{ 3, 5, 7 };
 };
+
+test "barFace: the theme's styles draw as bar" {
+    const S = struct {
+        const ids = [_]Id{ .from("cut"), .from("copy") };
+        const titles = [_][]const u8{ "Cut", "Copy" };
+        var current: [2]u32 = .{ 0, 0 };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            _ = if (k == 0) bar(f, th, &ids, &titles, &current[k]) else barFace(f, th, &ids, &titles, &current[k], barStyle(th), base.labelText(th));
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 70, 20 });
+    try testing.expectEqual(S.current[0], S.current[1]);
+}
 
 test "toolbar: both front ends build one row of buttons" {
     const h = &harness;

@@ -214,6 +214,12 @@ pub fn setStates(s: *a11y.Semantics, box: u32, depths: []const u8, st: anytype, 
 
 /// A tree view of `n` items, `labels` and `depths` in depth-first order, with `st` its state.
 pub fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []const []const u8, depths: []const u8, st: *State(n)) Response {
+    return treeFace(f, th, id, n, labels, depths, st, treeStyle(th), base.labelText(th));
+}
+
+/// `tree` with its box laid out by `face` instead of `treeStyle(th)` and its items' text drawn
+/// in `text`; focus still sets the border (`list.listBorder`) and the state the rows' fill.
+pub fn treeFace(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []const []const u8, depths: []const u8, st: *State(n), face: Style, text: types.TextStyle) Response {
     var scratch: [n]u32 = undefined;
     // The input changes which rows exist, so the response is read before the tree view is
     // opened; `interact` then marks it and reports the same response.
@@ -221,7 +227,7 @@ pub fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []co
     const pre = f.ctx.inter.response(id);
     update(st, th, depths, pre, rect, f.in, &scratch);
     const len = visibleItems(depths, &st.expanded, &scratch);
-    var s = treeStyle(th);
+    var s = face;
     s.border_color = list_zig.listBorder(th, pre.focused);
     s.value = @floatFromInt(st.selected);
     const box = f.open(id, s);
@@ -231,7 +237,7 @@ pub fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []co
         const row = f.open(.none, rowStyle(th, depths[item]));
         f.setFill(row, list_zig.optionFill(th, r.hovered and under == k, st.selected == item));
         _ = f.leaf(.none, markStyle(th, hasChildren(depths, item), st.expanded[item]));
-        _ = base.label(f, th, labels[item]);
+        _ = f.text(labels[item], text);
         f.close();
     }
     f.close();
@@ -377,6 +383,19 @@ const Replay = @import("../core/input.zig").Replay;
 const test_depths = [_]u8{ 0, 1, 2, 2, 1, 2, 0, 1 };
 
 var harness: Example(theme).Run = .{};
+
+test "treeFace: the theme's styles draw as tree" {
+    const S = struct {
+        var st: [2]State(8) = .{ outline_start, outline_start };
+        fn build(f: *Frame, k: u1) void {
+            const th = &theme;
+            const id: Id = .from("outline");
+            _ = if (k == 0) tree(f, th, id, 8, &outline_labels, &outline_depths, &st[k]) else treeFace(f, th, id, 8, &outline_labels, &outline_depths, &st[k], treeStyle(th), base.labelText(th));
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 8 }, S.build, .{ 20, 30 });
+    try testing.expectEqual(S.st[0], S.st[1]);
+}
 
 test "tree: the replay gives the same frames in both front ends" {
     const h = &harness;

@@ -55,6 +55,15 @@ fn placed(style: Style, box: Rect, origin: [2]f32) Style {
 /// Opens the content box. Both axes consume real wheel/pixel deltas, thumb drags and focused
 /// keyboard navigation. Unconsumed delta is returned for explicit ancestor chaining.
 pub fn open(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appearance: Appearance, behavior: Behavior) policy.Error!Handle {
+    return openFace(f, id, state, bounds, extent, appearance, behavior, outer_style);
+}
+
+/// The outer box's look: a group, no fill.
+pub const outer_style: Style = .{ .role = .group };
+
+/// `open` with the outer box laid out by `face` instead of `outer_style`; it is still placed
+/// at `bounds`.
+pub fn openFace(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appearance: Appearance, behavior: Behavior, face: Style) policy.Error!Handle {
     var geometry = try policy.measure(bounds, extent, state.offset, behavior.geometry);
     const previous = f.prevTree();
     const previous_view = previous.find(id.with(1));
@@ -114,7 +123,7 @@ pub fn open(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appe
     }
     geometry = try policy.measure(bounds, extent, state.offset, behavior.geometry);
     state.offset = geometry.offset;
-    const outer = f.open(id, placed(.{ .role = .group }, bounds, .{ 0, 0 }));
+    const outer = f.open(id, placed(face, bounds, .{ 0, 0 }));
     var viewport_style = placed(appearance.viewport, geometry.viewport, .{ bounds.x0, bounds.y0 });
     viewport_style.clip = true;
     viewport_style.scroll = state.offset;
@@ -159,6 +168,20 @@ pub fn close(f: *Frame, handle: Handle) void {
     }
     if (m.corner.w() > 0 and m.corner.h() > 0) _ = f.leaf(.none, placed(handle.appearance.corner, m.corner, origin));
     f.close();
+}
+
+test "openFace: the theme's styles draw as open" {
+    const S = struct {
+        var state: [2]State = .{ .{}, .{} };
+        fn build(f: *Frame, k: u1) void {
+            const bounds: Rect = .{ .x0 = 10, .y0 = 10, .x1 = 110, .y1 = 110 };
+            const handle = (if (k == 0) open(f, .from("canvas"), &state[k], bounds, .{ 250, 300 }, .{}, .{}) else openFace(f, .from("canvas"), &state[k], bounds, .{ 250, 300 }, .{}, .{}, outer_style)) catch unreachable;
+            _ = f.leaf(.from("content"), .{ .size = .{ .px(250), .px(300) }, .fill = .white });
+            close(f, handle);
+        }
+    };
+    try @import("base.zig").expectSameFace(.{ .nodes = 32, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 105, 50 });
+    try std.testing.expectEqual(S.state[0], S.state[1]);
 }
 
 test "two-axis styled viewport consumes input and emits semantic bars through ordinary Frame" {

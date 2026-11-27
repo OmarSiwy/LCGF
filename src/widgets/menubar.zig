@@ -303,6 +303,12 @@ pub fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, 
 
 /// The bar named `name`, in the page's flow, showing `texts` (one per button).
 pub fn bar(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *BarState, texts: []const []const u8) void {
+    barFace(f, th, name, def, st, texts, barStyle(th), base.labelText(th));
+}
+
+/// `bar` laid out by `face` instead of `barStyle(th)`, its buttons' text drawn in `text`; the
+/// buttons' fill still follows the open menu and the pointer.
+pub fn barFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *BarState, texts: []const []const u8, face: Style, text: types.TextStyle) void {
     std.debug.assert(texts.len == def.names.len);
     // Every response is asked for before anything is built, so the rows show the frame's
     // final state, as in the comptime front end.
@@ -317,7 +323,7 @@ pub fn bar(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def:
         inline for (0..comptime m.count()) |k| hits.addItem(st.open == i, k, inter.response(.from(partName(mid, m.name(k)))));
     }
     st.* = advance(def, st.*, hits, f.in);
-    const b = f.open(bar_id, barStyle(th));
+    const b = f.open(bar_id, face);
     _ = f.interact(b, popover.overlay_sense);
     role(f, b, .menu_bar);
     inline for (def.names, 0..) |n, i| {
@@ -325,7 +331,7 @@ pub fn bar(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def:
         const button = f.open(bid, buttonStyle(th, st.open == i, inter.response(bid).hovered));
         _ = f.interact(button, .button);
         role(f, button, .menu_item);
-        _ = base.label(f, th, texts[i]);
+        _ = f.text(texts[i], text);
         f.close();
     }
     f.close();
@@ -335,19 +341,25 @@ pub fn bar(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def:
 /// menu.zig's one sequence. Call it at the root's depth, after the rest of the page, so the
 /// list is drawn on top.
 pub fn menus(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *const BarState, texts: []const []const []const u8) void {
+    menusFace(f, th, name, def, st, texts, menu.listStyle(th, .{}), base.labelText(th));
+}
+
+/// `menus` with the lists laid out by `face` instead of `menu.listStyle` and the items' text
+/// drawn in `text`, as `menu.showFace`; the lists still float below their buttons.
+pub fn menusFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *const BarState, texts: []const []const []const u8, face: Style, text: types.TextStyle) void {
     _ = f.open(.none, layerStyle());
     inline for (def.names, def.menus, 0..) |n, m, i| if (st.open == i) {
         const mid = comptime partName(name, n);
-        const list = f.open(.from(partName(mid, "panel")), menu.listStyle(th, f.lastRect(.from(mid))));
+        const list = f.open(.from(partName(mid, "panel")), popover.anchored(face, menu.listStyle(th, f.lastRect(.from(mid)))));
         _ = f.interact(list, popover.overlay_sense);
         role(f, list, .menu);
-        inline for (0..m.items.len) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k]);
+        inline for (0..m.items.len) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k], text);
         f.close();
         if (m.sub_at) |at| if (st.menu.sub) {
-            const sub = f.open(.from(partName(mid, "sub")), menu.subStyle(th, f.lastRect(.from(partName(mid, m.items[at])))));
+            const sub = f.open(.from(partName(mid, "sub")), popover.anchored(face, menu.subStyle(th, f.lastRect(.from(partName(mid, m.items[at]))))));
             _ = f.interact(sub, popover.overlay_sense);
             role(f, sub, .menu);
-            inline for (m.items.len..comptime m.count()) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k]);
+            inline for (m.items.len..comptime m.count()) |k| buildItem(f, th, mid, m, st.menu, k, texts[i][k], text);
             f.close();
         };
     };
@@ -358,11 +370,11 @@ fn role(f: *Frame, n: types.Node, r: a11y.Role) void {
     f.tree().c.role[n.ix()] = @backingInt(r);
 }
 
-fn buildItem(f: *Frame, th: *const Theme, comptime mid: []const u8, comptime m: menu.Def, ms: menu.MenuState, comptime k: u8, text: []const u8) void {
+fn buildItem(f: *Frame, th: *const Theme, comptime mid: []const u8, comptime m: menu.Def, ms: menu.MenuState, comptime k: u8, str: []const u8, text: types.TextStyle) void {
     const row = f.open(.from(partName(mid, m.name(k))), menu.itemStyle(th, menu.highlighted(m, ms, k)));
     _ = f.interact(row, popover.overlay_sense);
     role(f, row, .menu_item);
-    _ = base.label(f, th, text);
+    _ = f.text(str, text);
     f.close();
 }
 
@@ -448,6 +460,21 @@ fn setBar(h: anytype, st: BarState) !*const Tree {
     h.ui.signals.set(.bar, st);
     _ = try h.frame(&in);
     return (try h.frame(&in)).runtime.tree;
+}
+
+test "barFace, menusFace: the theme's styles draw as bar and menus" {
+    const S = struct {
+        var st: [2]BarState = .{ .{ .open = 0 }, .{ .open = 0 } };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            _ = f.open(.none, .{});
+            if (k == 0) bar(f, th, "main", bar_def, &st[k], &bar_texts) else barFace(f, th, "main", bar_def, &st[k], &bar_texts, barStyle(th), base.labelText(th));
+            if (k == 0) menus(f, th, "main", bar_def, &st[k], &item_texts) else menusFace(f, th, "main", bar_def, &st[k], &item_texts, menu.listStyle(th, .{}), base.labelText(th));
+            f.close();
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 8 }, S.build, .{ 20, 10 });
+    try testing.expectEqual(S.st[0], S.st[1]);
 }
 
 test "MenuBar: the page agrees in both front ends, closed and with each menu open" {

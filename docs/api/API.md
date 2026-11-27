@@ -3922,6 +3922,7 @@ Widgets (tier 2): the base every widget is built on, and the four reference widg
 - `fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme) type`: The comptime front end running the reference widgets of `spec`: state in `Signals`, input through `Events`, look and behaviour through the functions above.
 - `fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: Theme, comptime Tokens: type) type`: `ComptimeUi` whose rows also read run-time theme tokens (`spec.tokened`) from a caller-owned `theme_table.ThemeTable(Tokens)` (`ui.tokens`) when they are pushed, so a changed table lays the page out again on the next frame (`themeChanged`).
 - `fn sameDraw(a: *const DrawList, b: *const DrawList) bool`: Whether two draw lists are the same: quad bytes, text runs and commands, in order.
+- `fn expectSameFace(comptime caps: context.Limits, comptime build: fn (*Frame, u1) void, at: [2]f32) !void`: Checks that `build(f, 0)` and `build(f, 1)` draw the same list, each in its own context of `caps`, over three frames in a 400 x 300 window with the pointer at `at`: at rest, pressed and released.
 - `fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Limits) type`: Runs one UI through both front ends, frame by frame, and checks they agree.
 - `fn Semantic(comptime cap: u32) type`: What assistive technology sees of both front ends' current frame in a `Harness`: each tree run through `names`, `states` and `flatten` (a11y/tree.zig), as a bridge would.
 - `fn Reference(comptime th: Theme) type`: The reference page: the prototype example's toolbar (a button, a checkbox, a slider and a label on a panel) in both front ends, in theme `th`.
@@ -4529,6 +4530,7 @@ List box (tier 2): a column of options, one of them selected, in both front ends
 - `fn setRoles(t: *Tree, box: u32, first_option: u32, count: u32) void`: Roles of the list's rows, written to the tree's `role` column (they are past `types.Role`): the list a list box, each option row an option.
 - `fn setStates(s: *a11y.Semantics, first_option: u32, count: u32, sel: u32) void`: The `selected` state of the selected option, for the accessibility bridge.
 - `fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, selected: *u32) Response`: A list of `items` with `selected.*` the selected row.
+- `fn listFace(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, selected: *u32, face: Style, text: types.TextStyle) Response`: `list` with its box laid out by `face` instead of `listStyle(th)` and its options' text drawn in `text`; focus still sets the border (`listBorder`) and the state the options' fill.
 - `fn itemFields(comptime n: Spec) [n.children.len][]const u8`: The option fields of a fully bound list node.
 - `fn ctResponse(ui: anytype, comptime row: u32, in: *const Input) Response`: Hover, held and focus of the widget at spec row `row` of a `base.ComptimeUi` page, as `Frame.interact` returns them (`ComptimeUi.response` plus its `focus`).
 - `fn ctClicked(ui: anytype, comptime row: u32, event: anytype) bool`: Whether this frame's event is a click on the widget at spec row `row`.
@@ -4733,6 +4735,7 @@ Tree view (tier 2): an outline of items, each at a depth, whose parents expand a
 - `fn setRoles(t: *Tree, box: u32, len: u32) void`: Roles of the built rows: the tree view a tree, each item row a tree item.
 - `fn setStates(s: *a11y.Semantics, box: u32, depths: []const u8, st: anytype, visible: []const u32) void`: States of the built items for the bridge: parents are expandable and say whether they are expanded, the selected item is selected.
 - `fn tree(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []const []const u8, depths: []const u8, st: *State(n)) Response`: A tree view of `n` items, `labels` and `depths` in depth-first order, with `st` its state.
+- `fn treeFace(f: *Frame, th: *const Theme, id: Id, comptime n: usize, labels: []const []const u8, depths: []const u8, st: *State(n), face: Style, text: types.T…`: `tree` with its box laid out by `face` instead of `treeStyle(th)` and its items' text drawn in `text`; focus still sets the border (`list.listBorder`) and the state the rows' fill.
 - `fn Example(comptime th: Theme) type`: The example page: a caption and a tree view of eight items (two top-level folders, `src` expanded) on a panel, in both front ends, in theme `th`.
 
 ### `State(..)` (generic struct)
@@ -5203,6 +5206,7 @@ Tabs (tier 2): a row of tabs above a stack of panels, showing the panel of the s
 - `Move = struct { selected: u32, focus: u32 }`: Where selection and focus go: tab indices, `none` for "no tab focused".
 - `replay = @embedFile("testdata/tabs.replay")`: Input for `Page(.default)` at 320 x 200, one commented line per frame.
 - `fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles: []const []const u8) void`: Starts the tab set and builds its tab list: tab `k` has the identity `ids[k]` and shows `titles[k]`.
+- `fn openFace(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles: []const []const u8, face: Style, text: types.TextStyle) void`: `open` with the tab set laid out by `face` instead of `setStyle(th)` and the titles drawn in `text`; the tabs' fill still follows the selection and the state (`tabFill`).
 - `fn panel(f: *Frame, th: *const Theme, selected: u32, k: u32) Node`: Starts the panel of tab `k`; build its children, then `f.close()`.
 - `fn close(f: *Frame) void`: Ends the tab set `open` started.
 - `fn setStyle(th: *const Theme) Style`: The tab set: the tab list above the panels.
@@ -5277,6 +5281,7 @@ Splitter (tier 2): two panes side by side (or one above the other) with a handle
 - `role: u8 = @backingInt(a11y.Role.separator)`: What assistive technology sees (WAI-ARIA APG window splitter pattern): the handle is a focusable `separator` whose value is the split, 0 to 1 (a bridge scales it to aria-valuenow's 0..100), labelled by the first pane.
 - `replay = @embedFile("testdata/splitter.replay")`: Input for `Page(.default)` at 320 x 200, one commented line per frame.
 - `fn open(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: *f32) void`: Starts a splitter along `axis` (`.x`: panes side by side) whose first pane takes `split.*` of it, and opens the first pane.
+- `fn openFace(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: *f32, face: Style) void`: `open` with the container laid out by `face` instead of `containerStyle(th, axis)`; its panes still run along `axis`.
 - `fn handle(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: f32) void`: Closes the first pane and opens the second: the handle, then the body that holds the second pane's children.
 - `fn close(f: *Frame) void`: Closes the second pane and the splitter.
 - `fn containerStyle(th: *const Theme, axis: Axis) Style`: The container: fills its parent, its panes laid along `axis`.
@@ -5378,6 +5383,7 @@ Toolbar (tier 2): a row of buttons that is one stop in the tab order.
 - `Move = struct { current: u32, focus: u32, activated: u32 }`: Where the tab stop, focus and activation go: button indices, `none` for none.
 - `replay = @embedFile("testdata/toolbar.replay")`: Input for `Page(.default)` at 320 x 200, one commented line per frame.
 - `fn bar(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const u8, current: *u32) u32`: A toolbar of one button per title: button `k` has the identity `ids[k]` and shows `titles[k]`.
+- `fn barFace(f: *Frame, th: *const Theme, ids: []const Id, titles: []const []const u8, current: *u32, face: Style, text: types.TextStyle) u32`: `bar` laid out by `face` instead of `barStyle(th)`, its buttons' titles drawn in `text`; the buttons' fill still follows their state.
 - `fn barStyle(th: *const Theme) Style`: The bar: its buttons side by side on the panel colour, padded and spaced by the theme, as the reference page's toolbar.
 - `fn itemStyle(th: *const Theme) Style`: One button, as `base.buttonStyle`; filled as a button by interaction state (`base.buttonFill`).
 - `fn sense(is_current: bool) types.Sense`: Only the current button senses focus, so the toolbar is one stop in the tab order (and in `focus.seek`); the others still sense the pointer.
@@ -5416,6 +5422,7 @@ Status bar (tier 2): a strip along the foot of a window showing short pieces of 
 - `role: u8 = @backingInt(a11y.Role.status)`: What assistive technology sees: the strip is a `status`, a polite live region, so a screen reader announces its texts when they change without moving focus.
 - `replay = @embedFile("testdata/statusbar.replay")`: Input for `Page(.default)` at 320 x 200, one commented line per frame.
 - `fn bar(f: *Frame, th: *const Theme, texts: []const []const u8) Node`: A status bar showing `texts` side by side, the first at the start.
+- `fn barFace(f: *Frame, texts: []const []const u8, face: Style, text: types.TextStyle) Node`: `bar` laid out by `face` instead of `barStyle(th)`, its texts drawn in `text`.
 - `fn barStyle(th: *const Theme) Style`: The strip: as wide as its parent, on the panel colour, its texts in a row spaced by two pads, inset by a pad at the ends and by the gap above and below (a status bar is thinner than a toolbar).
 - `fn Page(comptime th: Theme) type`: The example page: a window whose body (a Save button) fills it, and a status bar of two texts at its foot, in both front ends, in theme `th`.
 
@@ -5497,6 +5504,7 @@ Icon (tier 2): a small picture from a texture, sized in logical pixels, as DVUI 
 
 - `replay = @embedFile("testdata/icon.replay")`: Input for `Page(.default)` at 320 x 200, one commented line per frame.
 - `fn icon(f: *Frame, th: *const Theme, ic: Icon) Node`: Draws `ic` as one leaf of its size.
+- `fn iconFace(f: *Frame, face: Style) Node`: An icon laid out by `face` instead of `style(th, ic)`: its size, texture, uv and tint.
 - `fn style(th: *const Theme, ic: Icon) Style`: The icon's node: exactly its size, one quad sampling `ic.texture` over `ic.uv`, tinted with the theme's text colour, as a glyph is: a coverage icon takes the colour of the text beside it.
 - `fn name(s: *a11y.Semantics, row: u32, by: u32) void`: Names the icon at tree row `row` by the text of row `by` (`aria-labelledby`) in the caller's semantic columns.
 - `fn Page(comptime th: Theme) type`: The example page: a 16 px icon before a label, and a 24 px icon inside a button, in both front ends, in theme `th`.
@@ -5549,6 +5557,7 @@ Popover (tier 2): a button that opens a floating panel next to it, the WAI-ARIA 
 - `fn Popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral()) type`: The popover named `name` bound to the bool field `open`, in theme `th`: its spec builders and the hooks `ComptimePage` calls.
 - `fn scrimStyle(viewport: [2]f32) Style`: The scrim: a transparent float over the whole viewport.
 - `fn panelStyle(th: *const Theme, at: Rect) Style`: The panel, floating `th.gap` below the trigger's rect `at` (last frame's), left edges aligned: a panel-coloured column with the control outline, padded like a button.
+- `fn anchored(face: Style, placed: Style) Style`: `face` floating where `placed` (this file's `panelStyle`, or a menu's or a tooltip's style below its anchor) puts it: the `…Face` variants of the overlays restyle the look, not the placement.
 - `fn plainPart(comptime th: Theme, comptime n: Spec, r: Response) Part`: The style of a row no overlay hook claims: a label as specified, a container with an id (a button) filled by its state, anything else as specified.
 - `fn keyPressed(in: *const Input, code: u8) bool`: Key `code` went down (or repeated) in this frame's events.
 - `fn keyCount(in: *const Input, code: u8, mods: Input.Mods, exact: bool) u32`: Times key `code` went down this frame, auto-repeat included; with `exact`, only with exactly `mods` held.
@@ -5556,6 +5565,7 @@ Popover (tier 2): a button that opens a floating panel next to it, the WAI-ARIA 
 - `fn isWidget(w: anytype, comptime name: []const u8) bool`: Whether optional event or widget `w` (a `?Events.Event` or `?Events.Widget`) is the widget named `name`.
 - `fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, text: []const u8) Response`: The trigger: a button named `name` showing `text`.
 - `fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool`: Opens the scrim and the panel of popover `name` if it is open, and returns whether it did; the caller then adds the content and calls `end`.
+- `fn beginFace(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, face: Style) bool`: `begin` with the panel laid out by `face` instead of `panelStyle`; it still floats below the trigger (`anchored`).
 - `fn end(f: *Frame) void`: Closes the panel and the scrim `begin` opened.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8) void`: The semantics of popover `name` the tree's columns cannot hold, written into `s` after `Semantics.clear` and before `a11y.names` and `a11y.states`: the trigger is expandable, and expanded while the panel is in `t` (`aria-expanded`); the panel is named by the trigger (`aria-labelledby`), so the dialog reads as "Details".
 - `fn Semantic(comptime cap: u32) type`: Room for the accessibility export of a tree of up to `cap` rows: `a11y.Semantics` and an `a11y.Export` in one buffer, for a widget's tests and for applications that check one.
@@ -5693,6 +5703,7 @@ Tooltip (tier 2): a short text that appears next to a widget once the pointer ha
 - `fn advance(tip: Tip, hovered: bool, dt: f32, escape: bool) Tip`: One frame of a tooltip: while the target is hovered the timer runs, and the tooltip shows once it reaches `delay`; leaving the target resets it.
 - `fn update(f: *const Frame, tip: *Tip, r: Response) void`: Steps `tip` by one frame from the target's response `r`.
 - `fn show(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *const Tip, text: []const u8) void`: Builds the bubble of the tooltip of `target` showing `text`, if it is shown.
+- `fn showFace(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *const Tip, text: []const u8, face: Style, ts: types.TextStyle) void`: `show` with the bubble laid out by `face` instead of `bubbleStyle` and its text drawn in `ts`; it still floats below the target (`popover.anchored`).
 - `fn Bubble(comptime th: Theme, comptime target: []const u8, comptime tip: []const u8, comptime text: []const u8) type`: The custom widget (`Spec.widget`) of `ct.tooltip`: its `step` runs while the bubble is hidden too (`steps_hidden`), advancing the tip from the target's hover, and keeps the target's rect for `push`.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with a button and a label, and the button's tooltip, in both front ends, in theme `th`.
 
@@ -5771,6 +5782,7 @@ Menu (tier 2): a button that opens a list of actions, one of which may open a su
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: Def, st: MenuState) void`: The semantics of menu `name` the tree's columns cannot hold, written into `s` after `Semantics.clear` and before `a11y.names` and `a11y.states`.
 - `fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, text: []const u8) Response`: The trigger: a button named `name` showing `text`.
 - `fn show(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *MenuState, texts: []const []const u8) u8`: Builds menu `name` (items `def`, labels `texts` in the one sequence) if it is open.
+- `fn showFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: Def, st: *MenuState, texts: []const []const u8, face: Style, text: types.Te…`: `show` with the list and the submenu laid out by `face` instead of `listStyle` and the items' text drawn in `text`; they still float where `listStyle` and `subStyle` place them (`popover.anchored`), and the items' fill still follows the highlight.
 - `fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime menu: []const u8, comptime def: Def) type`: The custom widgets (`Spec.widget`) of `ct.button` and `ct.list`: the button's `step` reads its own, the scrim's and the items' responses and the keys through `advance`, as `show` does at run time, and keeps its rect for the list's `push`.
 - `fn Example(comptime th: Theme) type`: The example page: a toolbar with the File button and a label, and its menu, in both front ends, in theme `th`.
 
@@ -5870,7 +5882,9 @@ Menu bar (tier 2): a row of buttons, each opening a menu, the WAI-ARIA APG menub
 - `fn advance(comptime def: BarDef, st: BarState, hits: BarHits, in: *const Input) BarState`: One frame of a menu bar (APG menubar).
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, comptime name: []const u8, comptime def: BarDef, st: BarState) void`: The semantics of menu bar `name` the tree's columns cannot hold, written into `s` after `Semantics.clear` and before `a11y.names` and `a11y.states`.
 - `fn bar(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *BarState, texts: []const []const u8) void`: The bar named `name`, in the page's flow, showing `texts` (one per button).
+- `fn barFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *BarState, texts: []const []const u8, face: Style, text: types.T…`: `bar` laid out by `face` instead of `barStyle(th)`, its buttons' text drawn in `text`; the buttons' fill still follows the open menu and the pointer.
 - `fn menus(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *const BarState, texts: []const []const []const u8) void`: The open menu's list (and submenu) of bar `name`, `texts` holding each menu's labels in menu.zig's one sequence.
+- `fn menusFace(f: *Frame, th: *const Theme, comptime name: []const u8, comptime def: BarDef, st: *const BarState, texts: []const []const []const u8, face: Styl…`: `menus` with the lists laid out by `face` instead of `menu.listStyle` and the items' text drawn in `text`, as `menu.showFace`; the lists still float below their buttons.
 - `fn Example(comptime th: Theme) type`: The example page: the bar above a status label, and its menus, in both front ends, in theme `th`.
 
 ### `BarDef` (struct)
@@ -9320,7 +9334,9 @@ Styled two-axis viewport for known content extents (technical canvases and virtu
 ### Top level
 
 - `State = struct { offset: [2]f32 = @splat(0) }`
+- `outer_style: Style = .{ .role = .group }`: The outer box's look: a group, no fill.
 - `fn open(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appearance: Appearance, behavior: Behavior) policy.Error!Handle`: Opens the content box.
+- `fn openFace(f: *Frame, id: Id, state: *State, bounds: Rect, extent: [2]f32, appearance: Appearance, behavior: Behavior, face: Style) policy.Error!Handle`: `open` with the outer box laid out by `face` instead of `outer_style`; it is still placed at `bounds`.
 - `fn close(f: *Frame, handle: Handle) void`: Emit scrollbar parts after content so overlay bars remain above it.
 
 ### `Appearance` (struct)

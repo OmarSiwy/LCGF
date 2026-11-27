@@ -165,6 +165,16 @@ pub fn panelStyle(th: *const Theme, at: Rect) Style {
     };
 }
 
+/// `face` floating where `placed` (this file's `panelStyle`, or a menu's or a tooltip's style
+/// below its anchor) puts it: the `…Face` variants of the overlays restyle the look, not the
+/// placement.
+pub fn anchored(face: Style, placed: Style) Style {
+    var s = face;
+    s.float = true;
+    s.offset = placed.offset;
+    return s;
+}
+
 /// The style of a row no overlay hook claims: a label as specified, a container with an id
 /// (a button) filled by its state, anything else as specified.
 pub fn plainPart(comptime th: Theme, comptime n: Spec, r: Response) Part {
@@ -243,13 +253,19 @@ pub fn trigger(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bo
 /// A press outside the panel (on the scrim, which last frame's tree has while it is open) or
 /// Escape closes it first.
 pub fn begin(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool) bool {
+    return beginFace(f, th, name, open, panelStyle(th, .{}));
+}
+
+/// `begin` with the panel laid out by `face` instead of `panelStyle`; it still floats below
+/// the trigger (`anchored`).
+pub fn beginFace(f: *Frame, th: *const Theme, comptime name: []const u8, open: *bool, face: Style) bool {
     const scrim: Id = .from(partName(name, "scrim"));
     // The scrim's response is asked for before it is built: if it closes the popover, the
     // scrim is not built at all, as in the comptime front end.
     open.* = dismiss(open.*, f.ctx.inter.response(scrim).pressed, keyPressed(f.in, keys.escape));
     if (!open.*) return false;
     _ = f.interact(f.open(scrim, scrimStyle(f.in.viewport)), overlay_sense);
-    const p = f.open(.from(partName(name, "panel")), panelStyle(th, f.lastRect(.from(name))));
+    const p = f.open(.from(partName(name, "panel")), anchored(face, panelStyle(th, f.lastRect(.from(name)))));
     _ = f.interact(p, overlay_sense);
     f.tree().c.role[p.ix()] = @backingInt(role);
     return true;
@@ -672,6 +688,22 @@ const Page = Example;
 
 const Default = Page(.default);
 var harness: Default.Run = .{};
+
+test "beginFace: the theme's styles draw as begin" {
+    const S = struct {
+        var open: [2]bool = .{ true, true };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            _ = trigger(f, th, "info", &open[k], "Info");
+            if (if (k == 0) begin(f, th, "info", &open[k]) else beginFace(f, th, "info", &open[k], panelStyle(th, .{}))) {
+                _ = base.label(f, th, "Details");
+                end(f);
+            }
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 300, 200 });
+    try testing.expectEqual(S.open[0], S.open[1]);
+}
 
 test "Popover: the page agrees in both front ends, closed and open" {
     const h = &harness;

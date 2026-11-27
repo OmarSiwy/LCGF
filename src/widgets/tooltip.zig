@@ -135,10 +135,16 @@ pub fn update(f: *const Frame, tip: *Tip, r: Response) void {
 /// Builds the bubble of the tooltip of `target` showing `text`, if it is shown. Call it at the
 /// root's depth, after the rest of the page, so it is drawn on top.
 pub fn show(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *const Tip, text: []const u8) void {
+    showFace(f, th, target, tip, text, bubbleStyle(th, .{}), base.labelText(th));
+}
+
+/// `show` with the bubble laid out by `face` instead of `bubbleStyle` and its text drawn in
+/// `ts`; it still floats below the target (`popover.anchored`).
+pub fn showFace(f: *Frame, th: *const Theme, comptime target: []const u8, tip: *const Tip, text: []const u8, face: Style, ts: types.TextStyle) void {
     if (!tip.shown) return;
-    const b = f.open(.none, bubbleStyle(th, f.lastRect(.from(target))));
+    const b = f.open(.none, popover.anchored(face, bubbleStyle(th, f.lastRect(.from(target)))));
     f.tree().c.role[b.ix()] = @backingInt(role);
-    _ = base.label(f, th, text);
+    _ = f.text(text, ts);
     f.close();
 }
 
@@ -268,6 +274,18 @@ fn showTip(h: anytype) !*const @import("../core/tree.zig").Tree {
     const t = (try h.frame(&in)).runtime.tree;
     try testing.expect(h.app.tip.shown);
     return t;
+}
+
+test "showFace: the theme's styles draw as show" {
+    const S = struct {
+        const tip: Tip = .{ .rested = 1, .shown = true };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            _ = base.button(f, th, .from("save"), "Save");
+            if (k == 0) show(f, th, "save", &tip, "Save the file") else showFace(f, th, "save", &tip, "Save the file", bubbleStyle(th, .{}), base.labelText(th));
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 10, 10 });
 }
 
 test "Tooltip: the page agrees in both front ends, hidden and shown" {

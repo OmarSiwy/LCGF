@@ -33,6 +33,12 @@ const Tree = @import("../core/tree.zig").Tree;
 /// `titles[k]`. Input moves `selected.*` and keyboard focus first (`select`); it is clamped
 /// into range. Build the panels next, one per tab in order, then `close`.
 pub fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles: []const []const u8) void {
+    openFace(f, th, ids, selected, titles, setStyle(th), base.labelText(th));
+}
+
+/// `open` with the tab set laid out by `face` instead of `setStyle(th)` and the titles drawn in
+/// `text`; the tabs' fill still follows the selection and the state (`tabFill`).
+pub fn openFace(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles: []const []const u8, face: Style, text: types.TextStyle) void {
     std.debug.assert(ids.len == titles.len and ids.len > 0);
     const count: u32 = @intCast(ids.len);
     // What happened to the tabs, from this frame's interaction step (as `Frame.interact`).
@@ -46,7 +52,7 @@ pub fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles
     const m = select(selected.*, count, clicked, focused, f.in);
     selected.* = m.selected;
     if (m.focus != none) f.ctx.inter.focus = @backingInt(ids[m.focus]);
-    _ = f.open(.none, setStyle(th));
+    _ = f.open(.none, face);
     const list = f.open(.none, listStyle(th));
     f.tree().c.role[list.ix()] = role.list;
     f.tree().c.value[list.ix()] = @floatFromInt(selected.*);
@@ -56,7 +62,7 @@ pub fn open(f: *Frame, th: *const Theme, ids: []const Id, selected: *u32, titles
         const r = f.interact(tab, .button);
         f.setFill(tab, tabFill(th, r, k == selected.*));
         f.setCursor(.pointer, r.hovered);
-        _ = base.label(f, th, title);
+        _ = f.text(title, text);
         f.close();
     }
     f.close();
@@ -320,6 +326,26 @@ const rows = struct {
     const tab = [3]u32{ 4, 6, 8 };
     const panel = [3]u32{ 11, 15, 18 };
 };
+
+test "openFace: the theme's styles draw as open" {
+    const S = struct {
+        const ids = [_]Id{ .from("a"), .from("b") };
+        const titles = [_][]const u8{ "One", "Two" };
+        var sel: [2]u32 = .{ 0, 0 };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            if (k == 0) open(f, th, &ids, &sel[k], &titles) else openFace(f, th, &ids, &sel[k], &titles, setStyle(th), base.labelText(th));
+            for (0..ids.len) |p| {
+                _ = panel(f, th, sel[k], @intCast(p));
+                _ = base.label(f, th, titles[p]);
+                f.close();
+            }
+            close(f);
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 8 }, S.build, .{ 60, 15 });
+    try testing.expectEqual(S.sel[0], S.sel[1]);
+}
 
 test "tabs: both front ends build every panel; only the selected one has height" {
     const h = &harness;

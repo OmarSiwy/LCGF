@@ -21,9 +21,14 @@ const Input = @import("../core/input.zig").Input;
 
 /// A status bar showing `texts` side by side, the first at the start. Returns its node.
 pub fn bar(f: *Frame, th: *const Theme, texts: []const []const u8) Node {
-    const n = f.open(.none, barStyle(th));
+    return barFace(f, texts, barStyle(th), base.labelText(th));
+}
+
+/// `bar` laid out by `face` instead of `barStyle(th)`, its texts drawn in `text`.
+pub fn barFace(f: *Frame, texts: []const []const u8, face: Style, text: types.TextStyle) Node {
+    const n = f.open(.none, face);
     f.tree().c.role[n.ix()] = role;
-    for (texts) |s| _ = base.label(f, th, s);
+    for (texts) |s| _ = f.text(s, text);
     f.close();
     return n;
 }
@@ -124,6 +129,17 @@ const rows = struct {
     const bar = 5;
     const text = [2]u32{ 6, 7 };
 };
+
+test "barFace: the theme's styles draw as bar" {
+    const S = struct {
+        const texts = [_][]const u8{ "Ready", "Ln 1" };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            _ = if (k == 0) bar(f, th, &texts) else barFace(f, &texts, barStyle(th), base.labelText(th));
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 8, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 10, 10 });
+}
 
 test "statusbar: both front ends build a strip of texts at the window's foot" {
     const h = &harness;

@@ -31,10 +31,18 @@ pub const handle_px: f32 = 6;
 /// Starts a splitter along `axis` (`.x`: panes side by side) whose first pane takes `split.*`
 /// of it, and opens the first pane. `id` names the container; the handle is `id.with(1)`.
 pub fn open(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: *f32) void {
+    openFace(f, th, id, axis, split, containerStyle(th, axis));
+}
+
+/// `open` with the container laid out by `face` instead of `containerStyle(th, axis)`; its
+/// panes still run along `axis`.
+pub fn openFace(f: *Frame, th: *const Theme, id: Id, axis: Axis, split: *f32, face: Style) void {
     // Input first, against last frame's container rect, so this frame shows the new split.
     const r = f.ctx.inter.response(id.with(1));
     split.* = resize(split.*, r.held, along(f.lastRect(id), axis, f.in.pointer), r.focused, f.in);
-    _ = f.open(id, containerStyle(th, axis));
+    var s = face;
+    s.dir = axis;
+    _ = f.open(id, s);
     _ = f.open(.none, firstStyle(th, axis, split.*));
 }
 
@@ -266,6 +274,23 @@ const rows = struct {
     const handle = 6;
     const body = 7;
 };
+
+test "openFace: the theme's styles draw as open" {
+    const S = struct {
+        var split: [2]f32 = .{ 0.3, 0.3 };
+        fn build(f: *Frame, k: u1) void {
+            const th: *const Theme = &.default;
+            const id: Id = .from("split");
+            if (k == 0) open(f, th, id, .x, &split[k]) else openFace(f, th, id, .x, &split[k], containerStyle(th, .x));
+            _ = base.label(f, th, "Left");
+            handle(f, th, id, .x, split[k]);
+            _ = base.label(f, th, "Right");
+            close(f);
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 121, 100 });
+    try testing.expectEqual(S.split[0], S.split[1]);
+}
 
 test "splitter: both front ends split the container at the bound fraction around the handle" {
     const h = &harness;

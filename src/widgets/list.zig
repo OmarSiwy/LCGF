@@ -206,8 +206,14 @@ pub fn setStates(s: *a11y.Semantics, first_option: u32, count: u32, sel: u32) vo
 /// list has focus (a press on it gives it), the arrow keys, Home, End and type-ahead move the
 /// selection.
 pub fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, selected: *u32) Response {
+    return listFace(f, th, id, items, selected, listStyle(th), base.labelText(th));
+}
+
+/// `list` with its box laid out by `face` instead of `listStyle(th)` and its options' text
+/// drawn in `text`; focus still sets the border (`listBorder`) and the state the options' fill.
+pub fn listFace(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, selected: *u32, face: Style, text: types.TextStyle) Response {
     const n: u32 = @intCast(items.len);
-    const box = f.open(id, listStyle(th));
+    const box = f.open(id, face);
     const r = f.interact(box, .button);
     const top = f.lastRect(id).y0;
     const under = rowAt(th, top, f.in.pointer[1], n);
@@ -219,7 +225,7 @@ pub fn list(f: *Frame, th: *const Theme, id: Id, items: []const []const u8, sele
     for (items, 0..) |s, k| {
         const row = f.open(.none, optionStyle(th));
         f.setFill(row, optionFill(th, r.hovered and under == k, selected.* == k));
-        _ = base.label(f, th, s);
+        _ = f.text(s, text);
         f.close();
     }
     f.close();
@@ -422,6 +428,19 @@ const theme: Theme = .default;
 const Replay = @import("../core/input.zig").Replay;
 
 var harness: Example(theme).Run = .{};
+
+test "listFace: the theme's styles draw as list" {
+    const S = struct {
+        const items = [_][]const u8{ "Apple", "Pear", "Plum" };
+        var sel: [2]u32 = .{ 0, 0 };
+        fn build(f: *Frame, k: u1) void {
+            const th = &theme;
+            _ = if (k == 0) list(f, th, .from("fruit"), &items, &sel[k]) else listFace(f, th, .from("fruit"), &items, &sel[k], listStyle(th), base.labelText(th));
+        }
+    };
+    try base.expectSameFace(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 20, 30 });
+    try testing.expectEqual(S.sel[0], S.sel[1]);
+}
 
 test "list: the replay gives the same frames in both front ends" {
     const h = &harness;
