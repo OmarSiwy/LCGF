@@ -43,6 +43,15 @@ fn solid(dst: surface.Surface, rect: Rect, radius: f32, value: color.Rgba) !void
     try fill(dst, rect, radius, .{ .solid = value });
 }
 
+/// The font asset is 8-bit coverage with white implied (src/example/font.zig); the image brush
+/// samples 32-bit texels, so the gallery expands it once, at compile time.
+const atlas_pixels: [font_asset.image.alpha8.len]u32 = blk: {
+    @setEvalBranchQuota(4 * font_asset.image.alpha8.len);
+    var out: [font_asset.image.alpha8.len]u32 = undefined;
+    for (font_asset.image.alpha8, &out) |a, *pixel| pixel.* = lcgf.types.Color.rgba(255, 255, 255, a).bitsOf();
+    break :blk out;
+};
+
 /// Font pixels and source UVs are the repository's real printable-ASCII font. Mono supplies
 /// exactly the same advance/line metrics as the application's normal text protocol.
 fn label(allocator: std.mem.Allocator, dst: surface.Surface, text: []const u8, position: [2]i32, px: f32, tint: color.Rgba) !void {
@@ -52,7 +61,7 @@ fn label(allocator: std.mem.Allocator, dst: surface.Surface, text: []const u8, p
     const w: u32 = @intFromFloat(@max(1, @ceil(advance * @as(f32, @floatFromInt(text.len)))));
     const h: u32 = @intFromFloat(@ceil(line_height));
     const image = try newSurface(allocator, w, h);
-    const atlas: surface.Image = .{ .pixels = font_asset.image.pixels, .width = font_asset.image.width, .height = font_asset.image.height, .stride = font_asset.image.width, .alpha = .straight };
+    const atlas: surface.Image = .{ .pixels = &atlas_pixels, .width = font_asset.image.width, .height = font_asset.image.height, .stride = font_asset.image.width, .alpha = .straight };
     for (text, 0..) |byte, i| {
         const uv = try font_asset.uv(byte);
         const x = @as(f32, @floatFromInt(i)) * advance;
