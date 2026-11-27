@@ -187,3 +187,61 @@ test "a widget of your own" {
     try testing.expect(clicked);
     try testing.expectEqual(lcgf.types.Color.rgb(0, 0, 200), color);
 }
+
+// -- data
+const records = lcgf.widgets_records;
+const theme = lcgf.theme;
+
+/// A settings panel as data: one row per node, depth-first, its look an index into `looks`.
+const panel: records.Table = .{
+    .kind = &.{ .col, .label, .row, .checkbox, .button },
+    .depth = &.{ 0, 1, 1, 2, 2 },
+    .text = &.{ "", "Display", "", "Grid", "Apply" },
+    .look = &.{ 0, 1, 2, 3, 4 },
+};
+
+const Settings = struct {
+    tokens: lcgf.theme_table.ThemeTable(theme.Tokens) = .{},
+    seen: u32 = 0,
+    state: records.SceneState(panel.kind.len) = .{},
+
+    fn build(s: *Settings, f: *Frame) void {
+        // Styles come from the tokens each frame: a changed token shows on the next one.
+        const th = theme.widgets(&s.tokens.values);
+        const k = records.kindLooks(&th);
+        var looks = [_]records.Look{ k[@backingInt(records.Kind.col)], k[@backingInt(records.Kind.label)], k[@backingInt(records.Kind.row)], k[@backingInt(records.Kind.checkbox)], k[@backingInt(records.Kind.button)] };
+        looks[1].text.px = s.tokens.values.textAt(.lg); // the heading
+        records.build(f, &th, .from("settings"), panel, &looks, s.state.state());
+        s.seen = s.tokens.generation;
+    }
+};
+// -- end
+
+test "a frame from data, restyled by a token" {
+    const S = struct {
+        var buf: [Context.requiredBytes(.{ .nodes = 32, .texts = 8, .customs = 1 })]u8 align(lcgf.mem.column_align) = undefined;
+        var settings: Settings = .{};
+    };
+    var ctx = try Context.init(&S.buf, .{ .nodes = 32, .texts = 8, .customs = 1 });
+    const s = &S.settings;
+    var in: lcgf.input.Input = .{ .viewport = .{ 300, 200 } };
+    var out: lcgf.context.Output = undefined;
+    for (0..2) |_| {
+        var f = ctx.begin(&in);
+        s.build(&f);
+        out = f.end(.{});
+    }
+    try testing.expect(!ctx.needsFrame(&in));
+    // -- token
+    var palette = s.tokens.values.palette;
+    palette[@backingInt(theme.Role.surface)] = .rgb(40, 60, 90);
+    s.tokens.set(.palette, palette);
+    in.redraw = s.tokens.changedSince(s.seen); // the table is not a signal: tell the host
+    // -- end
+    try testing.expect(ctx.needsFrame(&in));
+    var f = ctx.begin(&in);
+    s.build(&f);
+    out = f.end(.{});
+    const root = out.tree.find(Id.from("settings").with(0));
+    try testing.expectEqual(lcgf.types.Color.rgb(40, 60, 90).bitsOf(), out.tree.c.look[root].fill);
+}
