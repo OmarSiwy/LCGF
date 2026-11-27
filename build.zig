@@ -1374,6 +1374,11 @@ pub fn build(b: *std.Build) void {
             b.step("app-text", "Test the window layer's text service alone").dependOn(&run.step);
         }
     }
+    // lcgf_app's own tests, on an X server when LCGF_X11_TEST_DISPLAY names one (ci/run.sh app).
+    const app_tests = b.addRunArtifact(b.addTest(.{ .root_module = app_mod }));
+    app_tests.has_side_effects = true; // the result depends on the X server
+    b.step("app-test", "Test lcgf_app (on a server when LCGF_X11_TEST_DISPLAY is set; ci/run.sh app)").dependOn(&app_tests.step);
+    if (target.result.os.tag == .linux) test_step.dependOn(&app_tests.step);
 
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.
