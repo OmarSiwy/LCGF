@@ -146,6 +146,34 @@ test "iconFace: the theme's style draws as icon" {
     try base.expectSameFace(.{ .nodes = 8, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 10, 10 });
 }
 
+/// A face unlike the theme's (another size and tint), as a page sets it from data.
+const restyled = struct {
+    const th: Theme = .default;
+    const P = Page(th);
+    const face: Style = blk: {
+        var s = style(&th, P.small);
+        s.size = .{ .px(20), .px(20) };
+        s.fill = .rgb(250, 220, 120);
+        break :blk s;
+    };
+    const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
+    const App = struct {
+        pub fn build(_: *App, f: *Frame) void {
+            _ = f.open(.none, column);
+            _ = iconFace(f, face);
+            _ = base.button(f, &th, .from("save"), "Save");
+            f.close();
+        }
+    };
+    const State = struct { save_text: []const u8 = "Save" };
+    const spec = spec_zig.col(column, .{ spec_zig.styled(ct.icon(th, P.small), face), base.ct.button(th, .save, .save_text) });
+    var h: base.Harness(App, base.ComptimeUi(State, spec, th), .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 128, .depth = 8 }) = .{};
+};
+
+test "ct.icon restyled: the same frames as iconFace over the replay" {
+    try testing.expect(try base.expectReplayAgrees(&restyled.h, replay) > 2);
+}
+
 test "icon: both front ends build one leaf of the icon's size" {
     const h = &harness;
     h.init();

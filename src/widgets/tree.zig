@@ -258,7 +258,7 @@ pub const ct = struct {
             r.* = spec_zig.row(.{}, .{ Spec{ .kind = .col }, base.ct.label(th, labels) });
             r.bind = @tagName(depths);
         }
-        var s = spec_zig.col(.{}, rows);
+        var s = spec_zig.col(treeStyle(&th), rows);
         s.id = @tagName(id);
         s.bind = @tagName(state);
         s.widget = TreeWidget(@tagName(state), @tagName(labels), @tagName(depths), n);
@@ -299,7 +299,7 @@ fn TreeWidget(comptime state: []const u8, comptime labels: []const u8, comptime 
             var scratch: [n_items]u32 = undefined;
             const len = visibleItems(ds, &st.expanded, &scratch);
             const rect = list_zig.ctRect(ui, row);
-            var s = treeStyle(th);
+            var s = n.style;
             s.border_color = list_zig.listBorder(th, r.focused);
             s.value = @floatFromInt(st.selected);
             const box = tb.t.push(parent, .hash(n.id.?), &s);
@@ -309,7 +309,7 @@ fn TreeWidget(comptime state: []const u8, comptime labels: []const u8, comptime 
                 o.fill = list_zig.optionFill(th, r.hovered and under == k, st.selected == item);
                 const i = tb.t.push(box, .none, &o);
                 _ = tb.t.push(i, .none, &markStyle(th, hasChildren(ds, item), st.expanded[item]));
-                list_zig.pushLabel(tb, i, &.{ .role = .label }, ls[item], th);
+                list_zig.pushLabel(tb, i, &.{ .role = .label }, ls[item], &(comptime n.text_style orelse base.labelText(th)));
                 tb.t.seal(i);
             }
             tb.t.seal(box);
@@ -395,6 +395,38 @@ test "treeFace: the theme's styles draw as tree" {
     };
     try base.expectSameFace(.{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 8 }, S.build, .{ 20, 30 });
     try testing.expectEqual(S.st[0], S.st[1]);
+}
+
+/// A face and a text style unlike the theme's, as a page sets them from data.
+const restyled = struct {
+    const face: Style = blk: {
+        var s = treeStyle(&theme);
+        s.pad = @splat(7);
+        s.fill = .rgb(20, 40, 60);
+        s.radius = 9;
+        break :blk s;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const E = Example(theme);
+    const App = struct {
+        outline: State(8) = outline_start,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, E.panel);
+            _ = base.label(f, &theme, "Project");
+            _ = treeFace(f, &theme, .from("outline"), 8, &outline_labels, &outline_depths, &app.outline, face, text);
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(E.panel, .{
+        base.ct.label(theme, .title),
+        spec_zig.styled(spec_zig.textStyled(ct.tree(theme, .outline, .outline, .labels, .depths, 8), text), face),
+    });
+    var h: base.Harness(App, base.ComptimeUi(E.PageState, spec, theme), E.limits) = .{};
+};
+
+test "ct.tree restyled: the same frames as treeFace over the replay" {
+    try testing.expect(try base.expectReplayAgrees(&restyled.h, Page.replay) > 4);
+    try testing.expectEqual(restyled.h.app.outline, restyled.h.ui.signals.state.outline);
 }
 
 test "tree: the replay gives the same frames in both front ends" {

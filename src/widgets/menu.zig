@@ -391,14 +391,21 @@ pub const ct = struct {
     /// `texts`), live while it is open (`spec.when`, `MenuState.visible`); put it last in the
     /// page's root. Its runtime twin is `show`, whose result is `MenuState.chosen`.
     pub fn list(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime texts: []const []const u8) Spec {
+        return listFace(th, name, menu, def, texts, listStyle(&th, .{}), base.labelText(&th));
+    }
+
+    /// `list` with the list laid out by `face` instead of `listStyle` and the items' text in
+    /// `text`; it still floats below the button (`popover.anchored`). Its runtime twin is
+    /// `showFace`.
+    pub fn listFace(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime texts: []const []const u8, comptime face: Style, comptime text: types.TextStyle) Spec {
         const id = @tagName(name);
         const W = Comptime(th, id, @tagName(menu), def);
         if (texts.len != def.items.len) @compileError("menu '" ++ id ++ "': one text per item");
         comptime var rows: []const Spec = &.{};
-        inline for (def.items, texts) |item, text| {
-            rows = rows ++ .{Spec{ .kind = .row, .id = partName(id, item), .children = &.{.{ .kind = .label, .text = text }} }};
+        inline for (def.items, texts) |item, caption| {
+            rows = rows ++ .{Spec{ .kind = .row, .id = partName(id, item), .children = &.{.{ .kind = .label, .text = caption }} }};
         }
-        const panel: Spec = .{ .kind = .col, .id = partName(id, "panel"), .children = rows };
+        const panel: Spec = .{ .kind = .col, .id = partName(id, "panel"), .style = face, .text_style = text, .children = rows };
         return spec_zig.when(menu, .{ .kind = .col, .id = partName(id, "scrim"), .widget = W.List, .children = &.{panel} });
     }
 };
@@ -434,7 +441,7 @@ pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime menu: 
                 st.fill = base.buttonFill(&th, ui.response(next.*, in));
                 const i = t.push(parent, .hash(name), &st);
                 next.* += 1;
-                ui.push(n.children[0], i, next, in);
+                ui.push(comptime spec_zig.inheritText(n.children[0], n.text_style), i, next, in);
                 t.seal(i);
             }
         };
@@ -446,13 +453,14 @@ pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime menu: 
                 const ms: MenuState = @field(ui.signals.state, menu);
                 const k4 = ui.keep(Trigger).*;
                 const sc = t.push(parent, .hash(partName(name, "scrim")), &popover.scrimStyle(in.viewport));
-                const l = t.push(sc, .hash(partName(name, "panel")), &listStyle(&th, .{ .x0 = k4[0], .y0 = k4[1], .x1 = k4[2], .y1 = k4[3] }));
+                const panel = comptime n.children[0];
+                const l = t.push(sc, .hash(partName(name, "panel")), &popover.anchored(panel.style, listStyle(&th, .{ .x0 = k4[0], .y0 = k4[1], .x1 = k4[2], .y1 = k4[3] })));
                 t.c.role[l] = @backingInt(a11y.Role.menu);
                 inline for (def.items, n.children[0].children, 0..) |item, spec_row, k| {
                     const r = t.push(l, .hash(partName(name, item)), &itemStyle(&th, highlighted(def, ms, k)));
                     t.c.role[r] = @backingInt(a11y.Role.menu_item);
                     const label = t.push(r, .none, &.{ .role = .label });
-                    t.c.text[label] = tb.tx.push(label, tb.strings.add(spec_row.children[0].text.?), &base.labelText(&th));
+                    t.c.text[label] = tb.tx.push(label, tb.strings.add(spec_row.children[0].text.?), &(comptime panel.text_style orelse base.labelText(&th)));
                     t.seal(label);
                     t.seal(r);
                 }
@@ -654,6 +662,47 @@ test "ct.button, ct.list: a click opens the menu, the keys and the pointer choos
     _ = try h.frame(&in);
     try S.same(h);
     try testing.expectEqual(@as(u8, 3), h.app.menu.chosen);
+}
+
+/// The menu restyled as a page does from data: `showFace` against `ct.listFace`, the button
+/// restyled with `spec.styled` and `spec.textStyled` against `button.buttonFace`.
+const restyled = struct {
+    const th: Theme = .default;
+    const E = Example(th);
+    const face: Style = blk: {
+        var s = listStyle(&th, .{});
+        s.pad = @splat(9);
+        s.fill = .rgb(20, 40, 60);
+        break :blk s;
+    };
+    const trigger_face: Style = blk: {
+        var s = base.buttonStyle(&th);
+        s.pad = @splat(4);
+        break :blk s;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const edit = CtPage.edit;
+    const App = struct {
+        menu: MenuState = .{},
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, .{});
+            _ = f.open(.none, E.toolbar_style);
+            _ = @import("button.zig").buttonFace(f, &th, .from("edit"), "Edit", text, trigger_face);
+            f.close();
+            _ = showFace(f, &th, "edit", edit, &app.menu, &CtPage.texts, face, text);
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(.{}, .{
+        spec_zig.row(E.toolbar_style, .{spec_zig.styled(spec_zig.textStyled(ct.button(th, .edit, .menu, edit, "Edit"), text), trigger_face)}),
+        ct.listFace(th, .edit, .menu, edit, &CtPage.texts, face, text),
+    });
+    var h: base.Harness(App, base.ComptimeUi(CtPage.State, spec, th), E.limits) = .{};
+};
+
+test "ct.listFace: the same frames as showFace over the replay" {
+    _ = try base.expectReplayAgrees(&restyled.h, replay);
+    try testing.expectEqual(restyled.h.app.menu, restyled.h.ui.signals.state.menu);
 }
 
 test "listStyle, subStyle, itemStyle: the theme's tokens" {

@@ -172,7 +172,7 @@ pub const ct = struct {
                     st.fill = base.buttonFill(&th, ui.response(next.*, in));
                     const i = t.push(row, .hash(name), &st);
                     next.* += 1;
-                    ui.push(item.children[0], i, next, in);
+                    ui.push(comptime spec_zig.inheritText(item.children[0], n.text_style), i, next, in);
                     t.seal(i);
                 }
                 t.seal(row);
@@ -251,6 +251,41 @@ test "barFace: the theme's styles draw as bar" {
     };
     try base.expectSameFace(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 70, 20 });
     try testing.expectEqual(S.current[0], S.current[1]);
+}
+
+/// A face and a text style unlike the theme's, as a page sets them from data.
+const restyled = struct {
+    const th: Theme = .default;
+    const P = Page(th);
+    const face: Style = blk: {
+        var s = barStyle(&th);
+        s.pad = @splat(3);
+        s.gap = 11;
+        s.fill = .rgb(20, 40, 60);
+        break :blk s;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const column: Style = .{ .dir = .y, .pad = @splat(8), .gap = 8 };
+    const App = struct {
+        current: u32 = 0,
+        wire: bool = false,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, column);
+            _ = barFace(f, &th, &P.ids, &.{ "Bold", "Italic", "Underline" }, &app.current, face, text);
+            _ = base.checkbox(f, &th, .from("wire"), &app.wire, "Wireframe");
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(column, .{
+        spec_zig.styled(spec_zig.textStyled(ct.toolbar(th, .current, .activated, .{ .{ .bold, .bold_text }, .{ .italic, .italic_text }, .{ .under, .under_text } }), text), face),
+        base.ct.checkbox(th, .wire, .wire, .wire_text),
+    });
+    var h: base.Harness(App, base.ComptimeUi(P.State, spec, th), .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 }) = .{};
+};
+
+test "ct.toolbar restyled: the same frames as barFace over the replay" {
+    try testing.expect(try base.expectReplayAgrees(&restyled.h, replay) > 4);
+    try testing.expectEqual(restyled.h.app.current, restyled.h.ui.signals.state.current);
 }
 
 test "toolbar: both front ends build one row of buttons" {

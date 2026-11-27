@@ -231,7 +231,7 @@ fn VListWidget(comptime items: []const u8, comptime selected: []const u8, compti
                 var o = template.style;
                 o.fill = list_zig.optionFill(th, r.hovered and under == k, sel == k);
                 const i = tb.t.push(box, .none, &o);
-                list_zig.pushLabel(tb, i, &template.children[0].style, options[k], th);
+                list_zig.pushLabel(tb, i, &template.children[0].style, options[k], &base.labelText(th));
                 tb.t.seal(i);
             }
             tb.t.seal(box);

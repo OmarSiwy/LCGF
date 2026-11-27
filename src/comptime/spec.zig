@@ -308,11 +308,20 @@ pub fn styled(comptime s: Spec, comptime style: Style) Spec {
 }
 
 /// Label `s` drawn in `text_style` instead of the page theme's: `textStyled(heading(1,
-/// "Mixer"), .{ .px = 28, .color = .rgb(230, 230, 235) })`. Its layout style is unchanged.
+/// "Mixer"), .{ .px = 28, .color = .rgb(230, 230, 235) })`. Its layout style is unchanged. On a
+/// widget it styles the text the widget draws (a list's options, a tab set's titles), as a
+/// widget's runtime `…Face` takes a `TextStyle`.
 pub fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec {
-    if (s.kind != .label) @compileError("textStyled: only a label has a text style");
     var out = s;
     out.text_style = text_style;
+    return out;
+}
+
+/// `s` with the text style `text_style` when it has none of its own: how a widget hands the
+/// text style set on it (`textStyled`) to the labels it holds.
+pub fn inheritText(comptime s: Spec, comptime text_style: ?types.TextStyle) Spec {
+    var out = s;
+    if (out.text_style == null) out.text_style = text_style;
     return out;
 }
 

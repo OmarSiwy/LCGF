@@ -1290,6 +1290,20 @@ pub fn expectSameFace(comptime caps: context.Limits, comptime build: fn (*Frame,
     }
 }
 
+/// Runs the replay `src` through harness `h` from `init`: every frame must agree in both front
+/// ends (`Harness.frame`). Returns the frames run. For a widget's comptime form against its
+/// runtime one, restyled (`spec.styled` and `spec.textStyled` against its `…Face`).
+pub fn expectReplayAgrees(h: anytype, src: []const u8) !u32 {
+    const Replay = @import("../core/input.zig").Replay;
+    h.init();
+    var text: [64]u8 = undefined;
+    var evs: [16]Input.Event = undefined;
+    var contacts: [4]Input.Contact = undefined;
+    var replay: Replay = .{ .src = src };
+    while (try replay.next(.{ .text = &text, .events = &evs, .contacts = &contacts })) |in| _ = try h.frame(in);
+    return h.frames;
+}
+
 /// Runs one UI through both front ends, frame by frame, and checks they agree. `App` is the
 /// runtime side: plain data with defaults and `pub fn build(*App, *Frame) void`, and optionally
 /// `pub fn end(*App, *Frame, Mono) context.Output` to end the frame itself (`Frame.endFlex`

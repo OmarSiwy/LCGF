@@ -154,9 +154,10 @@ pub const ct = struct {
     /// The tooltip of the widget named `target` (elsewhere on the page), bound to the `Tip`
     /// field `tip`, showing `text`. Put it last in the page's root so it is drawn above the rest;
     /// it is live while the tip is shown (`spec.when`, `Tip.visible`). Its runtime twin:
-    /// `update(f, &tip, f.ctx.inter.response(.from("target")))` and `show(...)` there.
+    /// `update(f, &tip, f.ctx.inter.response(.from("target")))` and `show(...)` there;
+    /// `spec.styled` and `spec.textStyled` restyle the bubble as `showFace` does.
     pub fn tooltip(comptime th: Theme, comptime target: @EnumLiteral(), comptime tip: @EnumLiteral(), comptime text: []const u8) Spec {
-        return spec_zig.when(tip, .{ .kind = .col, .bind = @tagName(tip), .widget = Bubble(th, @tagName(target), @tagName(tip), text), .children = &.{.{ .kind = .label }} });
+        return spec_zig.when(tip, .{ .kind = .col, .style = bubbleStyle(&th, .{}), .bind = @tagName(tip), .widget = Bubble(th, @tagName(target), @tagName(tip), text), .children = &.{.{ .kind = .label }} });
     }
 };
 
@@ -186,10 +187,11 @@ pub fn Bubble(comptime th: Theme, comptime target: []const u8, comptime tip: []c
             _ = in;
             const tb = &ui.tables;
             const k = ui.keep(@This()).*;
-            const b = tb.t.push(parent, .none, &bubbleStyle(&th, .{ .x0 = k[0], .y0 = k[1], .x1 = k[2], .y1 = k[3] }));
+            // The bubble's face is the spec's (`spec.styled`), placed below the target.
+            const b = tb.t.push(parent, .none, &popover.anchored(n.style, bubbleStyle(&th, .{ .x0 = k[0], .y0 = k[1], .x1 = k[2], .y1 = k[3] })));
             tb.t.c.role[b] = @backingInt(role);
             const l = tb.t.push(b, .none, &.{ .role = .label });
-            tb.t.c.text[l] = tb.tx.push(l, tb.strings.add(text), &base.labelText(&th));
+            tb.t.c.text[l] = tb.tx.push(l, tb.strings.add(text), &(comptime n.text_style orelse base.labelText(&th)));
             tb.t.seal(l);
             tb.t.seal(b);
             next.* += comptime @import("../comptime/flatten.zig").count(n);
@@ -329,6 +331,43 @@ test "ct.tooltip: the example replay in base.ComptimeUi gives the runtime toolti
         shown += @intFromBool(h.app.tip.shown);
     }
     try testing.expect(shown > 0);
+}
+
+/// The tooltip restyled as a page does from data: `showFace` against `spec.styled` and
+/// `spec.textStyled` on `ct.tooltip`.
+const restyled = struct {
+    const th: Theme = .default;
+    const E = Example(th);
+    const face: Style = blk: {
+        var s = bubbleStyle(&th, .{});
+        s.pad = @splat(9);
+        s.fill = .rgb(20, 40, 60);
+        s.radius = 9;
+        break :blk s;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const App = struct {
+        tip: Tip = .{},
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, .{});
+            _ = f.open(.none, E.toolbar_style);
+            update(f, &app.tip, base.button(f, &th, .from("save"), "Save"));
+            _ = base.label(f, &th, "Scene 1");
+            f.close();
+            showFace(f, &th, "save", &app.tip, "Save the scene (Ctrl+S)", face, text);
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(.{}, .{
+        spec_zig.row(E.toolbar_style, .{ base.ct.button(th, .save, "Save"), base.ct.label(th, "Scene 1") }),
+        spec_zig.styled(spec_zig.textStyled(ct.tooltip(th, .save, .tip, "Save the scene (Ctrl+S)"), text), face),
+    });
+    var h: base.Harness(App, base.ComptimeUi(CtPage.State, spec, th), E.limits) = .{};
+};
+
+test "ct.tooltip restyled: the same frames as showFace over the replay" {
+    _ = try base.expectReplayAgrees(&restyled.h, replay);
+    try testing.expectEqual(restyled.h.app.tip, restyled.h.ui.signals.state.tip);
 }
 
 test "bubbleStyle: the theme's tokens, below the target" {

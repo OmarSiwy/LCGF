@@ -292,6 +292,34 @@ test "openFace: the theme's styles draw as open" {
     try testing.expectEqual(S.split[0], S.split[1]);
 }
 
+/// A face unlike the theme's, as a page sets it from data.
+const restyled = struct {
+    const th: Theme = .default;
+    const P = Page(th);
+    const face: Style = .{ .size = .{ .fill, .fill }, .fill = .rgb(20, 40, 60), .radius = 6 };
+    const area: Style = .{ .dir = .y, .size = .{ .px(300), .px(120) }, .pad = @splat(8) };
+    const App = struct {
+        split: f32 = 0.3,
+        wire: bool = false,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, area);
+            openFace(f, &th, .from("split"), .x, &app.split, face);
+            _ = base.label(f, &th, "Files");
+            handle(f, &th, .from("split"), .x, app.split);
+            _ = base.checkbox(f, &th, .from("wire"), &app.wire, "Wireframe");
+            close(f);
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(area, .{spec_zig.styled(ct.splitter(th, .split_handle, .x, .split, .{base.ct.label(th, .files)}, .{base.ct.checkbox(th, .wire, .wire, .wire_text)}), face)});
+    var h: base.Harness(App, base.ComptimeUi(P.State, spec, th), .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 }) = .{};
+};
+
+test "ct.splitter restyled: the same frames as openFace over the replay" {
+    try testing.expect(try base.expectReplayAgrees(&restyled.h, replay) > 4);
+    try testing.expectEqual(restyled.h.app.split, restyled.h.ui.signals.state.split);
+}
+
 test "splitter: both front ends split the container at the bound fraction around the handle" {
     const h = &harness;
     h.init();

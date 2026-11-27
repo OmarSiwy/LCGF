@@ -296,7 +296,7 @@ fn ListWidget(comptime selected: []const u8, comptime options: []const Spec) typ
                 s.fill = optionFill(th, r.hovered and under == j, sel == j);
                 const i = tb.t.push(box, .none, &s);
                 next.* += 1;
-                ui.push(o.children[0], i, next, in);
+                ui.push(comptime spec_zig.inheritText(o.children[0], n.text_style), i, next, in);
                 tb.t.seal(i);
             }
             tb.t.seal(box);
@@ -337,11 +337,12 @@ pub fn widgetRow(comptime Ui: type, comptime id: []const u8) u32 {
     return @backingInt(@field(Ui.Events.Widget, id));
 }
 
-/// A text leaf as `base.label` makes it: `style` (a label's), the string, the theme's text.
-pub fn pushLabel(tb: anytype, parent: u32, style: *const Style, str: []const u8, th: *const Theme) void {
+/// A text leaf as `base.label` makes it: `style` (a label's), the string, its text style `ts`
+/// (`base.labelText` for the theme's).
+pub fn pushLabel(tb: anytype, parent: u32, style: *const Style, str: []const u8, ts: *const types.TextStyle) void {
     const i = tb.t.push(parent, .none, style);
     const span = tb.strings.add(str);
-    tb.t.c.text[i] = tb.tx.push(i, span, &base.labelText(th));
+    tb.t.c.text[i] = tb.tx.push(i, span, ts);
 }
 
 /// Spec nodes in `n`'s subtree that show text.
@@ -440,6 +441,40 @@ test "listFace: the theme's styles draw as list" {
     };
     try base.expectSameFace(.{ .nodes = 16, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 20, 30 });
     try testing.expectEqual(S.sel[0], S.sel[1]);
+}
+
+/// A face and a text style unlike the theme's, as a page sets them from data.
+const restyled = struct {
+    const face: Style = blk: {
+        var s = listStyle(&theme);
+        s.pad = @splat(7);
+        s.fill = .rgb(20, 40, 60);
+        s.radius = 9;
+        s.border = 2;
+        break :blk s;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const E = Example(theme);
+    const App = struct {
+        selected: u32 = none,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, E.panel);
+            _ = base.label(f, &theme, "Fruit");
+            _ = listFace(f, &theme, .from("fruit"), &E.fruits, &app.selected, face, text);
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(E.panel, .{
+        base.ct.label(theme, .title),
+        spec_zig.styled(spec_zig.textStyled(ct.list(theme, .fruit, .selected, .{ .apple, .banana, .cherry, .damson, .elder }), text), face),
+    });
+    var h: base.Harness(App, base.ComptimeUi(E.State, spec, theme), E.limits) = .{};
+};
+
+test "ct.list restyled: the same frames as listFace over the replay" {
+    try testing.expectEqual(12, try base.expectReplayAgrees(&restyled.h, Page.replay));
+    try testing.expectEqual(restyled.h.app.selected, restyled.h.ui.signals.state.selected);
+    try testing.expect(restyled.h.app.selected != none);
 }
 
 test "list: the replay gives the same frames in both front ends" {

@@ -236,7 +236,7 @@ pub const ct = struct {
                     const tab = t.push(list, .hash(name), &ts);
                     t.c.role[tab] = role.tab;
                     next.* += 1;
-                    ui.push(hd.children[0], tab, next, in);
+                    ui.push(comptime spec_zig.inheritText(hd.children[0], n.text_style), tab, next, in);
                     t.seal(tab);
                 }
                 t.seal(list);
@@ -345,6 +345,50 @@ test "openFace: the theme's styles draw as open" {
     };
     try base.expectSameFace(.{ .nodes = 32, .texts = 8, .customs = 1, .strings = 128, .depth = 8 }, S.build, .{ 60, 15 });
     try testing.expectEqual(S.sel[0], S.sel[1]);
+}
+
+/// A face and a text style unlike the theme's, as a page sets them from data.
+const restyled = struct {
+    const th: Theme = .default;
+    const P = Page(th);
+    const face: Style = blk: {
+        var s = setStyle(&th);
+        s.pad = @splat(5);
+        s.fill = .rgb(20, 40, 60);
+        break :blk s;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const App = struct {
+        selected: u32 = 0,
+        wire: bool = false,
+        zoom: f32 = 0.5,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, .{ .dir = .y, .size = .{ .px(260), .fit }, .pad = @splat(8) });
+            openFace(f, &th, &P.ids, &app.selected, &.{ "General", "View", "About" }, face, text);
+            _ = panel(f, &th, app.selected, 0);
+            _ = base.checkbox(f, &th, .from("wire"), &app.wire, "Wireframe");
+            f.close();
+            _ = panel(f, &th, app.selected, 1);
+            _ = base.slider(f, &th, .from("zoom"), &app.zoom, 0, 1);
+            f.close();
+            _ = panel(f, &th, app.selected, 2);
+            _ = base.label(f, &th, "Version 1");
+            f.close();
+            close(f);
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(.{ .dir = .y, .size = .{ .px(260), .fit }, .pad = @splat(8) }, .{spec_zig.styled(spec_zig.textStyled(ct.tabs(th, .selected, .{
+        .{ .general, .general_text, .{base.ct.checkbox(th, .wire, .wire, .wire_text)} },
+        .{ .view, .view_text, .{base.ct.slider(th, .zoom, .zoom)} },
+        .{ .about, .about_text, .{base.ct.label(th, .version)} },
+    }), text), face)});
+    var h: base.Harness(App, base.ComptimeUi(P.State, spec, th), .{ .nodes = 48, .texts = 12, .customs = 1, .strings = 256, .depth = 8 }) = .{};
+};
+
+test "ct.tabs restyled: the same frames as openFace over the replay" {
+    try testing.expect(try base.expectReplayAgrees(&restyled.h, replay) > 4);
+    try testing.expectEqual(restyled.h.app.selected, restyled.h.ui.signals.state.selected);
 }
 
 test "tabs: both front ends build every panel; only the selected one has height" {

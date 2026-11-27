@@ -1090,6 +1090,7 @@ Spec: a UI declared as a compile-time value.
 - `fn slider(comptime id: @EnumLiteral(), comptime bind_or_options: anytype) Spec`: A slider named `id`, showing and setting an f32 field, 0 to 1: `slider(.volume, .volume)`, or with options as `checkbox`'s, `slider(.volume, .{ .name = "Volume" })`.
 - `fn styled(comptime s: Spec, comptime style: Style) Spec`: `s` laid out by `style`: `styled(slider(.volume, .{ .name = "Volume" }), .{ .size = .{ .px(80), .px(10) } })`.
 - `fn textStyled(comptime s: Spec, comptime text_style: types.TextStyle) Spec`: Label `s` drawn in `text_style` instead of the page theme's: `textStyled(heading(1, "Mixer"), .{ .px = 28, .color = .rgb(230, 230, 235) })`.
+- `fn inheritText(comptime s: Spec, comptime text_style: ?types.TextStyle) Spec`: `s` with the text style `text_style` when it has none of its own: how a widget hands the text style set on it (`textStyled`) to the labels it holds.
 - `fn paragraph(comptime s: Spec, comptime p: @import("../text/layout/stack.zig").Paragraph) Spec`: Label `s` with paragraph style `p`: `paragraph(label(.a), .{ .line_height = .{ .px = 20 } })`.
 - `fn decorated(comptime s: Spec, comptime d: @import("../text/layout/decorations.zig").Style) Spec`: Label `s` with text decoration `d`: `decorated(label(.a), .{ .underline = true })`.
 - `fn spans(comptime s: Spec, comptime runs: []const @import("../text/protocol.zig").Span) Spec`: Label `s` as one paragraph in several styles: from each span's `start` byte on, its text style's size, colour and font: `spans(label("a bold word"), &.{ .{ .start = 2, .style = bold }, .{ .start = 6, .style = plain } })`.
@@ -3923,6 +3924,7 @@ Widgets (tier 2): the base every widget is built on, and the four reference widg
 - `fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: Theme, comptime Tokens: type) type`: `ComptimeUi` whose rows also read run-time theme tokens (`spec.tokened`) from a caller-owned `theme_table.ThemeTable(Tokens)` (`ui.tokens`) when they are pushed, so a changed table lays the page out again on the next frame (`themeChanged`).
 - `fn sameDraw(a: *const DrawList, b: *const DrawList) bool`: Whether two draw lists are the same: quad bytes, text runs and commands, in order.
 - `fn expectSameFace(comptime caps: context.Limits, comptime build: fn (*Frame, u1) void, at: [2]f32) !void`: Checks that `build(f, 0)` and `build(f, 1)` draw the same list, each in its own context of `caps`, over three frames in a 400 x 300 window with the pointer at `at`: at rest, pressed and released.
+- `fn expectReplayAgrees(h: anytype, src: []const u8) !u32`: Runs the replay `src` through harness `h` from `init`: every frame must agree in both front ends (`Harness.frame`).
 - `fn Harness(comptime App: type, comptime Ui: type, comptime caps: context.Limits) type`: Runs one UI through both front ends, frame by frame, and checks they agree.
 - `fn Semantic(comptime cap: u32) type`: What assistive technology sees of both front ends' current frame in a `Harness`: each tree run through `names`, `states` and `flatten` (a11y/tree.zig), as a bridge would.
 - `fn Reference(comptime th: Theme) type`: The reference page: the prototype example's toolbar (a button, a checkbox, a slider and a label on a panel) in both front ends, in theme `th`.
@@ -4536,7 +4538,7 @@ List box (tier 2): a column of options, one of them selected, in both front ends
 - `fn ctClicked(ui: anytype, comptime row: u32, event: anytype) bool`: Whether this frame's event is a click on the widget at spec row `row`.
 - `fn ctRect(ui: anytype, comptime row: u32) types.Rect`: Last frame's rect of the widget at spec row `row`.
 - `fn widgetRow(comptime Ui: type, comptime id: []const u8) u32`: The spec row of the widget named `id` on page `Ui`: its `Widget` tag's value.
-- `fn pushLabel(tb: anytype, parent: u32, style: *const Style, str: []const u8, th: *const Theme) void`: A text leaf as `base.label` makes it: `style` (a label's), the string, the theme's text.
+- `fn pushLabel(tb: anytype, parent: u32, style: *const Style, str: []const u8, ts: *const types.TextStyle) void`: A text leaf as `base.label` makes it: `style` (a label's), the string, its text style `ts` (`base.labelText` for the theme's).
 - `fn labelCount(comptime n: Spec) u32`: Spec nodes in `n`'s subtree that show text.
 - `fn nodeAt(comptime n: Spec, comptime row: comptime_int) Spec`: The spec node at depth-first row `row` of `n`.
 - `fn Example(comptime th: Theme) type`: The example page: a caption and a list of five fruits on a panel, in both front ends, in theme `th`.
@@ -5676,6 +5678,7 @@ Fields: `in`, `last`, `event`, `pressed`, `response`, `page`
 
 - `fn button(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime text: anytype) Spec`: The button that opens and closes popover `name`, bound to the bool field `open`, showing `text` (a literal or a string field).
 - `fn popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec`: The scrim and the panel of popover `name` holding `children` (any spec nodes), live while `open` is true (`spec.when`); put it last in the page's root.
+- `fn popoverFace(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime face: Style, comptime children: anytype) Spec`: `popover` with the panel laid out by `face` instead of `panelStyle`; it still floats below the button (`anchored`).
 
 ### `Comptime(..)` (generic struct)
 The custom widgets (`Spec.widget`) of `ct.button` and `ct.popover`: the button's `step` toggles on its click and closes on a press on the scrim or Escape, as `trigger` and `begin` do at run time, and keeps the button's rect for the panel's `push`.
@@ -5852,6 +5855,7 @@ Fields: `toggle`, `outside`, `clicked`, `hovered`
 
 - `fn button(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime text: anytype) Spec`: The button that opens menu `name`, bound to the `MenuState` field `menu`, showing `text` (a literal or a string field).
 - `fn list(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime texts: []const []const u8) Spec`: The scrim and the list of menu `name` (items `def`, without a submenu, captioned by `texts`), live while it is open (`spec.when`, `MenuState.visible`); put it last in the page's root.
+- `fn listFace(comptime th: Theme, comptime name: @EnumLiteral(), comptime menu: @EnumLiteral(), comptime def: Def, comptime texts: []const []const u8, comptime…`: `list` with the list laid out by `face` instead of `listStyle` and the items' text in `text`; it still floats below the button (`popover.anchored`).
 
 ### `Comptime(..)` (generic struct)
 The custom widgets (`Spec.widget`) of `ct.button` and `ct.list`: the button's `step` reads its own, the scrim's and the items' responses and the keys through `advance`, as `show` does at run time, and keeps its rect for the list's `push`.

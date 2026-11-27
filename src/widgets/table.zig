@@ -441,7 +441,7 @@ fn TableWidget(comptime name: [:0]const u8, comptime state: []const u8, comptime
                 hs.fill = headerFill(th, list_zig.ctResponse(ui, row(Ui, "h", k), in));
                 hs.value = sortValue(st.sort == k, st.descending);
                 const h = tb.t.push(head, headerId(id, k), &hs);
-                list_zig.pushLabel(tb, h, &.{ .role = .label }, hs_[k], th);
+                list_zig.pushLabel(tb, h, &.{ .role = .label }, hs_[k], &base.labelText(th));
                 _ = tb.t.push(h, .none, &markStyle(th, st.widths[k], st.sort == k, st.descending));
                 var gs = handleStyle(th, st.widths[k], list_zig.ctResponse(ui, row(Ui, "r", k), in));
                 gs.value = st.widths[k];
@@ -457,7 +457,7 @@ fn TableWidget(comptime name: [:0]const u8, comptime state: []const u8, comptime
                 const r = tb.t.push(body, .none, &rowStyle(th));
                 for (0..cols) |k| {
                     const c = tb.t.push(r, .none, &cellStyle(th, st.widths[k], st.row == i and st.col == k, focused));
-                    list_zig.pushLabel(tb, c, &.{ .role = .label }, cs[data_row * cols + k], th);
+                    list_zig.pushLabel(tb, c, &.{ .role = .label }, cs[data_row * cols + k], &base.labelText(th));
                     tb.t.seal(c);
                 }
                 tb.t.seal(r);

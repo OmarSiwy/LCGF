@@ -564,8 +564,14 @@ pub const ct = struct {
     /// while `open` is true (`spec.when`); put it last in the page's root. A press outside the
     /// panel or Escape closes it. Its runtime twin is `begin` ... `end`.
     pub fn popover(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime children: anytype) Spec {
+        return popoverFace(th, name, open, panelStyle(&th, .{}), children);
+    }
+
+    /// `popover` with the panel laid out by `face` instead of `panelStyle`; it still floats
+    /// below the button (`anchored`). Its runtime twin is `beginFace`.
+    pub fn popoverFace(comptime th: Theme, comptime name: @EnumLiteral(), comptime open: @EnumLiteral(), comptime face: Style, comptime children: anytype) Spec {
         const id = @tagName(name);
-        var panel = spec_zig.col(.{}, children);
+        var panel = spec_zig.col(face, children);
         panel.id = partName(id, "panel");
         return spec_zig.when(open, .{ .kind = .col, .id = partName(id, "scrim"), .widget = Comptime(th, id, @tagName(open)).Layer, .children = &.{panel} });
     }
@@ -596,7 +602,7 @@ pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime open: 
                 st.fill = base.buttonFill(&th, ui.response(next.*, in));
                 const i = t.push(parent, .hash(name), &st);
                 next.* += 1;
-                ui.push(n.children[0], i, next, in);
+                ui.push(comptime spec_zig.inheritText(n.children[0], n.text_style), i, next, in);
                 t.seal(i);
             }
         };
@@ -608,7 +614,7 @@ pub fn Comptime(comptime th: Theme, comptime name: [:0]const u8, comptime open: 
                 const t = &ui.tables.t;
                 const k = ui.keep(Trigger).*;
                 const sc = t.push(parent, .hash(partName(name, "scrim")), &scrimStyle(in.viewport));
-                const p = t.push(sc, .hash(partName(name, "panel")), &panelStyle(&th, .{ .x0 = k[0], .y0 = k[1], .x1 = k[2], .y1 = k[3] }));
+                const p = t.push(sc, .hash(partName(name, "panel")), &anchored(n.children[0].style, panelStyle(&th, .{ .x0 = k[0], .y0 = k[1], .x1 = k[2], .y1 = k[3] })));
                 t.c.role[p] = @backingInt(role);
                 next.* += 2;
                 inline for (n.children[0].children) |c| ui.push(c, p, next, in);
@@ -755,6 +761,44 @@ test "ct.button, ct.popover: the example replay in base.ComptimeUi gives the run
         opened += @intFromBool(h.app.open);
     }
     try testing.expect(opened > 0);
+}
+
+/// The popover restyled as a page does from data: `beginFace` against `ct.popoverFace`.
+const restyled = struct {
+    const th: Theme = .default;
+    const E = Example(th);
+    const face: Style = blk: {
+        var s = panelStyle(&th, .{});
+        s.pad = @splat(13);
+        s.fill = .rgb(20, 40, 60);
+        s.border = 3;
+        break :blk s;
+    };
+    const App = struct {
+        open: bool = false,
+        pub fn build(app: *App, f: *Frame) void {
+            _ = f.open(.none, .{});
+            _ = f.open(.none, E.toolbar_style);
+            _ = trigger(f, &th, "details", &app.open, "Details");
+            _ = base.label(f, &th, "Layer 0");
+            f.close();
+            if (beginFace(f, &th, "details", &app.open, face)) {
+                _ = base.label(f, &th, "Exposure 0.25");
+                end(f);
+            }
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(.{}, .{
+        spec_zig.row(E.toolbar_style, .{ ct.button(th, .details, .open, "Details"), base.ct.label(th, "Layer 0") }),
+        ct.popoverFace(th, .details, .open, face, .{base.ct.label(th, "Exposure 0.25")}),
+    });
+    var h: base.Harness(App, base.ComptimeUi(CtPage.State, spec, th), E.limits) = .{};
+};
+
+test "ct.popoverFace: the same frames as beginFace over the replay" {
+    _ = try base.expectReplayAgrees(&restyled.h, replay);
+    try testing.expectEqual(restyled.h.app.open, restyled.h.ui.signals.state.open);
 }
 
 test "panelStyle: the theme's tokens, below the trigger" {

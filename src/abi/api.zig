@@ -244,6 +244,7 @@ pub const widgets: Container = .{ .prefix = "", .T = base, .file = "src/widgets/
     .{ "ComptimeUiTokens", "comptime: a type" },
     .{ "sameDraw", "a test helper" },
     .{ "expectSameFace", "a test helper" },
+    .{ "expectReplayAgrees", "zig-only: a test helper" },
     .{ "Harness", "comptime: a test type" },
     .{ "Semantic", "comptime: a test type" },
     .{ "Reference", "comptime: a test type" },

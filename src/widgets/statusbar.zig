@@ -70,7 +70,7 @@ pub const ct = struct {
             const i = t.push(parent, .none, &n.style);
             t.c.role[i] = role;
             next.* += 1;
-            inline for (n.children) |c| ui.push(c, i, next, in);
+            inline for (n.children) |c| ui.push(comptime spec_zig.inheritText(c, n.text_style), i, next, in);
             t.seal(i);
         }
     };
@@ -139,6 +139,40 @@ test "barFace: the theme's styles draw as bar" {
         }
     };
     try base.expectSameFace(.{ .nodes = 8, .texts = 4, .customs = 1, .strings = 64, .depth = 8 }, S.build, .{ 10, 10 });
+}
+
+/// A face and a text style unlike the theme's, as a page sets them from data.
+const restyled = struct {
+    const th: Theme = .default;
+    const P = Page(th);
+    const face: Style = blk: {
+        var s = barStyle(&th);
+        s.pad = @splat(9);
+        s.fill = .rgb(20, 40, 60);
+        break :blk s;
+    };
+    const text: types.TextStyle = .{ .px = 17, .color = .rgb(250, 220, 120) };
+    const window: Style = .{ .dir = .y, .size = .{ .fill, .fill } };
+    const body: Style = .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(8) };
+    const App = struct {
+        pub fn build(_: *App, f: *Frame) void {
+            _ = f.open(.none, window);
+            _ = f.open(.none, body);
+            _ = base.button(f, &th, .from("save"), "Save");
+            f.close();
+            _ = barFace(f, &.{ "Ready", "Ln 4, Col 12" }, face, text);
+            f.close();
+        }
+    };
+    const spec = spec_zig.col(window, .{
+        spec_zig.col(body, .{base.ct.button(th, .save, .save_text)}),
+        spec_zig.styled(spec_zig.textStyled(ct.statusbar(th, .{ .status, .position }), text), face),
+    });
+    var h: base.Harness(App, base.ComptimeUi(P.State, spec, th), .{ .nodes = 32, .texts = 8, .customs = 1, .strings = 256, .depth = 8 }) = .{};
+};
+
+test "ct.statusbar restyled: the same frames as barFace over the replay" {
+    try testing.expect(try base.expectReplayAgrees(&restyled.h, replay) > 2);
 }
 
 test "statusbar: both front ends build a strip of texts at the window's foot" {
