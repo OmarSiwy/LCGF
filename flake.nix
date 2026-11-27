@@ -64,6 +64,9 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.vulkan-loader
             pkgs.libglvnd
+            # The X11 shell's GPU window opens libxcb by name for its Vulkan surface
+            # (src/shell/x11/gpu.zig, ci/run.sh x11-gpu).
+            pkgs.libxcb
           ];
           VK_ICD_FILENAMES = "${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.x86_64.json";
           # EGL and GL ES (lane render-gles): libglvnd's libEGL / libGLESv2 dispatching to Mesa,

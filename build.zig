@@ -1359,6 +1359,32 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "lcgf", .module = lcgf }},
     }) });
     b.step("x11-example", "Build zig-out/bin/x11-example (the example in an X11 window)").dependOn(&b.addInstallArtifact(x11_example, .{}).step);
+    // Vulkan over an X window (src/shell/x11/gpu.zig): a module over lcgf and the Vulkan back
+    // end, which opens the Vulkan loader and libxcb at run time and so links libc. Its test
+    // draws into a window of the server LCGF_X11_TEST_DISPLAY names (ci/run.sh x11-gpu: Xvfb
+    // and Mesa lavapipe).
+    const x11_gpu_step = b.step("x11-gpu", "Test Vulkan over an X window (ci/run.sh x11-gpu)");
+    if (renderBackend(b, .vk, target, optimize, lcgf, wgpu_native_mod)) |x11_vk| {
+        const x11_gpu_tests = b.addTest(.{ .root_module = b.createModule(.{
+            .root_source_file = b.path("src/shell/x11/gpu.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "lcgf", .module = lcgf },
+                .{ .name = "vk", .module = x11_vk },
+                .{ .name = "x11", .module = b.createModule(.{
+                    .root_source_file = b.path("src/shell/x11/x11.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{.{ .name = "lcgf", .module = lcgf }},
+                }) },
+            },
+        }) });
+        const x11_gpu_run = b.addRunArtifact(x11_gpu_tests);
+        x11_gpu_run.has_side_effects = true; // the result depends on the server and the driver
+        x11_gpu_step.dependOn(&x11_gpu_run.step);
+    }
 
     // The Win32 shell (src/shell/win32/win32.zig): a module of its own over lcgf. user32, gdi32
     // and kernel32 are the system's; build with -Dtarget=x86_64-windows.
