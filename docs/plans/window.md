@@ -105,8 +105,9 @@ its loop. `Frame.canvas` is unchanged: LCGF's own batch, drawn inline, damaged b
 
 ## Stages
 
-Every stage ends with `zig build test fmt` and `ci/run.sh census-src` passing, and the job
-named in its row.
+Every stage ends with `zig build test fmt lint`, `ci/run.sh census-src` and `ci/run.sh docs`
+passing, and the job named in its row. `docs` compares `docs/api/API.md` with the index
+`zig build docs` generates, so a commit that changes a public declaration regenerates it.
 
 | # | Agent, branch | Work | Done when |
 |---|---|---|---|
