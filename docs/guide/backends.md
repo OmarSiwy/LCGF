@@ -22,6 +22,11 @@ end's own type, so a call through it compiles to the same machine code as one th
 import. `ci/run.sh render-select` checks that for every back end by comparing the two builds'
 `.text` byte for byte.
 
+An application leaves the option at `auto` and runs through `lcgf_app` ("When you bring no
+device" below), which falls back to software by itself where it has no GPU window. `sw` is for
+microcontrollers, machines that must not load a GPU driver and the smallest static binary, not
+the starting point for a desktop application. Application code names no back end.
+
 Every code block below is a piece of `docs/guide/backends.zig`, which `zig build docs` compiles
 and runs. The docs build selects `sw`, so the example draws into a framebuffer without a GPU.
 
@@ -68,13 +73,29 @@ shells that use it:
 
 | Back end | Setup | Used by |
 |---|---|---|
-| `vk` | `vk.Setup` (loader, instance, device, renderer) and `vk.setup.Window` (surface, swapchain, frames, `draw`, `rebuild`) | Android shell |
+| `vk` | `vk.Setup` (loader, instance, device, renderer) and `vk.setup.Window` (surface, swapchain, frames and the kept picture: `begin` and `present`, or `draw` in one call; `rebuild`) | Android shell, the X11 GPU window (`src/shell/x11/gpu.zig`) and through it `lcgf_app` |
 | `metal` | `metal.Setup` over a `CAMetalLayer` (device, renderer, frames in flight, `draw`) | iOS shell |
-| `sw` | `sw.Setup`: clear the framebuffer and draw the list; you show the pixels | X11, Win32 and Wayland shells |
+| `sw` | `sw.Setup`: draw the list into a framebuffer that keeps the last frame, only inside its damage; you show the pixels | X11, Win32 and Wayland shells |
 
 Direct3D 12, GL ES, wgpu and web have no `Setup` yet, because no shell draws with them; their
 window pieces are in the back end itself (`d3d12/frame.zig`, `gles/egl.zig`, `wgpu/surface.zig`,
 the web glue). Naming `render.Setup` for them is a compile error.
+
+`lcgf_app` (`docs/guide/runtime.md`, "A window in one call") goes one step further and owns the
+window, the device and the loop. Which back end it draws with follows `-Drender` and the
+platform:
+
+| Build | Window |
+|---|---|
+| Linux, `vk` (the default there) | X11 with Vulkan, the picture kept and only damage redrawn; under Wayland through XWayland when `DISPLAY` is set. `Surface` and `draw` exist only here ([surface.md](surface.md)) |
+| Linux, `sw` or any other back end | the software window: Wayland when `WAYLAND_DISPLAY` names a compositor, else X11 |
+| Windows | the software window (Win32) |
+| macOS | AppKit with Metal, every frame drawn whole |
+
+On the Vulkan build, `LCGF_RENDER=sw` in the environment, an unset `DISPLAY` or no Vulkan
+device gives the software window instead; an application with `draw` then fails with
+`error.NoGpu`. On Linux an `lcgf_app` build links libc when its back end is a GPU one (the
+Vulkan loader is opened at run time); a `-Drender=sw` build does not.
 
 ## Which one to pick
 
@@ -87,5 +108,7 @@ Vulkan-only wgpu instance on NVIDIA.
 
 Pick `wgpu` when your application already uses wgpu and wants LCGF to draw into its passes.
 Pick `gles` for devices with no Vulkan driver (old GPUs, some virtual machines); it has an ES2
-path for the oldest. Pick `sw` for microcontrollers, or for the smallest memory footprint where
-a GPU driver's own tens of megabytes cost more than drawing on the CPU.
+path for the oldest. Pick `sw` for microcontrollers, for machines that must not load a GPU
+driver, or for the smallest static binary and memory footprint where a GPU driver's own tens of
+megabytes cost more than drawing on the CPU. A desktop application that might run without a GPU
+does not need `sw` for that: `lcgf_app` falls back to software at run time.

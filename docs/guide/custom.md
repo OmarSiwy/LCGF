@@ -11,6 +11,13 @@ it as a `DrawList` of three kinds of command: `quads` (one instanced draw of a b
 texture and material), `text` (a run's glyph quads) and `custom` (a rectangle you draw yourself).
 Because you own the pass, raw GPU access needs no callback and no back-end hook.
 
+This page is for a host that owns its loop and its pass. In an `lcgf_app` window the window
+layer owns them, and your drawing goes in a `Surface` ([Drawing your own pixels in an
+`lcgf_app` window](surface.md)): the texture-in route below, with the window making the
+texture, calling your `draw` only when that surface asks for it and redrawing only its
+rectangle. The routes that need the UI's pass (under, over and inline) stay with a host that
+owns its loop; an `lcgf_app` window skips `custom` commands, as `iface.render` does.
+
 Every code block below is a piece of `docs/guide/custom.zig`, which `zig build docs` compiles
 and runs against `render_null.Null`, the back end that records the calls a GPU back end makes.
 The renderer interface describes three ways to interleave custom drawing with UI commands. The wgpu backend documents the five kinds of raw access below. [Renderer interface](../../src/render/iface.zig) · [wgpu backend](../../src/render/wgpu/wgpu.zig)

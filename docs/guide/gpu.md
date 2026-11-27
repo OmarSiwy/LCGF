@@ -115,6 +115,10 @@ Compute passes work the same way: `enc.beginComputePass()`, `setPipeline`, `setB
 
 ## The host's side
 
+In an `lcgf_app` window the window layer is the host: `draw` gets the device, the upload phase
+and the encoder already wrapped (`GpuFrame`), and the texture-in route is a `Surface`
+([surface.md](surface.md)). The rest of this section is for a host of your own.
+
 You own the device, the command stream and the UI's pass, as with every other route
 ([custom rendering](custom.md)). Each back end's `wrap` functions turn the handles you already
 have into the projection's types:

@@ -5,6 +5,12 @@ The runtime front end rebuilds the tree every frame from your own data: you call
 `DrawList`. Use it for any UI whose shape depends on data; the comptime front end
 (`docs/guide/comptime.md`) is for UIs whose shape is fixed when you compile.
 
+To write a desktop application, run your `build` through `lcgf_app.run` (`lcgf.addApp` in
+build.zig) and leave `-Drender` at its default ("A window in one call" below). `lcgf_app` draws
+on the GPU where it has a window for it and falls back to software by itself, so your code
+names no back end. The rest of this page is what it runs, and what a host that owns its loop
+calls itself.
+
 Every code block below is a piece of `docs/guide/runtime.zig`, which `zig build docs` compiles
 and runs. The example builds a toolbar through the production package. It follows the original `buildUi` fixture. [Archived example](https://github.com/OmarSiwy/LCGF/blob/b6c1319/prototype/example.zig)
 
@@ -186,15 +192,34 @@ The kit adds no behaviour: `ui.button(.add, .{ .label = "Add" })` is
 
 `lcgf_app.run(App, &app, init, .{ .title = "Hello" })` opens a desktop window and runs `App`'s
 `build` in it until it closes: Wayland or X11 on Linux, Win32, or AppKit with Metal on macOS,
-chosen from the target and the environment, with the shells' loop above. Text is drawn in
-real fonts at the window's scale (src/app/text.zig): the files of `Options.fonts`
-(`.fonts = &.{.{ .bytes = @embedFile("Inter.ttf") }}`, font k the k-th), else the system's
-default faces where the build can ask for them (not a Linux build without libc), else, and on
-macOS for now, the bundled bitmap font. In build.zig, `lcgf.addApp(b, dep, .{ .name = "hello", .root_source_file
-= b.path("main.zig"), .target = target, .optimize = optimize })` gives the executable the
-`lcgf_app` module with the shells its target needs. examples/app/main.zig is a whole program;
-`zig build app-example -Dtarget=x86_64-windows` builds it for Windows from anywhere. The web,
-Android and iOS start an application their own way: see their shells' examples.
+chosen from the target and the environment, with the shells' loop above. In build.zig,
+`lcgf.addApp(b, dep, .{ .name = "hello", .root_source_file = b.path("main.zig"), .target =
+target, .optimize = optimize })` gives the executable the `lcgf_app` module with the shells its
+target needs. examples/app/main.zig is a whole program; `zig build app-example
+-Dtarget=x86_64-windows` builds it for Windows from anywhere. The web, Android and iOS start an
+application their own way: see their shells' examples.
+
+Leave `-Drender` at its default for an application. `-Drender=sw` is for microcontrollers,
+for machines that must not load a GPU driver, and for the smallest static binary; it is not the
+starting point for a desktop application. What you draw names no back end either: no
+`render_sw` type in application code. Images go through `lcgf_app.Image`, a widget you draw
+yourself through `Surface`, and 2D primitives through `Frame.canvas`.
+
+- **Text** is drawn in real fonts at the window's scale (src/app/text.zig): the files of
+  `Options.fonts` (`.fonts = &.{.{ .bytes = @embedFile("Inter.ttf") }}`, font k the k-th), else
+  the system's default faces where the build can ask for them (not a Linux build without
+  libc), else, and on macOS for now, the bundled bitmap font. `Options.text` sizes the service
+  ([text.md](text.md), "Text in an `lcgf_app` window").
+- **Images**: an `App` with `pub fn images(*App) []const lcgf_app.Image` (RGBA8 pixels, a
+  size and a `generation` you change when the pixels do; at most `images_max`) has image k
+  drawn by `Style.texture` k + 1. macOS does not draw them yet.
+- **Damage** is on: the window keeps last frame's pixels and redraws only what changed
+  (`Context.trackDamage` on the software window, `trackDamageWhole` on the GPU one); macOS
+  draws every frame whole. An idle window presents nothing.
+- **The GPU**: a Vulkan build on Linux draws the window with Vulkan over X11, and an `App`
+  with `pub fn draw` draws its own `Surface`s there ([surface.md](surface.md)).
+  `LCGF_RENDER=sw`, no `DISPLAY` or no Vulkan device gives the software window
+  ([backends.md](backends.md), "When you bring no device").
 
 ## A widget of your own
 

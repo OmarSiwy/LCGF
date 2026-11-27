@@ -32,8 +32,12 @@ runs.
    1.0, rewrite `w` and `h` for that width; layout reads them for the vertical axis.
 
 `Frame.end(font)` does both with a `Mono` (`protocol.Mono`: every byte `advance` ems wide, every
-line `line` ems tall). To put any other font in, run the passes yourself and call
-`Frame.finish`, which paints. These are the calls `end` makes when no subtree is reused:
+line `line` ems tall). `Mono` is the font that needs no font file: for tests, microcontrollers,
+a host with no faces, and the bundled bitmap font that `lcgf_app` falls back to. It is a byte to
+a cell, so text past ASCII goes through `Mono.encode` first. Real fonts go in through the text
+stack below, and an `lcgf_app` window already does that for you. To put any other font in, run
+the passes yourself and call `Frame.finish`, which paints. These are the calls `end` makes when
+no subtree is reused:
 
 ```zig
 const t = f.tree();
@@ -172,3 +176,25 @@ row per run (the first baseline below the run's top). Like `Squares` above, it s
 runs whose font it has a shaper for. Complex scripts beyond the simple shaper go through the
 HarfBuzz adapter in `src/text/shape/` (`zig build harfbuzz`), a module of its own that the core
 never imports.
+
+## Text in an `lcgf_app` window
+
+`src/app/text.zig` is the text service the window layer runs: font files in, measured runs and
+each frame's glyph quads over one coverage atlas out. It joins the stack above into three calls
+(`Text.init`, `Frame.endText` with its stack, `Text.glyphs` at the window's scale), and its
+header shows them. A run's `TextStyle.font` k is file k; every face is in every run's fallback
+chain, its own first, and on a build that can ask the system (`can_discover`: not a Linux build
+without libc) `cover` adds a system face for a character no face has. Glyph images are
+rasterised at physical pixels and keep their place in the atlas while it lives, so only new
+glyphs change texels. Every table is carved from your buffer (`Text.requiredBytes`).
+
+`lcgf_app` runs it for you (`Options.fonts`, `Options.text`; see [runtime.md](runtime.md), "A
+window in one call"). A host with its own loop can run it the same way.
+
+Canvas labels (`Frame.canvas`) that must stay sharp under any camera zoom take their glyphs from
+`text.labels` (`src/app/labels.zig`): it shapes a label with the service's faces and appends
+canvas glyph rows that sample a distance atlas (`bit.distance` in `src/draw/canvas.zig`), each
+glyph's image made once. A back end reads that atlas through `Glyphs.canvas`. `lcgf_app` does
+not run labels yet: canvas glyphs in its window sample the bundled bitmap font's cells.
+`bench/micro/canvastext.zig` measures the choice of distance images over rasterising again at
+each zoom.
