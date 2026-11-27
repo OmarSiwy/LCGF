@@ -144,7 +144,9 @@ pub fn main(init: std.process.Init.Minimal) u8 {
         sink +%= out;
         built += @intFromBool(out != 0);
     }
-    std.mem.sort(u64, &samples, {}, std.sort.asc(u64));
+    // Heap sort: in place and about 5 KB smaller than std.mem.sort's block sort, which was a
+    // fifteenth of this row's executable bytes. The other harnesses call libc's qsort.
+    std.sort.heap(u64, &samples, {}, std.sort.asc(u64));
     o.str("framework=lcgf scene=");
     o.str(s.name);
     o.str(" frames=");
