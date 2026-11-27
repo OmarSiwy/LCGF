@@ -552,6 +552,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
 
         /// The frame, with labels measured by `ui.font` (`text` void) or by a `Shaped` stack.
         inline fn frameAs(ui: *Self, comptime replay: bool, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.zig").Presentation, text: anytype) @import("../style/locale.zig").LayoutError!Output {
+            // The unrolled loops over the custom widgets below cost a few branches per widget.
+            @setEvalBranchQuota(1000 + 100 * rows);
             const shaped = comptime @TypeOf(text) == Shaped;
             try presentation.rounding.validate();
             if (presentation.directions) |directions| try @import("../style/locale.zig").validateDirections(directions, rows);
@@ -606,7 +608,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                 if (event) |e| switch (e) {
                     inline else => |payload, tag| {
                         const k = comptime E.slot(tag);
-                        const n = comptime nodeAt(spec, E.widget_nodes[k]);
+                        const n = comptime nodesAt(spec, &E.widget_nodes)[k];
                         switch (comptime E.widget_kinds[k]) {
                             .checkbox => ui.signals.set(field(n.bind.?), toggle(@field(ui.signals.state, n.bind.?), true)),
                             .slider => ui.signals.set(field(n.bind.?), slide(0, true, payload, 0, 1)),
@@ -615,8 +617,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
                     },
                 };
                 // Custom widgets (`Spec.widget`) apply this frame's input to their state.
-                inline for (comptime customRows(spec)) |row| {
-                    const W_ = comptime nodeAt(spec, row).widget.?;
+                inline for (comptime customRows(spec), comptime customNodes(spec)) |row, cn| {
+                    const W_ = cn.widget.?;
                     // A step may return an event of its own (a key that activates the widget),
                     // which the frame reports when the pointer made none.
                     if (comptime @hasDecl(W_, "step")) {
@@ -796,8 +798,8 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
             // An optional custom widget can request its next visual update as returned
             // deadline data. Hidden/collapsed subtrees do not request visual updates;
             // static controls add no hook or timer storage.
-            inline for (comptime customRows(spec)) |row| {
-                const Widget = comptime nodeAt(spec, row).widget.?;
+            inline for (comptime customRows(spec), comptime customNodes(spec)) |row, cn| {
+                const Widget = cn.widget.?;
                 // `wakeAfter` may be `{}`: a widget that moves only under some configs.
                 if (comptime @hasDecl(Widget, "wakeAfter") and @TypeOf(Widget.wakeAfter) != void) {
                     const node = ui.treeRow(row);
@@ -912,9 +914,10 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         /// `Semantics.clear` and `a11y.names`, as an app's `semantics` writes what its runtime
         /// tree does not say. A spec without names writes nothing.
         pub fn semantics(ui: *Self, s: *a11y.Semantics) void {
-            inline for (comptime namedRows(spec)) |row| {
+            const named = comptime namedRows(spec);
+            inline for (named, comptime nodesAt(spec, named)) |row, n| {
                 const r = ui.treeRow(row);
-                if (r != types.none) s.c.label[r] = ui.tables.strings.add(comptime nodeAt(spec, row).name.?);
+                if (r != types.none) s.c.label[r] = ui.tables.strings.add(n.name.?);
             }
         }
 
@@ -923,7 +926,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         /// The floats the custom widget `W` (its `Spec.widget`) keeps (`kept`).
         pub fn keep(ui: *Self, comptime W: type) *[4]f32 {
             const k = comptime blk: {
-                for (customRows(spec), 0..) |row, k| if (nodeAt(spec, row).widget == W) break :blk k;
+                for (customNodes(spec), 0..) |cn, k| if (cn.widget == W) break :blk k;
                 @compileError("no custom widget " ++ @typeName(W) ++ " in this spec");
             };
             return &ui.kept[k];
@@ -962,8 +965,7 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         fn refreshInputAvailability(ui: *Self, in: *const Input) if (has_input_availability) E.InputMask else void {
             if (comptime has_input_availability) {
                 var current: E.InputMask = .{};
-                inline for (comptime customRows(spec)) |row| {
-                    const n = comptime nodeAt(spec, row);
+                inline for (comptime customNodes(spec)) |n| {
                     if (comptime n.id != null and @hasDecl(n.widget.?, "inputAvailability")) {
                         const target = @field(E.Widget, n.id.?);
                         current.set(target, n.widget.?.inputAvailability(ui, in));
@@ -1181,6 +1183,37 @@ fn customRows(comptime n: Spec) []const u32 {
         const out = rows[0..rows.len].*;
         return &out;
     }
+}
+
+/// The nodes `customRows` lists, in its order.
+fn customNodes(comptime n: Spec) []const Spec {
+    return nodesAt(n, customRows(n));
+}
+
+/// The spec nodes at depth-first rows `rows` (ascending) of `n`, in one walk: a loop over a
+/// page's widgets indexes it instead of a `nodeAt` walk per widget, which costs the square of
+/// the rows (a page of a hundred custom widgets ran out of the page type's comptime quota).
+fn nodesAt(comptime n: Spec, comptime rows: anytype) []const Spec {
+    comptime {
+        @setEvalBranchQuota(10_000 + 100 * @import("../comptime/flatten.zig").count(n));
+        var nodes: []const Spec = &.{};
+        var next: u32 = 0;
+        nodesWalk(n, rows, &next, &nodes);
+        const out = nodes[0..nodes.len].*;
+        return &out;
+    }
+}
+
+// tidy: allow(recursion) comptime, as deep as the spec
+fn nodesWalk(
+    comptime n: Spec,
+    comptime rows: anytype,
+    comptime next: *u32,
+    comptime nodes: *[]const Spec,
+) void {
+    if (nodes.len < rows.len and rows[nodes.len] == next.*) nodes.* = nodes.* ++ .{n};
+    next.* += 1;
+    for (n.children) |c| nodesWalk(c, rows, next, nodes);
 }
 
 /// Spec rows (depth first) of the nodes with an accessible name.
@@ -2502,4 +2535,33 @@ test "ComptimeUi: a page of about 120 nested nodes needs no branch quota from th
     try std.testing.expect(@import("../comptime/flatten.zig").count(deep_page.spec) > 100);
     var ui: deep_page.Ui = .{};
     _ = &ui;
+}
+
+/// A page of a hundred custom widgets, each stepped and pushed by the page: the frame's loops
+/// over them stay in its comptime quota.
+const ManyWidgets = struct {
+    const W = struct {
+        pub fn step(ui: anytype, comptime row: u32, event: anytype, in: *const Input) void {
+            _ = .{ ui, row, event, in };
+        }
+        pub fn push(ui: anytype, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void {
+            _ = in;
+            next.* += 1;
+            _ = ui.tables.t.push(parent, .none, &n.style);
+        }
+    };
+    const spec = blk: {
+        var kids: [100]Spec = undefined;
+        const style: Style = .{ .size = .{ .px(4), .px(4) } };
+        for (&kids) |*k| k.* = .{ .kind = .col, .style = style, .widget = W };
+        break :blk spec_zig.row(.{}, kids);
+    };
+    var page: ComptimeUi(struct {}, spec, .default) = .{};
+};
+
+test "ComptimeUi: a page of a hundred custom widgets builds within its quota" {
+    const out = ManyWidgets.page.frame(&.{ .viewport = .{ 600, 100 } });
+    // The runtime root, the row and its hundred widgets.
+    try testing.expectEqual(@as(u32, 102), out.tree.len);
+    try testing.expectEqual(@as(f32, 400), out.tree.rect(101).x1);
 }
