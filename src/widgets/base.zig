@@ -357,14 +357,16 @@ pub fn ComptimeUi(comptime State: type, comptime spec: Spec, comptime th: Theme)
 pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: Theme, comptime Tokens: type) type {
     const flatten = @import("../comptime/flatten.zig");
     const Table = if (Tokens == void) void else @import("../theme/table.zig").ThemeTable(Tokens);
+    // One root row (the runtime front end's) above the spec's rows. Counted, and the quota
+    // raised, before any other walk of the spec: those walks spend this evaluation's branches,
+    // and `flatten.count`'s own raise would then come too late for a page of ~85 nodes.
+    const rows: u32 = flatten.count(spec) + 1;
+    @setEvalBranchQuota(1000 + 100 * rows);
     comptime checkBindings(State, spec);
     const E = events.Events(spec);
     const S = signals.Signals(State, spec);
     // One walk, not a `nodeAt` per widget: a spec of many recipe text rows stays in quota.
     const has_input_availability = gatesInput(spec);
-    // One root row (the runtime front end's) above the spec's rows.
-    const rows: u32 = flatten.count(spec) + 1;
-    @setEvalBranchQuota(1000 + 100 * rows);
     const runs: u32 = @max(labelCount(spec), 1);
     const customs = comptime customCapacity(spec);
     const Regions = @import("../comptime/dynamic.zig").Regions(spec);
@@ -2480,4 +2482,24 @@ test "spans: one paragraph in two sizes and colours lays out the same in both fr
         try std.testing.expectApproxEqAbs(3 * 16.8, q.rect[2] - q.rect[0], 0.01);
     };
     try std.testing.expectEqual(1, bars);
+}
+
+/// A page of about 120 nested nodes, declared as an app declares one: at container level, with
+/// no quota of its own. `ComptimeUiTokens` must count it before its other walks of the spec.
+const deep_page = struct {
+    const State = struct { a: []const u8 = "a" };
+    const th: Theme = .default;
+    // tidy: allow(recursion) comptime, `depth` levels deep
+    fn nest(comptime depth: u32) spec_zig.Spec {
+        if (depth == 0) return ct.label(th, .a);
+        return spec_zig.col(.{}, .{ ct.label(th, .a), nest(depth - 1), ct.label(th, .a) });
+    }
+    const spec = nest(40);
+    const Ui = ComptimeUi(State, spec, th);
+};
+
+test "ComptimeUi: a page of about 120 nested nodes needs no branch quota from the caller" {
+    try std.testing.expect(@import("../comptime/flatten.zig").count(deep_page.spec) > 100);
+    var ui: deep_page.Ui = .{};
+    _ = &ui;
 }
