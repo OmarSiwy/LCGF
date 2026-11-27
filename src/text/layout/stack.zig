@@ -98,6 +98,9 @@ pub const Paragraph = struct {
 /// scratch has one row per shaper; run columns fit the paragraph's font/script transitions.
 pub const Fallback = struct {
     chain: *const fallback_.Chain,
+    /// Row f, when present, is the chain of the runs whose font is f, used in place of
+    /// `chain`: a monospace run tries its own face before the proportional one.
+    by_font: []const fallback_.Chain = &.{},
     runs: fallback_.Runs,
     metrics: []lines.Metrics,
 };
@@ -326,7 +329,9 @@ pub const Stack = struct {
         } else if (st.fallback) |*fb| {
             st.g.fonts = .indices;
             if (fb.metrics.len < st.shapers.len) return error.NoSpace;
-            try fallback_.resolveClusters(fb.chain, text, &fb.runs);
+            const own = primary_font < fb.by_font.len;
+            const chain = if (own) &fb.by_font[primary_font] else fb.chain;
+            try fallback_.resolveClusters(chain, text, &fb.runs);
             var start: u32 = 0;
             for (fb.runs.end[0..fb.runs.len], fb.runs.face[0..fb.runs.len]) |end, font| {
                 const f = &st.shapers[font];
@@ -588,6 +593,48 @@ test "Stack fallback keeps a combining sequence in one face through shaping and 
     for (st.g.glyph[0..st.g.len]) |g| try testing.expect(g != 0);
     for (0..st.g.len) |i| try testing.expectEqual(st.g.span[i], st.g.fontAt(i));
     try testing.expect(tx.c.w[0] > 0 and tx.c.h[0] > 0);
+}
+
+test "Stack fallback takes a run's own chain from by_font: its face first" {
+    const mem = @import("../../core/mem.zig");
+    const opentype = @import("../font/opentype.zig");
+    // Both faces have 'H' and 'i': the chain decides which draws them.
+    const faces = [_]opentype.Face{
+        try .parse(fallback_.test_latin, 0),
+        try .parse(golden.font, 0),
+    };
+    const shapers = [_]shape.Shaper{ .init(faces[0]), .init(faces[1]) };
+    const chain: fallback_.Chain = .{ .faces = &faces, .default = &.{ 0, 1 } };
+    const by_font = [_]fallback_.Chain{ chain, .{ .faces = &faces, .default = &.{ 1, 0 } } };
+    var runs: fallback_.TestRuns = .{};
+    var metrics: [2]lines.Metrics = undefined;
+    var buf: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var tx: Texts = .init(&carver, 2);
+    var bytes: [32]u8 = undefined;
+    var strings: Strings = .{ .buf = &bytes };
+    _ = tx.push(0, strings.add("Hi"), &.{ .px = 20 });
+    _ = tx.push(1, strings.add("Hi"), &.{ .px = 20, .font = @fromBackingInt(1) });
+    var p: golden.Para = .{};
+    p.bind();
+    var cols: golden.RunCols = .{};
+    var st: Stack = .{
+        .shapers = &shapers,
+        .run = cols.run(),
+        .g = p.g,
+        .l = p.l,
+        .fallback = .{
+            .chain = &chain,
+            .by_font = &by_font,
+            .runs = runs.runs(),
+            .metrics = &metrics,
+        },
+    };
+    for ([_]u16{ 0, 1 }) |k| {
+        try st.paragraph(&tx, &strings, k);
+        try testing.expectEqual(2, st.g.len);
+        for (0..st.g.len) |i| try testing.expectEqual(k, st.g.fontAt(i));
+    }
 }
 
 test "a nonzero font row retains its actual face identity independently of metric span zero" {
