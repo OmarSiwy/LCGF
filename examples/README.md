@@ -50,8 +50,10 @@ replay support are part of the framework package, so these commands also work
 with an unpacked SDK containing the package's declared paths. Each board
 project owns its simulator inputs and firmware sources.
 
-Zig fetches the framework's pinned Unicode tables on the first build. For an
-offline build, use the package directory shipped with the checkout, for example
+Zig fetches the framework's pinned packages on the first build, into `zig-pkg/`
+at the root of the checkout (not tracked). For an offline build, fill it once
+while online with `zig build --fetch` in the framework checkout, then point
+other projects at it, for example
 `zig build test --pkg-dir ../gui-framework/zig-pkg` from a sibling project or
 `zig build test --pkg-dir ../../zig-pkg` from an in-tree project.
 

@@ -41,6 +41,18 @@ jobs:
         run: |
           matrix=$(ci/run.sh --matrix | jq -c '[.[] | select(.job != "gates-vs")]')
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+      # zig-pkg/ is where `zig build` unpacks what build.zig.zon pins (about 1.4 GB, not
+      # tracked). Fetch it once per build.zig.zon here; the jobs below restore it.
+      - id: packages
+        uses: actions/cache@v4
+        with:
+          path: zig-pkg
+          key: zig-pkg-${{ hashFiles('build.zig.zon') }}
+          enableCrossOsArchive: true
+      - if: steps.packages.outputs.cache-hit != 'true'
+        uses: cachix/install-nix-action@v31
+      - if: steps.packages.outputs.cache-hit != 'true'
+        run: nix develop -c zig build --fetch
 
   test:
     needs: jobs
@@ -52,6 +64,11 @@ jobs:
     name: ${{ matrix.job }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: zig-pkg
+          key: zig-pkg-${{ hashFiles('build.zig.zon') }}
+          enableCrossOsArchive: true
       # Linux and macOS: the flake's dev shell. Windows has no Nix: the same Zig build as
       # flake.nix pins, from setup-zig, and Git Bash runs the job.
       - if: runner.os != 'Windows'
@@ -73,6 +90,11 @@ jobs:
       artifact: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: zig-pkg
+          key: zig-pkg-${{ hashFiles('build.zig.zon') }}
+          enableCrossOsArchive: true
       - uses: cachix/install-nix-action@v31
       - run: nix develop .#vs -c ci/run.sh gates-vs
       - name: Save comparison measurements
