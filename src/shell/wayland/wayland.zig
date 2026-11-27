@@ -17,7 +17,8 @@
 //!
 //! One connection holds several windows (`windows`, toplevels and popups): the contract's
 //! calls act on the main window, slot 0, and `pollWindows`, `applyWindow` and
-//! `presentWindow` on any.
+//! `presentWindow` on any; `presentWith` and `presentWindowWith` draw with the caller's glyphs and
+//! images.
 //!
 //! Linux only (sockets, memfd, eventfd). Built as its own module over `lcgf` (`zig build
 //! wayland`), not exported from src/lcgf.zig, like the GL ES back end.
@@ -38,7 +39,8 @@ const Output = context.Output;
 const Pace = lcgf.scheduler.Pace;
 const Input = lcgf.input.Input;
 const Quad = lcgf.draw_list.Quad;
-const Mono = lcgf.protocol.Mono;
+const font = lcgf.render_sw_font;
+const render_iface = lcgf.render_iface;
 const sw = lcgf.render_sw;
 const Color = lcgf.types.Color;
 
@@ -304,10 +306,7 @@ pub const Wayland = struct {
     woken: std.atomic.Value(bool) = .init(false),
     options: Options,
     gfx: sw.Setup = .{},
-    font: Mono = .{},
-    /// The image of `gfx.gfx.images` the glyph quads sample (`Mono.quads`' 16 x 16 grid); the
-    /// default white texture draws each glyph as a box. `render_sw.font.image` is a font for it.
-    text_texture: lcgf.types.Texture = .white,
+    /// `present`'s glyph quads, in the bundled font. `presentWith` takes the caller's.
     glyphs: Buffers,
     /// What `present` clears to before drawing.
     background: Color = .rgb(0, 0, 0),
@@ -471,9 +470,41 @@ pub const Wayland = struct {
         w.presentWindow(0, out);
     }
 
+    /// `presentWindowWith` for the main window.
+    pub fn presentWith(
+        w: *Wayland,
+        out: *const Output,
+        glyphs: render_iface.Glyphs,
+        images: []const sw.Image,
+    ) void {
+        w.presentWindowWith(0, out, glyphs, images);
+    }
+
+    /// `presentWindowWith`, the text in the bundled font (`render_sw_font`): for a host with no
+    /// glyphs or images of its own.
+    pub fn presentWindow(w: *Wayland, k: u32, out: *const Output) void {
+        const g = w.glyphs;
+        w.presentWindowWith(
+            k,
+            out,
+            font.glyphs(out.draw, g.glyphs, g.first, g.count),
+            &font.images,
+        );
+    }
+
     /// Draws window `k`'s frame into a free shared-memory buffer and commits it. Before the
     /// window's first configure there is nothing to draw into yet, so the frame is skipped.
-    pub fn presentWindow(w: *Wayland, k: u32, out: *const Output) void {
+    /// Text runs draw `glyphs`; quads sample `images`, indexed by `types.Texture`
+    /// (`Style.texture`), row 0 the white texture. Both are the caller's and are read only
+    /// during the call; every texture the frame names must be a row of `images`.
+    pub fn presentWindowWith(
+        w: *Wayland,
+        k: u32,
+        out: *const Output,
+        glyphs: render_iface.Glyphs,
+        images: []const sw.Image,
+    ) void {
+        std.debug.assert(images.len > @backingInt(glyphs.texture));
         const win = &w.windows[k];
         if (!win.configured or win.closed or w.closed) return;
         const px = physical(win.size, win.scale);
@@ -494,9 +525,8 @@ pub const Wayland = struct {
             const to = @min(rows[1], fb.height) * fb.stride;
             @memcpy(fb.pixels[from..to], last.pixels[from..to]);
         }
-        const g = w.glyphs;
-        const n = w.font.quads(out.draw, g.glyphs, .{ .first = g.first, .count = g.count });
-        w.gfx.draw(&fb, out.draw, .{ .quads = g.glyphs[0..n], .first = g.first, .count = g.count, .texture = w.text_texture }, w.background, win.scale);
+        w.gfx.gfx.images = images;
+        w.gfx.draw(&fb, out.draw, glyphs, w.background, win.scale);
         const r = lcgf.damage.Region.scissor(out.draw.damage.bounds(), px, win.scale);
         win.shm.drawn_rows = .{ r[1], r[1] + r[3] };
         win.shm.busy[slot] = true;

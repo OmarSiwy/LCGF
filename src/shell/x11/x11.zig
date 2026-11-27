@@ -26,7 +26,8 @@ const Output = context.Output;
 const Pace = lcgf.scheduler.Pace;
 const sw = lcgf.render_sw;
 const Quad = lcgf.draw_list.Quad;
-const Mono = lcgf.protocol.Mono;
+const font = lcgf.render_sw_font;
+const render_iface = lcgf.render_iface;
 const Color = lcgf.types.Color;
 const inf = lcgf.types.inf;
 
@@ -798,10 +799,7 @@ pub const Window = struct {
     pixels: []u32,
     fb: sw.Framebuffer,
     gfx: sw.Setup = .{},
-    font: Mono = .{},
-    /// The image of `gfx.gfx.images` the glyph quads sample (`Mono.quads`' 16 x 16 grid); the
-    /// default white texture draws each glyph as a box. `render_sw.font.image` is a font for it.
-    text_texture: lcgf.types.Texture = .white,
+    /// `present`'s glyph quads, in the bundled font. `presentWith` takes the caller's.
     glyphs: Glyphs,
     background: Color = .rgb(0, 0, 0),
     applied: Platform = .{},
@@ -1225,16 +1223,31 @@ pub const Window = struct {
         };
     }
 
-    /// Draws the frame in software and sends it.
+    /// Draws the frame in software, its text in the bundled font (`render_sw_font`), and sends
+    /// it: `presentWith` for a host with no glyphs or images of its own.
     pub fn present(w: *Window, out: *const Output) void {
+        const g = w.glyphs;
+        w.presentWith(out, font.glyphs(out.draw, g.quads, g.first, g.count), &font.images);
+    }
+
+    /// Draws the frame in software and sends what it drew: with `Context.trackDamage`, only
+    /// the damage rects. Text runs draw `glyphs`; quads sample `images`, indexed by
+    /// `types.Texture` (`Style.texture`), row 0 the white texture. Both are the caller's and
+    /// are read only during the call; every texture the frame names must be a row of `images`.
+    pub fn presentWith(
+        w: *Window,
+        out: *const Output,
+        glyphs: render_iface.Glyphs,
+        images: []const sw.Image,
+    ) void {
+        std.debug.assert(images.len > @backingInt(glyphs.texture));
         const width: u32 = w.width;
         if (width == 0 or w.height == 0) return;
         // A window larger than the pixel buffer draws as many whole rows as fit.
         const rows: u32 = @intCast(@min(w.height, w.pixels.len / sw.Framebuffer.len(width, 1)));
         w.fb = .init(w.pixels, width, rows, .bgra8);
-        const g = w.glyphs;
-        const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
-        w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count, .texture = w.text_texture }, w.background, w.scale);
+        w.gfx.gfx.images = images;
+        w.gfx.draw(&w.fb, out.draw, glyphs, w.background, w.scale);
         // What `draw` redrew: the damage rects (`Context.trackDamage`), else the whole frame.
         // The pixmap keeps the rest from earlier frames.
         var boxes: [lcgf.damage.max_rects][4]u32 = undefined;
@@ -1502,8 +1515,9 @@ fn settle(w: *Window, ev: *Events, want: *const Input) !void {
     try testing.expect(w.poll(ev));
 }
 
-/// The colour of window pixel (x, y), read back from the server.
-fn pixel(w: *Window, x: i16, y: i16) !Color {
+/// The colour of window pixel (x, y), read back from the server: for a test of what a window
+/// shows. Waits for the reply.
+pub fn pixel(w: *Window, x: i16, y: i16) !Color {
     const c = w.conn;
     const r = try c.reply(c.send(wire.get_image_size, wire.getImage, .{ w.id, x, y, 1, 1 }));
     // bgra8 as the window's pixels; depth 24 keeps no alpha.
@@ -1552,12 +1566,18 @@ test "x11: the example runs from the input recording, and the window shows it" {
     try testing.expectApproxEqAbs(@as(f32, 3), app.exposure, 0.01);
     try testing.expectEqual(context.Cursor.arrow, w.applied.cursor);
     // What the server shows: the sidebar's panel, a button face, the custom viewport left to the
-    // host, a glyph cell of "Add layer".
+    // host, and the letters of "Add layer" in the bundled font: some pixels of their cells
+    // are the text's colour, and not all, as a box would be.
     const th = app.theme;
     try testing.expectEqual(th.panel, try pixel(&w, 80, 590));
     try testing.expectEqual(th.control, try pixel(&w, 12, 74));
     try testing.expectEqual(w.background, try pixel(&w, 400, 300));
-    try testing.expectEqual(th.text, try pixel(&w, 20, 70));
+    var lit: u32 = 0;
+    for (62..78) |y| for (16..40) |x| {
+        lit += @intFromBool(std.meta.eql(th.text, try pixel(&w, @intCast(x), @intCast(y))));
+    };
+    try testing.expect(lit > 0);
+    try testing.expect(lit < 16 * 24 / 2);
     try testing.expectEqual(@as(u32, 0), c.errors);
 }
 
@@ -1692,6 +1712,83 @@ test "x11: partial presentation updates only damaged pixels and initializes new 
     try testing.expectEqual(marker, try pixel(&w, 82, 52));
     try testing.expectEqual(original, try pixel(&w, 0, 53));
     try testing.expectEqual(original, try pixel(&w, 40, 30));
+    try testing.expectEqual(@as(u32, 0), c.errors);
+}
+
+/// A 200 x 100 window: a grey panel on the left half, a canvas on the right half showing one
+/// red 10 x 10 box under `camera`, as Schemify draws its schematic: `enableCanvas` every frame,
+/// the context tracking damage.
+const CanvasScene = struct {
+    const limits: context.Limits = .{ .nodes = 16, .texts = 4, .customs = 4, .damage = true };
+    const panel = Color.rgb(90, 90, 90);
+    const red = Color.rgb(220, 0, 0);
+    const ground = Color.rgb(10, 20, 30);
+    var ctx_buffer: [context.Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    const shapes_bytes = lcgf.canvas.Instances.requiredBytes(4, 0, 1, .{});
+    var shapes_buffer: [shapes_bytes]u8 align(mem.column_align) = undefined;
+
+    ctx: context.Context,
+    rows: [2 * limits.customs]lcgf.draw_list.CanvasDraw = undefined,
+    shapes: lcgf.canvas.Instances,
+    layers: [1]lcgf.canvas.Layer = .{.of(.{ .stroke = red, .fill = red })},
+    palette: lcgf.canvas.Palette = undefined,
+    ranges: [1]lcgf.canvas.Range = undefined,
+    camera: lcgf.canvas.Camera = .{ .offset = .{ 10, 10 } },
+
+    fn init(s: *CanvasScene) !void {
+        var carver: mem.Carver = .{ .buf = &shapes_buffer };
+        s.* = .{ .ctx = try .init(&ctx_buffer, limits), .shapes = .init(&carver, 4, 0, 1, .{}) };
+        s.ctx.trackDamage();
+        _ = s.shapes.rect(.{ 0, 0 }, .{ 10, 10 }, .{});
+        s.ranges = .{s.shapes.since(0)};
+        s.palette = .{ .layers = &s.layers };
+    }
+
+    fn frame(s: *CanvasScene, in: *const Input) Output {
+        var f = s.ctx.begin(in);
+        f.ctx.enableCanvas(&s.rows);
+        _ = f.open(.none, .{ .dir = .x, .size = .{ .fill, .fill } });
+        _ = f.leaf(.none, .{ .size = .{ .px(100), .fill }, .fill = panel });
+        _ = f.canvas(
+            .from("schematic"),
+            .{ .size = .{ .fill, .fill }, .fill = ground },
+            &s.shapes,
+            .{ .camera = s.camera, .palette = &s.palette, .ranges = &s.ranges },
+        );
+        f.close();
+        return f.end(.{});
+    }
+};
+
+test "x11: a canvas under damage shows its new camera, and only its rectangle is uploaded" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    for ([_]i16{ 1, 2 }) |k| {
+        c.overrideScale(@floatFromInt(k));
+        var w: Window = undefined;
+        try w.open(c, @intCast(200 * k), @intCast(100 * k), "canvas under damage", Fixture.buffers);
+        defer w.close();
+        var s: CanvasScene = undefined;
+        try s.init();
+
+        w.present(&s.frame(&w.held));
+        try testing.expectEqual(CanvasScene.panel, try pixel(&w, 50 * k, 50 * k));
+        try testing.expectEqual(CanvasScene.red, try pixel(&w, 115 * k, 15 * k));
+
+        // A pan: the canvas node is the damage, and only it is drawn and sent. A pixel of the
+        // panel changed behind the window's back would show if anything outside it were sent.
+        s.camera.offset = .{ 50, 50 };
+        const out = s.frame(&w.held);
+        try testing.expectEqual([4]f32{ 100, 0, 200, 100 }, out.draw.damage.bounds());
+        const at: u32 = @intCast(50 * k);
+        w.fb.fill(.{ at, at, at + 1, at + 1 }, .white);
+        w.present(&out);
+        try testing.expectEqual(CanvasScene.red, try pixel(&w, 155 * k, 55 * k));
+        try testing.expectEqual(CanvasScene.ground, try pixel(&w, 115 * k, 15 * k));
+        try testing.expectEqual(CanvasScene.panel, try pixel(&w, 50 * k, 50 * k));
+    }
     try testing.expectEqual(@as(u32, 0), c.errors);
 }
 

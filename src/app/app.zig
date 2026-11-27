@@ -53,6 +53,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     const seconds: f32 = if (init.environ_map.get("LCGF_APP_SECONDS")) |s| std.fmt.parseFloat(f32, s) catch lcgf.types.inf else lcgf.types.inf;
     const clock: Clock = .{ .io = init.io, .t0 = std.Io.Timestamp.now(init.io, .awake), .seconds = seconds };
     var ctx = try context.Context.init(&B.ctx, options.limits);
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
     switch (builtin.os.tag) {
         .linux => {
             const env = init.minimal.environ;
@@ -68,8 +69,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 };
                 var shell = try wl.Wayland.connect(fd, .{ .title = options.title, .size = .{ @floatFromInt(options.size[0]), @floatFromInt(options.size[1]) } }, .{ .glyphs = &B.glyphs, .first = &B.first, .count = &B.count });
                 defer shell.deinit();
-                useFont(&shell);
-                return loop(App, app, &shell, &ctx, clock);
+                return loop(App, app, &shell, &ctx, clock, glyphs);
             }
             const x11 = @import("x11");
             const display = init.environ_map.get("DISPLAY") orelse return error.NoDisplay;
@@ -84,7 +84,6 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
             var w: x11.Window = undefined;
             try w.open(conn, @intCast(options.size[0]), @intCast(options.size[1]), options.title, .{ .pixels = pixels.items, .glyphs = &B.glyphs, .first = &B.first, .count = &B.count });
             defer w.close();
-            useFont(&w);
             const X11 = struct {
                 w: *x11.Window,
                 pixels: *std.ArrayList(u32),
@@ -95,8 +94,13 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 pub fn apply(s: @This(), p: anytype) void {
                     s.w.apply(p);
                 }
-                pub fn present(s: @This(), out: anytype) void {
-                    s.w.present(out);
+                pub fn presentWith(
+                    s: @This(),
+                    out: anytype,
+                    glyphs_: lcgf.render_iface.Glyphs,
+                    images: []const lcgf.render_sw.Image,
+                ) void {
+                    s.w.presentWith(out, glyphs_, images);
                 }
                 pub fn wait(s: @This(), seconds_: f32, pace: scheduler.Pace) void {
                     s.w.wait(seconds_, pace);
@@ -107,7 +111,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 }
             };
             var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = init.gpa };
-            return loop(App, app, &shell, &ctx, clock);
+            return loop(App, app, &shell, &ctx, clock, glyphs);
         },
         .windows => {
             const Win32 = @import("win32").Win32;
@@ -124,8 +128,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 .count = &B.count,
             });
             defer shell.deinit();
-            useFont(&shell);
-            return loop(App, app, &shell, &ctx, clock);
+            return loop(App, app, &shell, &ctx, clock, glyphs);
         },
         .macos => {
             const Macos = @import("macos").Macos;
@@ -141,19 +144,14 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
                 .count = &B.count,
             });
             defer shell.deinit();
-            return loop(App, app, &shell, &ctx, clock);
+            return loop(App, app, &shell, &ctx, clock, glyphs);
         },
         else => @compileError("lcgf app: no desktop shell for " ++ @tagName(builtin.os.tag) ++ "; the web, Android and iOS start from their shells' examples (src/shell/web, android, ios)"),
     }
 }
 
-/// A software shell draws its text with the bundled bitmap font (`render_sw.font`) instead of
-/// boxes: the font is image 1 of its renderer, and its glyphs sample it.
-const text_images = [_]lcgf.render_sw.Image{ .white, lcgf.render_sw_font.image };
-fn useFont(shell: anytype) void {
-    shell.gfx.gfx.images = &text_images;
-    shell.text_texture = @fromBackingInt(1);
-}
+/// Rows for one frame's glyph quads.
+const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
 
 /// The static buffers of an application with `options`: one set per program.
 fn Buffers(comptime options: Options) type {
@@ -185,8 +183,17 @@ const Clock = struct {
     }
 };
 
-/// `shell_iface.run`, with the theme following the system's appearance and a time limit.
-fn loop(comptime App: type, app: *App, shell: anytype, ctx: *context.Context, clock: Clock) !void {
+/// `shell_iface.run`, with the theme following the system's appearance and a time limit. A
+/// software shell (one with `presentWith`) gets the text in the bundled font, written into
+/// `glyphs`.
+fn loop(
+    comptime App: type,
+    app: *App,
+    shell: anytype,
+    ctx: *context.Context,
+    clock: Clock,
+    glyphs: Glyphs,
+) !void {
     const follows = @hasField(App, "theme") and @FieldType(App, "theme") == lcgf.widgets_base.Theme;
     var styled: ?lcgf.input.Input.Appearance = null;
     var ev: Events = .{};
@@ -202,7 +209,11 @@ fn loop(comptime App: type, app: *App, shell: anytype, ctx: *context.Context, cl
             app.build(&f, &ev);
             const out = f.end(.{});
             shell.apply(&out.platform);
-            shell.present(&out);
+            if (@hasDecl(@TypeOf(shell.*), "presentWith")) {
+                const font = lcgf.render_sw_font;
+                const g = font.glyphs(out.draw, glyphs.quads, glyphs.first, glyphs.count);
+                shell.presentWith(&out, g, &font.images);
+            } else shell.present(&out);
         }
         const left = clock.left();
         if (!(left > 0)) break;

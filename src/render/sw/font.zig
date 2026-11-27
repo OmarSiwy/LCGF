@@ -6,8 +6,17 @@
 //! at their bytes and the infinity sign at 0x81 (`Mono.encode` writes UTF-8 text in these
 //! bytes); a control byte, or one of the few with no character, is blank, so a tab or a newline
 //! in a line of text is a space. Tier 0.
+//!
+//! Contents: `width`, `height`, `image`, `images`, `texture`,
+//! `glyphs(d, quads, first, count) iface.Glyphs`.
 
 const sw = @import("sw.zig");
+const iface = @import("../iface.zig");
+const draw_list = @import("../../draw/draw_list.zig");
+const DrawList = draw_list.DrawList;
+const Quad = draw_list.Quad;
+const Mono = @import("../../text/protocol.zig").Mono;
+const Texture = @import("../../core/types.zig").Texture;
 
 const cell_w = 9;
 const cell_h = 18;
@@ -38,3 +47,41 @@ const alpha: [width * height]u8 = blk: {
 };
 
 pub const image: sw.Image = .{ .alpha8 = &alpha, .width = width, .height = height };
+
+/// The images of a host that brings none: the white texture, then the font as `texture`.
+pub const images = [_]sw.Image{ .white, image };
+/// The font's texture in `images`.
+pub const texture: Texture = @fromBackingInt(1);
+
+/// The glyph quads of `d`'s text runs in this font (`Mono.quads`), written into `quads`, with
+/// each run's `first` and `count` (at least `d.run_len` rows each), sampling `texture`. A host
+/// whose images put the font elsewhere sets the result's `texture`. Glyphs past `quads.len`
+/// are dropped, as `Mono.quads` drops them.
+pub fn glyphs(d: *const DrawList, quads: []Quad, first: []u32, count: []u32) iface.Glyphs {
+    const n = (Mono{}).quads(d, quads, .{ .first = first, .count = count });
+    return .{ .quads = quads[0..n], .first = first, .count = count, .texture = texture };
+}
+
+test "glyphs: a quad per byte of a run, sampling the font" {
+    const std = @import("std");
+    var runs = [_]draw_list.TextRun{.{
+        .rect = .{ 0, 0, 100, 20 },
+        .clip = .{ 0, 0, 100, 20 },
+        .start = 0,
+        .bytes = 2,
+        .px = 10,
+        .color = 0xffffffff,
+        .font = 0,
+    }};
+    var d: DrawList = undefined;
+    d.runs = &runs;
+    d.run_len = 1;
+    d.strings = "AB";
+    var quads: [4]Quad = undefined;
+    var first: [1]u32 = undefined;
+    var count: [1]u32 = undefined;
+    const g = glyphs(&d, &quads, &first, &count);
+    try std.testing.expectEqual(2, g.quads.len);
+    try std.testing.expectEqual([2]u32{ 0, 2 }, g.span(0));
+    try std.testing.expectEqual(image.alpha8.ptr, images[@backingInt(g.texture)].alpha8.ptr);
+}

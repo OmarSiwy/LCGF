@@ -7176,6 +7176,9 @@ The bundled bitmap font for the software renderer: DejaVu Sans Mono at 14 px (th
 - `width = 16 * cell_w`
 - `height = 16 * cell_h`
 - `image: sw.Image = .{ .alpha8 = &alpha, .width = width, .height = height }`
+- `images = [_]sw.Image{ .white, image }`: The images of a host that brings none: the white texture, then the font as `texture`.
+- `texture: Texture = @fromBackingInt(1)`: The font's texture in `images`.
+- `fn glyphs(d: *const DrawList, quads: []Quad, first: []u32, count: []u32) iface.Glyphs`: The glyph quads of `d`'s text runs in this font (`Mono.quads`), written into `quads`, with each run's `first` and `count` (at least `d.run_len` rows each), sampling `texture`.
 
 ## `lcgf.png` (src/assets/png.zig)
 

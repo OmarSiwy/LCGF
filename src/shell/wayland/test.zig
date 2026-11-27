@@ -243,7 +243,14 @@ test "wayland: the example opens a toplevel, follows configure and close, and it
     try testing.expectEqual(th.panel, fake.pixel(80, 590));
     try testing.expectEqual(th.control, fake.pixel(12, 74));
     try testing.expectEqual(shell.background, fake.pixel(400, 300));
-    try testing.expectEqual(th.text, fake.pixel(20, 70));
+    // The letters of "Add layer" in the bundled font: some pixels of their cells are the
+    // text's colour, and not all, as a box would be.
+    var lit: u32 = 0;
+    for (62..78) |y| for (16..40) |x| {
+        lit += @intFromBool(std.meta.eql(th.text, fake.pixel(@intCast(x), @intCast(y))));
+    };
+    try testing.expect(lit > 0);
+    try testing.expect(lit < 16 * 24 / 2);
 
     // The settle frame, then idle: nothing is built or committed.
     _ = turn(&shell, &ctx, &app, &ev).?;

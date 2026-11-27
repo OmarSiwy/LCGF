@@ -21,7 +21,8 @@ const iface = lcgf.shell_iface;
 const sw = lcgf.render_sw;
 const context = lcgf.context;
 const Quad = lcgf.draw_list.Quad;
-const Mono = lcgf.protocol.Mono;
+const font = lcgf.render_sw_font;
+const render_iface = lcgf.render_iface;
 const Color = lcgf.types.Color;
 const Events = iface.Events;
 const Platform = context.Platform;
@@ -196,10 +197,7 @@ pub const Win32 = struct {
     /// Capacity of the caller's pixel buffer: the largest client area drawn, in pixels.
     pixels: []u32,
     gfx: sw.Setup = .{},
-    font: Mono = .{},
-    /// The image of `gfx.gfx.images` the glyph quads sample (`Mono.quads`' 16 x 16 grid); the
-    /// default white texture draws each glyph as a box. `render_sw.font.image` is a font for it.
-    text_texture: lcgf.types.Texture = .white,
+    /// `present`'s glyph quads, in the bundled font. `presentWith` takes the caller's.
     glyphs: GlyphBuffers,
     /// What `present` clears to before drawing.
     background: Color = .rgb(0, 0, 0),
@@ -458,17 +456,32 @@ pub const Win32 = struct {
         w.t.paste(src[0 .. std.mem.indexOfScalar(u16, src[0..cap], 0) orelse cap]);
     }
 
-    /// Draws the frame in software and copies it to the client area.
+    /// Draws the frame in software, its text in the bundled font (`render_sw_font`), and copies
+    /// it to the client area: `presentWith` for a host with no glyphs or images of its own.
     pub fn present(w: *Win32, out: *const Output) void {
+        const g = w.glyphs;
+        w.presentWith(out, font.glyphs(out.draw, g.quads, g.first, g.count), &font.images);
+    }
+
+    /// Draws the frame in software and copies it to the client area. Text runs draw `glyphs`;
+    /// quads sample `images`, indexed by `types.Texture` (`Style.texture`), row 0 the white
+    /// texture. Both are the caller's and are read only during the call; every texture the
+    /// frame names must be a row of `images`.
+    pub fn presentWith(
+        w: *Win32,
+        out: *const Output,
+        glyphs: render_iface.Glyphs,
+        images: []const sw.Image,
+    ) void {
+        std.debug.assert(images.len > @backingInt(glyphs.texture));
         var r: RECT = .{};
         _ = GetClientRect(w.hwnd, &r);
         const width: u32 = @intCast(@max(r.right - r.left, 0));
         const height: u32 = @intCast(@max(r.bottom - r.top, 0));
         const rows: u32 = @intCast(@min(height, w.pixels.len / @max(lcgf.simd.padded(width), 1)));
         w.fb = .init(w.pixels, width, rows, .bgra8);
-        const g = w.glyphs;
-        const n = w.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
-        w.gfx.draw(&w.fb, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count, .texture = w.text_texture }, w.background, w.t.in.scale);
+        w.gfx.gfx.images = images;
+        w.gfx.draw(&w.fb, out.draw, glyphs, w.background, w.t.in.scale);
         const dc = GetDC(w.hwnd) orelse return;
         w.blit(dc);
         _ = ReleaseDC(w.hwnd, dc);
