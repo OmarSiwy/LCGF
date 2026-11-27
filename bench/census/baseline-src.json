@@ -116,7 +116,7 @@
   },
   "p_finalize": {
     "back": 2,
-    "jcc": 4,
+    "jcc": 5,
     "short_fwd": 0
   },
   "p_fit": {
@@ -220,12 +220,12 @@
     "short_fwd": 5
   },
   "p_paint": {
-    "jcc": 16,
+    "jcc": 24,
     "back": 6,
     "short_fwd": 0
   },
   "p_paint_layered": {
-    "jcc": 17,
+    "jcc": 25,
     "back": 6,
     "short_fwd": 0
   },
@@ -380,12 +380,12 @@
     "short_fwd": 0
   },
   "p_tree_push": {
-    "jcc": 1,
+    "jcc": 2,
     "back": 0,
     "short_fwd": 0
   },
   "p_tree_push_row": {
-    "jcc": 1,
+    "jcc": 2,
     "back": 0,
     "short_fwd": 0
   },

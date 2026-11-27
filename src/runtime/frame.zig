@@ -61,6 +61,8 @@ const label_rows = [2]Template{
 };
 
 /// One frame under construction. Cheap to copy: two pointers.
+const style_call = @import("../core/tree.zig").style_call;
+
 pub const Frame = struct {
     ctx: *Context,
     in: *const Input,
@@ -84,7 +86,7 @@ pub const Frame = struct {
     // ---- building -----------------------------------------------------------
 
     /// Starts a node. Everything created until the matching `close` is its child.
-    pub fn open(f: *Frame, id: Id, style: Style) Node {
+    pub fn open(f: *Frame, id: Id, style: Style) callconv(style_call) Node {
         const ctx = f.ctx;
         return f.enter(f.tree().push(ctx.stack[ctx.depth - 1], id, &style));
     }
@@ -108,8 +110,9 @@ pub const Frame = struct {
     }
 
     /// A node with no children. Same as `open` then `close`.
-    pub fn leaf(f: *Frame, id: Id, style: Style) Node {
-        return f.finishLeaf(f.open(id, style));
+    pub fn leaf(f: *Frame, id: Id, style: Style) callconv(style_call) Node {
+        const ctx = f.ctx;
+        return f.leafNode(f.tree().push(ctx.stack[ctx.depth - 1], id, &style));
     }
 
     /// `open` from a style already turned into its row (`Template.from`; a `*const Template`
@@ -121,7 +124,21 @@ pub const Frame = struct {
 
     /// `leaf` from a row (`openRow`).
     pub fn leafRow(f: *Frame, id: Id, row: anytype) Node {
-        return f.finishLeaf(f.openRow(id, row));
+        const ctx = f.ctx;
+        return f.leafNode(f.tree().pushRow(ctx.stack[ctx.depth - 1], id, row));
+    }
+
+    /// `finishLeaf(enter(i))` for the usual case, where the stack has room: a leaf's slot is
+    /// written and nothing else changes, so the depth is never raised and lowered again. A
+    /// full stack takes the slow way and reuses the deepest slot, as `open` does.
+    inline fn leafNode(f: *Frame, i: u32) Node {
+        const ctx = f.ctx;
+        if (ctx.depth >= ctx.limits.depth) {
+            @branchHint(.cold);
+            return f.finishLeaf(f.enter(i));
+        }
+        ctx.stack[ctx.depth] = i;
+        return @fromBackingInt(i);
     }
 
     fn finishLeaf(f: *Frame, n: Node) Node {
@@ -134,7 +151,7 @@ pub const Frame = struct {
     pub fn text(f: *Frame, str: []const u8, ts: TextStyle) Node {
         const ctx = f.ctx;
         const i = f.tree().pushRow(ctx.stack[ctx.depth - 1], .none, &label_rows[@intFromBool(ts.wrap)]);
-        return f.attachText(f.finishLeaf(f.enter(i)), str, ts);
+        return f.attachText(f.leafNode(i), str, ts);
     }
 
     /// A text leaf of `args` formatted by `fmt` (`std.fmt`), written straight into the frame's
@@ -142,7 +159,7 @@ pub const Frame = struct {
     pub fn textf(f: *Frame, comptime fmt: []const u8, args: anytype, ts: TextStyle) Node {
         const ctx = f.ctx;
         const i = f.tree().pushRow(ctx.stack[ctx.depth - 1], .none, &label_rows[@intFromBool(ts.wrap)]);
-        const n = f.finishLeaf(f.enter(i));
+        const n = f.leafNode(i);
         const span = ctx.strings[ctx.cur].print(fmt, args);
         f.tree().c.text[n.ix()] = f.texts().push(n.ix(), span, &ts);
         return n;
@@ -161,7 +178,7 @@ pub const Frame = struct {
     pub fn textWritten(f: *Frame, n: usize, ts: TextStyle) Node {
         const ctx = f.ctx;
         const i = f.tree().pushRow(ctx.stack[ctx.depth - 1], .none, &label_rows[@intFromBool(ts.wrap)]);
-        const node = f.finishLeaf(f.enter(i));
+        const node = f.leafNode(i);
         const s = &ctx.strings[ctx.cur];
         const k: u32 = @intCast(@min(n, s.buf.len - s.len));
         s.overflow = s.overflow or k < n;

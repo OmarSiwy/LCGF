@@ -162,7 +162,8 @@ pub fn quadBounds(q: anytype) [4]f32 {
 pub fn paintSource(t: anytype, i: usize) usize {
     const reference = t.x.row[t.c.extra[i]].paint_reference;
     std.debug.assert(reference == types.none or reference < i);
-    return if (reference == types.none) i else reference;
+    // A bit select: the ternary came out as a jump over a move in paint's rows path.
+    return simd.selU(reference == types.none, @intCast(i), reference);
 }
 
 pub fn nodeRect(t: anytype, i: usize) [4]f32 {

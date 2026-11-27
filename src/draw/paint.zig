@@ -12,6 +12,11 @@ const Tree = @import("../core/tree.zig").Tree;
 const Texts = @import("../core/texts.zig").Texts;
 const Customs = @import("../core/customs.zig").Customs;
 const DrawList = @import("draw_list.zig").DrawList;
+const Quad = @import("draw_list.zig").Quad;
+/// A rect's four edges, whatever the lane count.
+const V4 = @Vector(4, f32); // tidy: allow(fixed-vector-width) four edges, not lanes
+/// Size builds (embedded flash) keep the one form where a speed build takes a short path.
+const small = @import("builtin").mode == .small;
 const Layers = @import("../layout/overlay.zig").Layers;
 const geometry = @import("geometry.zig");
 const inherit = @import("inherit.zig");
@@ -36,7 +41,6 @@ pub fn emitLayered(t: *Tree, tx: *const Texts, cu: *const Customs, strings: []co
 inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, comptime ordered: bool, order: []const u32, d: *DrawList) void {
     const c = &t.c;
     const x = &t.x;
-    const V4 = @Vector(4, f32);
     const sign: V4 = .{ 1, 1, -1, -1 };
     if (tx.len | cu.len != 0 or !nodeOps(t, ordered, order, d, false)) {
         _ = nodeOps(t, ordered, order, d, true);
@@ -81,6 +85,30 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
     encode(d);
 }
 
+/// Node `i`'s quad read through its extras rows, its own (`extra`) and the one it inherits
+/// from (`scope`; row 0 is the defaults): what sweep 1 writes for a node that has either.
+inline fn quadOf(t: *const Tree, i: usize, alpha: f32) Quad {
+    const c = &t.c;
+    const x = &t.x;
+    const look = &c.look[i];
+    const own = c.extra[i];
+    return .{
+        .rect = geometry.nodeRect(t, i),
+        .clip = geometry.nodeClip(t, i),
+        .params = look.params,
+        .uv = x.row[own].uv,
+        .fill = look.fill,
+        .border_color = look.border_color,
+        .radii = @select(f32, @as(@Vector(4, bool), @splat(x.row[own].prepared_texture != 0)), @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), radiiOf(x.row[own].radii, look.radius))),
+        // Row 0 (the defaults) has border 0: the row is selected, then loaded. A select on
+        // the loaded border compiled to a jump around its load.
+        .border = if (comptime @import("builtin").mode == .small) simd.selF(x.row[own].prepared_texture != 0, 0, x.row[own].border) else x.row[simd.selU(x.row[own].prepared_texture != 0, 0, own)].border,
+        .opacity = alpha,
+        .xform = geometry.nodeWorld(t, i),
+        .clip_radii = geometry.nodeClipRadii(t, i),
+    };
+}
+
 /// Appends quads and the ordered ops. Without side lists the quad and op
 /// indices advance together, and each node writes one candidate operation.
 /// Returns false when directly populated text or custom links need the full path.
@@ -93,33 +121,49 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
     const op_key = d.op.key;
     const op_ref = d.op.ref;
     const looks = c.look;
-    const x = &t.x;
+    const sign: V4 = .{ 1, 1, -1, -1 };
     var links: u32 = none;
     var q: u32 = 0;
     var o: u32 = 0;
     for (0..t.len) |k| {
         const i = if (ordered) order[k] else k;
-        const vis: u32 = @intFromBool(geometry.nodeShown(t, i)) & @intFromBool(t.participation(@intCast(i)).paint);
-        const clip = geometry.nodeClip(t, i);
         const look = &looks[i];
-        // Own extras through `extra`, inherited ones through `scope` (row 0: the defaults).
-        const own = c.extra[i];
-        const alpha = geometry.nodeAlpha(t, i);
-        quads[q] = .{
-            .rect = geometry.nodeRect(t, i),
-            .clip = clip,
-            .params = look.params,
-            .uv = x.row[own].uv,
-            .fill = look.fill,
-            .border_color = look.border_color,
-            .radii = @select(f32, @as(@Vector(4, bool), @splat(x.row[own].prepared_texture != 0)), @as(@Vector(4, f32), @splat(0)), @as(@Vector(4, f32), radiiOf(x.row[own].radii, look.radius))),
-            // Row 0 (the defaults) has border 0: the row is selected, then loaded. A select on
-            // the loaded border compiled to a jump around its load.
-            .border = if (comptime @import("builtin").mode == .small) simd.selF(x.row[own].prepared_texture != 0, 0, x.row[own].border) else x.row[simd.selU(x.row[own].prepared_texture != 0, 0, own)].border,
-            .opacity = alpha,
-            .xform = geometry.nodeWorld(t, i),
-            .clip_radii = geometry.nodeClipRadii(t, i),
-        };
+        const parent = c.parent[i];
+        var vis: u32 = undefined;
+        var alpha: f32 = 1;
+        // A node with no extras row of its own, under none, and with a parent under none reads
+        // row 0 for everything: no reference or outset, unit UVs, the look's radius, no border,
+        // opacity 1, the identity, a square clip. Its quad is its rect, its parent's clip and
+        // its look. One jump on that (nearly every node: well predicted); a size build reads
+        // row 0.
+        if (!small and (c.extra[i] | c.scope[i] | c.scope[parent]) == 0) {
+            vis = @intFromBool(geometry.nodeShown(t, i));
+            const rect: [4]f32 = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] };
+            quads[q] = .{
+                // Outset by nothing, as the rows' way does: a -0 edge comes out the same bits.
+                .rect = geometry.expand(rect, .{ 0, 0, 0, 0 }),
+                .clip = @as(V4, c.child_clip[parent]) * sign,
+                .params = look.params,
+                .uv = .{ 0, 0, 1, 1 },
+                .fill = look.fill,
+                .border_color = look.border_color,
+                .radii = @splat(look.radius),
+                .border = 0,
+                .opacity = 1,
+            };
+            if (std.debug.runtime_safety) {
+                // Every Debug and ReleaseSafe test is the differential check against the rows.
+                const by_rows = quadOf(t, i, geometry.nodeAlpha(t, i));
+                std.debug.assert(t.participation(@intCast(i)).paint);
+                const same = std.mem.eql(u8, std.mem.asBytes(&quads[q]), std.mem.asBytes(&by_rows));
+                std.debug.assert(same);
+            }
+        } else {
+            const paints = t.participation(@intCast(i)).paint;
+            vis = @intFromBool(geometry.nodeShown(t, i)) & @intFromBool(paints);
+            alpha = geometry.nodeAlpha(t, i);
+            quads[q] = quadOf(t, i, alpha);
+        }
         // Painted when either colour has alpha and the node is not fully transparent.
         const has_quad = vis & @intFromBool(((look.fill | look.border_color) >> 24) != 0) & @intFromBool(alpha > 0);
         op_kind[o] = @backingInt(DrawList.Kind.quads);

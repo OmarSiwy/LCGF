@@ -486,7 +486,9 @@ pub fn build(b: *std.Build) void {
     // frame, fast and small (bench/vs/measure.py).
     const vs_lcgf = b.step("vs-lcgf", "Build the LCGF row of the comparison (bench/vs/lcgf/)");
     vs_lcgf.dependOn(&b.addInstallArtifact(size_tool, .{}).step);
-    for ([_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall }, [_][]const u8{ "vs-lcgf", "vs-lcgf-small" }) |mode, name| {
+    // vs-lcgf-safe is the same driver with the safety checks in (ci/jobs/vs-lcgf-check.sh).
+    const vs_modes = [_]std.builtin.OptimizeMode{ .ReleaseFast, .ReleaseSmall, .ReleaseSafe };
+    for (vs_modes, [_][]const u8{ "vs-lcgf", "vs-lcgf-small", "vs-lcgf-safe" }) |mode, name| {
         const core = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = mode });
         core.addOptions("build_options", options);
         const ui_mod = b.createModule(.{ .root_source_file = b.path("bench/micro/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = core }} });

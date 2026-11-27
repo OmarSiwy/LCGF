@@ -13,7 +13,10 @@ const lcgf = @import("lcgf");
 const scenes = @import("scenes");
 const linux = std.os.linux;
 
-pub const panic = std.debug.no_panic;
+/// No panic handler in the measured builds (it would be most of the binary). The safe build is
+/// the checked twin of ci/jobs/vs-lcgf-check.sh and says what failed.
+const checked = @import("builtin").mode == .safe;
+pub const panic = if (checked) std.debug.FullPanic(std.debug.defaultPanic) else std.debug.no_panic;
 /// No thread-local signal stack (std's default is 256 KB, cleared at start-up).
 pub const std_options: std.Options = .{ .signal_stack_size = null };
 
@@ -26,6 +29,33 @@ var ctx: Context = undefined;
 /// Static, as harness.h's: a frame of 24 KB would be probed page by page even under `--idle`.
 var samples: [polls]u64 = undefined;
 var in: lcgf.input.Input = .{};
+/// `--digest`: a hash of every frame's draw list, printed in place of the timings, so two
+/// builds of this driver can be told to draw the same bytes (ci/jobs/vs-lcgf-check.sh).
+var digesting = false;
+var digest: u64 = 0;
+/// Not in the size build, whose bytes are published as the row's executable size.
+const digests = @import("builtin").mode != .small;
+
+/// Folds the bytes of `rows`' fields into the digest, field by field (no padding bytes).
+fn fold(comptime T: type, rows: []const T) void {
+    if (@typeInfo(T) != .@"struct") {
+        digest = std.hash.Wyhash.hash(digest, std.mem.sliceAsBytes(rows));
+        return;
+    }
+    for (rows) |*row| inline for (@typeInfo(T).@"struct".field_names) |name| {
+        digest = std.hash.Wyhash.hash(digest, std.mem.asBytes(&@field(row, name)));
+    };
+}
+
+fn foldDraw(d: *const lcgf.draw_list.DrawList) void {
+    fold(lcgf.draw_list.Quad, d.quads[0..d.quad_len]);
+    fold(u8, d.cmd.kind[0..d.cmd_len]);
+    fold(u32, d.cmd.key[0..d.cmd_len]);
+    fold(u32, d.cmd.first[0..d.cmd_len]);
+    fold(u32, d.cmd.count[0..d.cmd_len]);
+    fold(@TypeOf(d.runs[0]), d.runs[0..d.run_len]);
+    fold(@TypeOf(d.customs[0]), d.customs[0..d.custom_len]);
+}
 const th: lcgf.widgets_base.Theme = .{};
 
 /// Builds poll `k` of `s`: the commands and quads drawn, or 0 when no frame was needed.
@@ -44,6 +74,7 @@ fn frame(scene: usize, k: u32) u64 {
     var f = ctx.begin(&in);
     s.build(&f, &th);
     const out = f.end(.{});
+    if (digests and digesting) foldDraw(out.draw);
     return out.draw.cmd_len + out.draw.quad_len;
 }
 
@@ -115,6 +146,8 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             scene = scenes.vs.len - 1;
         } else if (eql(argv[i], "--hold-after-scene")) {
             hold = true;
+        } else if (digests and eql(argv[i], "--digest")) {
+            digesting = true;
         } else if (eql(argv[i], "--scene") and i + 1 < argv.len) {
             i += 1;
             scene = for (scenes.vs, 0..) |s, n| {
@@ -155,6 +188,13 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     o.int(out);
     o.str(" sink=");
     o.int(sink);
+    if (digests and digesting) {
+        o.str(" digest=");
+        o.int(digest);
+        o.str("\n");
+        o.flush();
+        return 0;
+    }
     o.str("\npass       median us    p99 us\nframe     ");
     o.us(samples[polls / 2]);
     o.us(samples[polls * 99 / 100]);

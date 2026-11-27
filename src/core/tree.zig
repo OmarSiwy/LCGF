@@ -13,6 +13,15 @@ const Align = types.Align;
 const Style = types.Style;
 const Rect = types.Rect;
 const b01 = simd.b2f;
+/// Four corners or four rect edges, whatever the lane count.
+const V4 = @Vector(4, f32); // tidy: allow(fixed-vector-width) a rect's four values, not lanes
+/// How the calls that take a `Style` are compiled (`Tree.push`, `Frame.open`, `Frame.leaf`). A
+/// ReleaseFast build inlines them into the caller: the style is a literal there, so the fields
+/// it does not set are constants, the test for an extras row folds when it names none, and the
+/// row goes from the literal to the columns without passing through memory. Every other build
+/// calls.
+pub const style_call: std.builtin.CallingConvention =
+    if (@import("builtin").mode == .fast) .@"inline" else .auto;
 
 /// One row of a tree's paint extras (`Tree.Extras`). Extern: C++ and Rust write a row's first
 /// five fields in place (`lcgf_extra`, src/abi/view.zig's `CView`).
@@ -131,6 +140,31 @@ pub const Template = struct {
         break :blk all[0..std.meta.fieldIndex(Template, "own").?];
     };
 
+    /// Bit 0: a node with style `s` has an `Extras` row of its own: a paint extra off its
+    /// default, something its subtree inherits (cursor, participation), or a rounded clip.
+    /// Bit 1: all it does is clip to square corners. That needs a row only under an ancestor
+    /// that has one (`pushRow`), where it stops that one's rounded clip; anywhere else row 0
+    /// already says what its row would.
+    fn ownsExtras(s: *const Style, corners: V4) u32 {
+        const d: Style = .{};
+        const zero: V4 = @splat(0);
+        // Off-default tests folded into one 4-lane mask, then one reduce: a 6-lane compare of
+        // the transform lowered to a lane-by-lane extract (docs/perf/port-perf.md).
+        const t = s.transform;
+        const lanes = (@as(V4, s.uv) != @as(V4, d.uv)) | (corners >= zero) |
+            (V4{ t[0], t[1], t[2], t[3] } != V4{ d.transform[0], d.transform[1], d.transform[2], d.transform[3] }) |
+            (V4{ s.border, s.opacity, t[4], t[5] } != V4{ d.border, d.opacity, d.transform[4], d.transform[5] });
+        const off_default = @reduce(.Or, lanes | (@as(V4, s.paint_outset) != zero));
+        const all_in: u8 = @bitCast(types.Participation.all);
+        const partial = @as(u8, @bitCast(s.participation)) != all_in;
+        const round = (s.radius > 0) | @reduce(.Or, corners > zero);
+        const extras = off_default | (s.cursor != null) | (s.paint_reference != none) | partial |
+            (s.clip & round);
+        const bits = @intFromBool(extras) | (@as(u32, @intFromBool(s.clip & !extras)) << 1);
+        std.debug.assert(bits != 3);
+        return bits;
+    }
+
     pub fn from(s: *const Style) Template {
         var r: Template = undefined;
         inline for (0..2) |a| {
@@ -150,7 +184,7 @@ pub const Template = struct {
             r.scroll[a] = s.scroll[a];
         }
         const along_y: f32 = @floatFromInt(@backingInt(s.dir));
-        const corners: @Vector(4, f32) = s.radii;
+        const corners: V4 = s.radii;
         r.main = .{ 1 - along_y, along_y };
         r.gap = s.gap;
         r.flow = b01(!s.float);
@@ -174,15 +208,7 @@ pub const Template = struct {
         r.value = s.value;
         r.text = none;
         r.custom = none;
-        // Off-default tests folded into one 4-lane mask, then one reduce: a 6-lane compare of
-        // the transform lowered to a lane-by-lane extract (docs/perf/port-perf.md).
-        const d: Style = .{};
-        const V4 = @Vector(4, f32);
-        const t = s.transform;
-        const lanes = (@as(V4, s.uv) != @as(V4, d.uv)) | (corners >= @as(V4, @splat(0))) |
-            (V4{ t[0], t[1], t[2], t[3] } != V4{ d.transform[0], d.transform[1], d.transform[2], d.transform[3] }) |
-            (V4{ s.border, s.opacity, t[4], t[5] } != V4{ d.border, d.opacity, d.transform[4], d.transform[5] });
-        r.own = @intFromBool(@reduce(.Or, lanes | (@as(V4, s.paint_outset) != @as(V4, @splat(0))))) | @intFromBool(s.clip) | @intFromBool(s.cursor != null) | @intFromBool(s.paint_reference != none) | @intFromBool(@as(u8, @bitCast(s.participation)) != @as(u8, @bitCast(types.Participation.all)));
+        r.own = ownsExtras(s, corners);
         r.border = s.border;
         r.uv = s.uv;
         r.radii = @select(f32, corners < @as(V4, @splat(0)), @as(V4, @splat(s.radius)), corners);
@@ -467,21 +493,46 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// per column, an `Extras` row only for a style that has one; no searching, no
         /// allocation. `s` must not point into the tree (`noalias`: the loads of the extras
         /// then move inside `pushRow`'s one branch).
-        pub fn push(t: *Self, parent: Index, id: Id, noalias s: *const Style) Index {
-            return t.pushRow(parent, id, &Template.from(s));
+        pub fn push(
+            t: *Self,
+            parent: Index,
+            id: Id,
+            noalias s: *const Style,
+        ) callconv(style_call) Index {
+            // Inlined with its caller (`style_call`), the row is made here and never stored.
+            const inlined = style_call == .@"inline";
+            const how: std.builtin.CallModifier = if (inlined) .always_inline else .auto;
+            const row = @call(how, Template.from, .{s});
+            return @call(how, pushRow, .{ t, parent, id, &row });
         }
 
-        fn collapses(comptime name: []const u8) bool {
-            inline for (Template.collapsed) |n| if (comptime std.mem.eql(u8, n, name)) return true;
-            return false;
-        }
+        /// Per node field, in column order: whether a collapsed node zeroes it, and the value
+        /// it takes then. Tables, made once: `pushRow` is inlined into its callers in fast
+        /// builds, and comparing the names there cost every caller its comptime quota.
+        const field_collapses: [Template.node_fields.len]bool = blk: {
+            @setEvalBranchQuota(10_000);
+            var out: [Template.node_fields.len]bool = undefined;
+            for (Template.node_fields, &out) |name, *o| {
+                o.* = for (Template.collapsed) |n| {
+                    if (std.mem.eql(u8, n, name)) break true;
+                } else false;
+            }
+            break :blk out;
+        };
+        const field_off: [Template.node_fields.len]f32 = blk: {
+            var out: [Template.node_fields.len]f32 = undefined;
+            for (Template.node_fields, &out) |name, *o| {
+                o.* = if (std.mem.eql(u8, name, "pct")) -1 else 0;
+            }
+            break :blk out;
+        };
 
-        /// `v` of column `name`, or its collapsed value (`pct` -1, the others 0) when the node
+        /// `v` of node field `k`, or its collapsed value (`pct` -1, the others 0) when the node
         /// takes no layout. Bit masks: a select on the loaded style value compiled to jumps.
-        inline fn collapse(comptime name: []const u8, v: anytype, layout: bool) @TypeOf(v) {
-            if (comptime !collapses(name)) return v;
+        inline fn collapse(comptime k: usize, v: anytype, layout: bool) @TypeOf(v) {
+            if (comptime !field_collapses[k]) return v;
             const U = @Vector(@typeInfo(@TypeOf(v)).vector.len, u32);
-            const off: U = @splat(@bitCast(@as(f32, if (comptime std.mem.eql(u8, name, "pct")) -1 else 0)));
+            const off: U = @splat(@bitCast(field_off[k]));
             const keep: U = @splat(0 -% @as(u32, @intFromBool(layout)));
             return @bitCast((@as(U, @bitCast(v)) & keep) | (off & ~keep));
         }
@@ -490,6 +541,8 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
         /// rather than once per node): the row is copied as it is, one store per column.
         /// `row` is a `*const Template` or a `*const FlatRow`.
         pub fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index {
+            // Inlined into a caller, the column loop below counts against that caller's quota.
+            @setEvalBranchQuota(1_000_000);
             const c = &t.c;
             const i: Index = @intCast(@min(t.len, t.cap - 1));
             t.overflow = simd.orB(t.overflow, t.len >= t.cap);
@@ -513,17 +566,33 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
             const layout = @as(types.Participation, @bitCast(active_in)).layout;
             const m8 = 0 -% @as(u8, @intFromBool(layout));
             const active: types.Participation = @bitCast(active_in & m8);
-            inline for (Template.node_fields) |name| {
-                const v = rowField(row, name);
-                if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
-                    const kept = collapse(name, @as(@Vector(2, f32), v), layout);
-                    inline for (0..2) |a| @field(c, name)[a][i] = kept[a];
-                } else if (comptime collapses(name)) {
-                    @field(c, name)[i] = collapse(name, @as(@Vector(1, f32), @splat(v)), layout)[0];
-                } else @field(c, name)[i] = v;
+            // Nearly every node takes part in everything, as its ancestors do: one jump on that
+            // (well predicted) and the columns are stored as they are. Collapsing and masking by
+            // `.all` change nothing, so the other side is only for a node that is taken out. A
+            // size build keeps the one loop.
+            const everything = active_in == @as(u8, @bitCast(types.Participation.all));
+            if ((comptime @import("builtin").mode != .small) and everything) {
+                @branchHint(.likely);
+                inline for (Template.node_fields) |name| {
+                    const v = rowField(row, name);
+                    if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
+                        inline for (0..2) |a| @field(c, name)[a][i] = v[a];
+                    } else @field(c, name)[i] = v;
+                }
+            } else {
+                inline for (Template.node_fields, 0..) |name, k| {
+                    const v = rowField(row, name);
+                    if (@TypeOf(@field(c, name)) == [2]Col(f32)) {
+                        const kept = collapse(k, @as(@Vector(2, f32), v), layout);
+                        inline for (0..2) |a| @field(c, name)[a][i] = kept[a];
+                    } else if (comptime field_collapses[k]) {
+                        const one: @Vector(1, f32) = @splat(v);
+                        @field(c, name)[i] = collapse(k, one, layout)[0];
+                    } else @field(c, name)[i] = v;
+                }
+                c.role[i] &= 0 -% @as(u8, @intFromBool(active.semantics));
+                c.sense[i] &= 0 -% @as(u8, @intFromBool(active.hit));
             }
-            c.role[i] &= 0 -% @as(u8, @intFromBool(active.semantics));
-            c.sense[i] &= 0 -% @as(u8, @intFromBool(active.hit));
             // Count this node in its parent, then clear its own count. The root is its own
             // parent, so the clear also removes its self-count: no `i != 0` test, which
             // Zig 0.18's LLVM turned back into a branch. Every other row has parent < i.
@@ -532,9 +601,12 @@ pub fn TreeOf(comptime Index: type, comptime storage: Storage) type {
 
             // The extras row, appended when the style has one. `xlen <= cap + 1` holds while
             // the tree has room; past it the last row is overwritten, as `len` is.
-            const own = row.own != 0;
+            // A row of its own (bit 0), or a square clip under a row (bit 1, `ownsExtras`).
+            const scoped = c.scope[parent] != 0;
+            const own_bits: u32 = row.own;
+            const own = ((own_bits & 1) != 0) | (((own_bits & 2) != 0) & scoped);
             const r = @min(t.xlen, t.cap);
-            t.xlen = r + row.own;
+            t.xlen = r + @as(u32, @intFromBool(own));
             c.extra[i] = simd.selU(own, r, 0);
             c.scope[i] = simd.selU(own, r, c.scope[parent]);
             // One branch, taken by the few nodes with extras (well predicted). Writing every
@@ -795,10 +867,10 @@ test "push writes one row per column from the style's coefficients" {
     try testing.expectEqual(types.Color.rgb(1, 2, 3).bitsOf(), c.look[a].fill);
     try testing.expectEqual(4, c.look[a].radius);
     try testing.expectEqual([4]f32{ 4, 4, 4, 4 }, radiiOf(t.x.row[c.extra[a]].radii, c.look[a].radius));
-    // Only the clipping root has an extras row; the others read row 0, the defaults.
-    try testing.expectEqualSlices(u32, &.{ 1, 0, 0 }, c.extra[0..3]);
-    try testing.expectEqualSlices(u32, &.{ 1, 1, 1 }, c.scope[0..3]);
-    try testing.expectEqual(2, t.xlen);
+    // No extras row: the root clips to square corners under no row, which row 0 already says.
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0 }, c.extra[0..3]);
+    try testing.expectEqualSlices(u32, &.{ 0, 0, 0 }, c.scope[0..3]);
+    try testing.expectEqual(1, t.xlen);
     try testing.expectEqual(9, c.look[a].texture);
     try testing.expectEqual(@backingInt(types.Role.button), c.role[a]);
     try testing.expectEqual(0.25, c.value[a]);
@@ -836,20 +908,32 @@ test "pushRow of a style's template writes the row push writes" {
         try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(@field(a.x, name)[0..a.xlen]), std.mem.sliceAsBytes(@field(b.x, name)[0..a.xlen]));
 }
 
-test "push: a row in Extras only for a style with a paint extra or a clip; scope follows it down" {
+test "push: an Extras row for a paint extra, a rounded clip, or a square clip under a row" {
     var fx: Fixture(8) = .{};
     var t = fx.tree();
     const root = t.push(0, .none, &.{});
     const faded = t.push(root, .none, &.{ .opacity = 0.5, .radii = .{ -1, 2, -1, 3 }, .radius = 4 });
     const kid = t.push(faded, .none, &.{ .radius = 9 });
     const moved = t.push(kid, .none, &.{ .transform = .{ 2, 0, 0, 2, 1, 1 } });
+    // Square clips: under `faded`'s row it needs one (it stops a rounded clip above), under
+    // the root, whose scope is row 0, it needs none. A rounded clip always has its own.
+    const under = t.push(kid, .none, &.{ .clip = true });
     const plain = t.push(root, .none, &.{ .fill = .rgb(1, 1, 1) });
     const clipped = t.push(root, .none, &.{ .clip = true });
+    const round = t.push(root, .none, &.{ .clip = true, .radius = 3 });
     const c = t.c;
-    try testing.expectEqualSlices(u32, &.{ 0, 1, 0, 2, 0, 3 }, &.{ c.extra[root], c.extra[faded], c.extra[kid], c.extra[moved], c.extra[plain], c.extra[clipped] });
-    try testing.expectEqualSlices(u32, &.{ 0, 1, 1, 2, 0, 3 }, &.{ c.scope[root], c.scope[faded], c.scope[kid], c.scope[moved], c.scope[plain], c.scope[clipped] });
-    try testing.expectEqual(4, t.xlen);
-    try testing.expectEqualSlices(u32, &.{ faded, moved, clipped }, t.x.node[1..4]);
+    const nodes = [_]u32{ root, faded, kid, moved, under, plain, clipped, round };
+    var extra: [nodes.len]u32 = undefined;
+    var scope: [nodes.len]u32 = undefined;
+    for (nodes, &extra, &scope) |n, *e, *sc| {
+        e.* = c.extra[n];
+        sc.* = c.scope[n];
+    }
+    // The scope follows a row down to the nodes without one.
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 0, 2, 3, 0, 0, 4 }, &extra);
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 1, 2, 3, 0, 0, 4 }, &scope);
+    try testing.expectEqual(5, t.xlen);
+    try testing.expectEqualSlices(u32, &.{ faded, moved, under, round }, t.x.node[1..5]);
     try testing.expectEqual(0.5, t.x.row[1].opacity);
     try testing.expectEqual([4]f32{ 4, 2, 4, 3 }, t.x.row[1].radii);
     try testing.expectEqual([4]f32{ 9, 9, 9, 9 }, radiiOf(t.x.row[c.extra[kid]].radii, c.look[kid].radius));

@@ -324,7 +324,9 @@ pub fn exportAll() void {
 
 /// A function written for C already (`callconv(.c)`), exported as it is.
 pub fn isC(comptime f: anytype) bool {
-    return @typeInfo(@TypeOf(f)).@"fn".attrs.@"callconv" != .auto;
+    const cc = @typeInfo(@TypeOf(f)).@"fn".attrs.@"callconv";
+    // An inlined Zig function (`Frame.open` in a fast build) has no address to export: wrapped.
+    return cc != .auto and cc != .@"inline";
 }
 
 // ---- the functions that stand in -------------------------------------------------------------

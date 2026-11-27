@@ -461,20 +461,28 @@ fn finalizeSpanMode(t: anytype, first: u32, last: u32, comptime mode: rounding.M
     // "no clip". This replaces a per-row `i == 0` select on the chain below.
     if (first == 0) child_clip[0] = everything;
     for (first..last) |i| {
-        c.sense[i] &= 0 -% @as(u8, @intFromBool(t.x.row[c.scope[i]].active_participation.hit));
         const local: [4]f32 = .{ rect[0][i], rect[1][i], rect[2][i], rect[3][i] };
         const inset = geometry.expand(local, @splat(-xrow[extra[i]].border));
-        // One identity test for both rects (nearly every row: well predicted), where each
-        // `transformRect` made its own. Size builds keep the two calls.
         var screen = local;
         var inner_rect = inset;
-        if (comptime transformed) {
-            const world = geometry.worldAt(t, i);
-            if (!inline_passes or !geometry.isIdentity(world)) {
-                @branchHint(.unlikely);
-                screen = geometry.transformRect(local, world);
-                inner_rect = geometry.transformRect(inset, world);
+        // A row whose scope is 0 inherits the defaults: it takes hits and nothing moves it, so
+        // there is no participation to mask by and no matrix to load and test. One jump on
+        // that (nearly every row: well predicted). A size build asks every row, as do the
+        // comptime front end's views, whose scopes are tables.
+        const scoped = !inline_passes or @TypeOf(t) != *Tree or c.scope[i] != 0;
+        if (scoped) {
+            @branchHint(.unlikely);
+            c.sense[i] &= 0 -% @as(u8, @intFromBool(t.x.row[c.scope[i]].active_participation.hit));
+            if (comptime transformed) {
+                const world = geometry.worldAt(t, i);
+                if (!inline_passes or !geometry.isIdentity(world)) {
+                    screen = geometry.transformRect(local, world);
+                    inner_rect = geometry.transformRect(inset, world);
+                }
             }
+        } else if (std.debug.runtime_safety) {
+            std.debug.assert(t.x.row[0].active_participation.hit);
+            std.debug.assert(geometry.isIdentity(t.x.row[0].world));
         }
         const r = @as(V4, screen) * sign;
         // child_clip[i] feeds the next row whose parent is i, so the path from this load to

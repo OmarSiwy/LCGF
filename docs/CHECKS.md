@@ -102,6 +102,14 @@ jump those merges added was removed). Each remaining jump was read in the disass
   forward jumps per sweep to the out-of-line bounds. Without it paint computed every node's
   bounds again after finalize: on bench/vs/lcgf (x86_64_v3, 3,000 polls) springs took 889,817
   instead of 780,526 instructions a frame and list 161,722 instead of 146,834.
+- `p_paint` jcc 16 -> 24, `p_paint_layered` 17 -> 25, `p_tree_push` and `p_tree_push_row`
+  1 -> 2, `p_finalize` 4 -> 5, no short forward jump among them: the test for a node that has
+  no extras row, its own or inherited, in each of the three passes. Such a node takes a short
+  way (push stores its columns unmasked, finalize loads no matrix, paint writes its rect, its
+  parent's clip and its look) and the others go through the rows as before; the jumps are long
+  ones between the two. Without them every node paid for the rows: on bench/vs/lcgf
+  (x86_64_v3, 3,000 polls) springs took 741,973 instead of 592,062 instructions a frame and
+  list 141,503 instead of 102,181.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.

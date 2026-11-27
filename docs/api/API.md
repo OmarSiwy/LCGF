@@ -261,14 +261,13 @@ Fields: `array`
 ### `TreeOf(..)` (generic struct)
 A tree whose node links (`parent`, `end`, `push`'s rows) are `Index`, the smallest integer that fits the capacity, as `Ui().Index` is in prototype/comptime_ui_probe.zig.
 
-Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`
+Fields: `len`, `cap`, `overflow`, `c`, `x`, `xlen`, `t`, `parent`, `id`
 
 - `scratch = [_][]const u8{ "fit", "nat", "grow_sum", "grow_inv", "used", "gap_total", "cursor" }`: The layout scratch columns: every layout run rewrites them before reading them (`layout.prepare` zeroes or sets the accumulators, `fit` writes the rest), and nothing outside a layout run reads them.
 - `fn rows(cap: u32) usize`: Rows allocated for `cap` nodes: whole vectors plus one spare, so batch passes may read and write one vector past `len`.
 - `fn init(carver: *mem.Carver, cap: u32) Self`: Carves every column from `carver`.
 - `fn initSharing(carver: *mem.Carver, cap: u32, other: *const Self) Self`: `init`, except the `scratch` columns are `other`'s, not carved: two trees that are never laid out at the same time (the runtime front end's two generations) share them.
 - `fn reset(t: *Self) void`: Empties the tree for the next frame.
-- `fn push(t: *Self, parent: Index, id: Id, noalias s: *const Style) Index`: Appends a node as the last child of `parent` and returns its row.
 - `fn pushRow(t: *Self, parent_in: Index, id: Id, row: anytype) Index`: `push` from a style already turned into its row (`Template.from`, once per style rather than once per node): the row is copied as it is, one store per column.
 - `fn cursor(t: *const Self, i: u32) ?types.Cursor`: Effective pointer shape, available while building without an extra ancestor walk.
 - `fn participation(t: *const Self, i: u32) types.Participation`: Effective subtree participation, available immediately while building.
@@ -3603,7 +3602,6 @@ Fields: `camera`, `palette`, `ranges`, `overrides`
 
 
 ### `Frame` (struct)
-One frame under construction.
 
 Fields: `ctx`, `in`
 
@@ -3613,9 +3611,9 @@ Fields: `ctx`, `in`
 - `fn texts(f: *const Frame) *Texts`
 - `fn prevTree(f: *const Frame) *const Tree`
 - `fn outline(f: *Frame, node: Node, options: outlines.Outline) Node`: Paint an outside ring at this point in the command order.
-- `fn open(f: *Frame, id: Id, style: Style) Node`: Starts a node.
+- `fn open(f: *Frame, id: Id, style: Style) callconv(style_call) Node`: Starts a node.
 - `fn close(f: *Frame) void`
-- `fn leaf(f: *Frame, id: Id, style: Style) Node`: A node with no children.
+- `fn leaf(f: *Frame, id: Id, style: Style) callconv(style_call) Node`: A node with no children.
 - `fn openRow(f: *Frame, id: Id, row: anytype) Node`: `open` from a style already turned into its row (`Template.from`; a `*const Template` or a C `*const FlatRow`): the row is pushed as it is.
 - `fn leafRow(f: *Frame, id: Id, row: anytype) Node`: `leaf` from a row (`openRow`).
 - `fn text(f: *Frame, str: []const u8, ts: TextStyle) Node`: A text leaf.
