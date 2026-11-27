@@ -8,11 +8,11 @@ const alpha: *const [width * height]u8 = @embedFile("font/mono.a8");
 // Keep the embedded atlas at one byte per texel instead of expanding it fourfold.
 pub const image: lcgf.render_sw.Image = .{ .alpha8 = alpha, .width = width, .height = height };
 
-/// The atlas has six rows of sixteen cells, starting at space. Other bytes
-/// select the question-mark cell.
+/// The atlas has six rows of sixteen cells, printable ASCII from space. Other bytes
+/// select the question-mark cell. Pass it as a canvas label's `atlas` (`Instances.glyphs`).
+pub const cells: lcgf.protocol.Atlas = .grid(16, 6, ' ', '~');
+
+/// `cells`' UV rect of `byte`, as `Mono.quadsFor` takes a grid.
 pub fn uv(byte: u8) error{}![4]f32 {
-    const index = (if (byte >= 32 and byte <= 126) byte else @as(u8, '?')) - 32;
-    const x: f32 = @floatFromInt(index % 16);
-    const y: f32 = @floatFromInt(index / 16);
-    return .{ x / 16, y / 6, (x + 1) / 16, (y + 1) / 6 };
+    return cells.uv(byte);
 }

@@ -43,6 +43,9 @@ pub const Mono = struct {
     /// Line height, in ems.
     line: f32 = 1.25,
 
+    /// Mono's glyph atlas: a 16 x 16 grid of cells indexed by byte.
+    pub const atlas: Atlas = .{};
+
     /// SIMD. Single-line extent of every run. Reads `bytes`, `px`; writes `w`, `h`.
     /// Rows past `tx.len` up to the padding are written too; they are never read.
     pub fn measure(font: Mono, tx: *Texts) void {
@@ -544,7 +547,34 @@ fn cellUv(index: u8, comptime columns: usize, comptime rows: usize) [4]f32 {
 
 const FullGrid = struct {
     fn uv(byte: u8) error{}![4]f32 {
-        return cellUv(byte, 16, 16);
+        return Mono.atlas.uv(byte);
+    }
+};
+
+/// Where each byte's glyph sits in a bitmap font atlas: `columns` x `rows` equal cells, each
+/// `cell` of the texture in UV, holding the bytes from `first` to `last` in order, row by row.
+/// Another byte shows `missing`'s cell. A host passes its font's descriptor to whatever maps
+/// bytes to cells (`canvas.Instances.glyphs`); the default is `Mono`'s full 16 x 16 grid.
+pub const Atlas = struct {
+    columns: u8 = 16,
+    rows: u8 = 16,
+    first: u8 = 0,
+    last: u8 = 255,
+    missing: u8 = '?',
+    cell: [2]f32 = .{ 1.0 / 16.0, 1.0 / 16.0 },
+
+    /// `columns` x `rows` cells filling the texture, holding the bytes `first` to `last`.
+    pub fn grid(columns: u8, rows: u8, first: u8, last: u8) Atlas {
+        return .{ .columns = columns, .rows = rows, .first = first, .last = last, .cell = .{ 1 / @as(f32, @floatFromInt(columns)), 1 / @as(f32, @floatFromInt(rows)) } };
+    }
+
+    /// The UV rect (u0, v0, u1, v1) of `byte`'s cell.
+    pub fn uv(a: Atlas, byte: u8) [4]f32 {
+        const shown = if (byte >= a.first and byte <= a.last) byte else a.missing;
+        const index: u32 = shown -% a.first;
+        const x: f32 = @floatFromInt(index % a.columns);
+        const y: f32 = @floatFromInt(index / a.columns);
+        return .{ x * a.cell[0], y * a.cell[1], (x + 1) * a.cell[0], (y + 1) * a.cell[1] };
     }
 };
 

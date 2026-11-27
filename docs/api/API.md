@@ -1138,6 +1138,7 @@ A fixed-advance font: every byte is `advance` ems wide, every line `line` ems ta
 
 Fields: `advance`, `line`
 
+- `atlas: Atlas = .{}`: Mono's glyph atlas: a 16 x 16 grid of cells indexed by byte.
 - `Glyphs = struct { first: []u32, count: []u32 }`: Where glyph quads for run k landed in the output of `quads`.
 - `fn measure(font: Mono, tx: *Texts) void`: SIMD.
 - `fn wrap(font: Mono, tx: *Texts) void`: SIMD.
@@ -1161,6 +1162,14 @@ Fields: `mono`, `rows`, `styles`, `table`, `decorations`, `spans`, `strings`
 - `fn quads(p: Self, d: *const DrawList, tx: *const Texts, out: []Quad, glyphs: Mono.Glyphs) u32`: `Mono.quads` with the styled runs laid out as `wrap` measured them (from the frame's `tx`: each run's wrap flag and width), each glyph in its span's size and colour.
 - `fn decorate(p: Self, d: *DrawList, tx: *const Texts) void`: After `paint.emit`: one solid quad per line and decoration of every decorated run, painted right after the run's text and encoded into commands again.
 - `fn styled(p: Self) Styled`: The styled runs this font measures, for a real shaper (`text_stack.Stack.style`).
+
+### `Atlas` (struct)
+Where each byte's glyph sits in a bitmap font atlas: `columns` x `rows` equal cells, each `cell` of the texture in UV, holding the bytes from `first` to `last` in order, row by row.
+
+Fields: `columns`, `rows`, `first`, `last`, `missing`, `cell`
+
+- `fn grid(columns: u8, rows: u8, first: u8, last: u8) Atlas`: `columns` x `rows` cells filling the texture, holding the bytes `first` to `last`.
+- `fn uv(a: Atlas, byte: u8) [4]f32`: The UV rect (u0, v0, u1, v1) of `byte`'s cell.
 
 ### `StaticAtlas(..)` (generic struct)
 Pack only the byte cells referenced by a static vocabulary, using the same pixels and glyph metrics as Mono's 16x16 atlas.
@@ -2346,7 +2355,7 @@ Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `
 - `Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`
 - `Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null }`
 - `Glyph = struct { layer: u8 = 0, turns: u2 = 0 }`
-- `Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{} }`
+- `Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{}, atlas: Atlas = .{} }`: `atlas` is where the glyph texture keeps each byte (a host's font says: the example font's `cells`); the default is `Mono`'s 16 x 16 byte grid.
 - `fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32, o: Options) Instances`: Carves `simd.rows(cap)` instance rows, `verts` polygon vertices, `dirty` dirty ranges and, with `o.marks`, a mark per row from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
 - `fn requiredBytes(cap: u32, verts: u32, dirty: u32, o: Options) usize`
 - `fn mark(s: *Instances, i: u32, color: u32) void`: Row `i` drawn in `color` (rgba8) from now on, over its layer and any range override; 0 takes the mark off.
@@ -2362,7 +2371,7 @@ Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `
 - `fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32`: The circle of radius `r` around `c` from angle `start` through `sweep` (a negative sweep runs the other way); a dash runs along its centre line from `start`.
 - `fn polygon(s: *Instances, points: []const [2]i32, o: Area) u32`: The closed polygon through `points`, any shape, filled by the nonzero rule, its outline stroked over the fill when `o.stroke`.
 - `fn glyph(s: *Instances, anchor: [2]i32, size: [2]u32, uv: [4]f32, o: Glyph) u32`: Atlas `uv` (u0, v0, u1, v1, 0..1) on the box `size` world units from `anchor`, turned about it by `o.turns` quarter turns; the atlas is the glyph atlas the renderer was given (`iface.Glyphs.texture`), tinted by the layer's stroke colour.
-- `fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range`: `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall and turned with it, with the metrics and 16 x 16 byte atlas of `protocol.Mono`.
+- `fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range`: `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall and turned with it, with `o.font`'s metrics and each byte's cell of `o.atlas`.
 
 ### `Instances.Columns` (struct)
 

@@ -57,6 +57,7 @@ const mem = @import("../core/mem.zig");
 const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
 const Mono = @import("../text/protocol.zig").Mono;
+const Atlas = @import("../text/protocol.zig").Atlas;
 const Color = types.Color;
 
 pub const Kind = enum(u4) { segment, rect, arc, polygon, glyph };
@@ -276,7 +277,9 @@ pub const Instances = struct {
     pub const Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null };
     pub const Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null };
     pub const Glyph = struct { layer: u8 = 0, turns: u2 = 0 };
-    pub const Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{} };
+    /// `atlas` is where the glyph texture keeps each byte (a host's font says: the example
+    /// font's `cells`); the default is `Mono`'s 16 x 16 byte grid.
+    pub const Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{}, atlas: Atlas = .{} };
 
     /// A line from `a` to `b`.
     pub fn segment(s: *Instances, a: [2]i32, b: [2]i32, o: Line) u32 {
@@ -357,7 +360,7 @@ pub const Instances = struct {
     }
 
     /// `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall
-    /// and turned with it, with the metrics and 16 x 16 byte atlas of `protocol.Mono`. A
+    /// and turned with it, with `o.font`'s metrics and each byte's cell of `o.atlas`. A
     /// shaper of your own calls `glyph`.
     pub fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range {
         const first = s.len;
@@ -368,9 +371,7 @@ pub const Instances = struct {
             const x0: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j))));
             const x1: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j + 1))));
             const at = [2]i32{ origin[0] + @as(i32, @intFromFloat(c)) * x0, origin[1] + @as(i32, @intFromFloat(sn)) * x0 };
-            const cx: f32 = @floatFromInt(byte & 15);
-            const cy: f32 = @floatFromInt(byte >> 4);
-            _ = s.glyph(at, .{ @intCast(x1 - x0), @intFromFloat(@round(px * o.font.line)) }, .{ cx / 16, cy / 16, (cx + 1) / 16, (cy + 1) / 16 }, .{ .layer = o.layer, .turns = o.turns });
+            _ = s.glyph(at, .{ @intCast(x1 - x0), @intFromFloat(@round(px * o.font.line)) }, o.atlas.uv(byte), .{ .layer = o.layer, .turns = o.turns });
         }
         return s.since(first);
     }
