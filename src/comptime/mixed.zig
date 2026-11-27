@@ -22,6 +22,10 @@ const DrawList = lcgf.draw_list.DrawList;
 const Id = lcgf.types.Id;
 const Rect = lcgf.types.Rect;
 const Mono = lcgf.protocol.Mono;
+const Color = lcgf.types.Color;
+const CanvasDraw = lcgf.draw_list.CanvasDraw;
+const Damage = lcgf.damage.Damage;
+const sw = lcgf.render_sw;
 
 const th: w.Theme = .default;
 const font: Mono = .{};
@@ -146,6 +150,160 @@ const PageB = struct {
         const inner = p.ui.frame(&sub);
         try interop.compose(&p.out.draw, outer.draw, inner.draw, @backingInt(panel_id), &p.out.strings);
         return &p.out.draw;
+    }
+};
+
+// ---- page C: a comptime page with two runtime regions, composed in a chain -----------------
+
+const canvas_id: Id = .from("canvas");
+const side_id: Id = .from("side");
+
+const Header = struct {
+    grid: bool = true,
+    grid_text: []const u8 = "Grid",
+};
+const page_c = s.col(.{ .size = .{ .fill, .fill } }, .{
+    s.row(.{ .size = .{ .fill, .fit }, .pad = @splat(8), .fill = th.panel }, .{
+        w.ct.checkbox(th, .grid_box, .grid, .grid_text),
+    }),
+    s.row(.{ .size = .{ .fill, .fill } }, .{
+        interop.region(.canvas, .{ .size = .{ .fill, .fill } }),
+        interop.fitRegion(.side, .{ .size = .{ .fit, .fill } }),
+    }),
+});
+
+const region_limits: Limits = .{
+    .nodes = 8,
+    .texts = 2,
+    .customs = 2,
+    .strings = 64,
+    .depth = 4,
+    .damage = true,
+};
+const canvas_ground: Color = .rgb(10, 20, 30);
+const canvas_red: Color = .rgb(220, 0, 0);
+
+/// Schemify's frame in small: the page records its damage, each region's context records its
+/// own and keeps its list whole, and two composes join them; the result is culled once.
+const PageC = struct {
+    const Ui = w.ComptimeUi(Header, page_c, th);
+    const dm_bytes = blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = Damage.init(&counter, Ui.nodes);
+        break :blk counter.off;
+    };
+    const shapes_bytes = lcgf.canvas.Instances.requiredBytes(4, 0, 1, .{});
+
+    ui: Ui = .{},
+    dm_buf: [dm_bytes]u8 align(mem.column_align) = undefined,
+    dm: Damage = undefined,
+    canvas_buf: [Context.requiredBytes(region_limits)]u8 align(mem.column_align) = undefined,
+    side_buf: [Context.requiredBytes(region_limits)]u8 align(mem.column_align) = undefined,
+    canvas_ctx: Context = undefined,
+    side_ctx: Context = undefined,
+    rows: [2 * region_limits.customs]CanvasDraw = undefined,
+    shapes_buf: [shapes_bytes]u8 align(mem.column_align) = undefined,
+    shapes: lcgf.canvas.Instances = undefined,
+    layers: [1]lcgf.canvas.Layer = .{.of(.{ .stroke = canvas_red, .fill = canvas_red })},
+    palette: lcgf.canvas.Palette = undefined,
+    ranges: [1]lcgf.canvas.Range = undefined,
+    camera: lcgf.canvas.Camera = .{ .offset = .{ 20, 20 } },
+    side_w: f32 = 60,
+    side_fill: Color = .rgb(0, 0, 200),
+    /// The page with the canvas region, then with the side region too.
+    mid: Out = .{},
+    out: Out = .{},
+    mid_canvases: [Out.customs]CanvasDraw = undefined,
+    out_canvases: [Out.customs]CanvasDraw = undefined,
+
+    fn init(p: *PageC) !void {
+        var dm_carver: mem.Carver = .{ .buf = &p.dm_buf };
+        p.dm = Damage.init(&dm_carver, Ui.nodes);
+        std.debug.assert(dm_carver.off == dm_bytes);
+        p.canvas_ctx = try Context.init(&p.canvas_buf, region_limits);
+        p.canvas_ctx.trackDamageWhole();
+        p.canvas_ctx.enableCanvas(&p.rows);
+        p.side_ctx = try Context.init(&p.side_buf, region_limits);
+        p.side_ctx.trackDamageWhole();
+        var carver: mem.Carver = .{ .buf = &p.shapes_buf };
+        p.shapes = .init(&carver, 4, 0, 1, .{});
+        _ = p.shapes.rect(.{ 0, 0 }, .{ 10, 10 }, .{});
+        p.ranges = .{p.shapes.since(0)};
+        p.palette = .{ .layers = &p.layers };
+        p.mid.init();
+        p.out.init();
+        p.mid.draw.canvases = &p.mid_canvases;
+        p.out.draw.canvases = &p.out_canvases;
+    }
+
+    /// The composed list of one frame, culled to what changed.
+    fn frame(p: *PageC, in: *const Input) !*const DrawList {
+        var top = p.ui.frame(in);
+        if (interop.setFit(&p.ui, .side, .{ p.side_w, 0 })) top = p.ui.rebuild(in);
+        p.ui.recordDamage(&p.dm);
+
+        var sub = interop.regionInput(in, rect4(top.tree.rect(top.tree.find(canvas_id))));
+        var f = p.canvas_ctx.begin(&sub);
+        const view: lcgf.types.Style = .{ .size = .{ .fill, .fill }, .fill = canvas_ground };
+        _ = f.canvas(.from("view"), view, &p.shapes, .{
+            .camera = p.camera,
+            .palette = &p.palette,
+            .ranges = &p.ranges,
+        });
+        const a = f.end(font).draw;
+        try interop.compose(&p.mid.draw, top.draw, a, @backingInt(canvas_id), &p.mid.strings);
+
+        sub = interop.regionInput(in, rect4(top.tree.rect(top.tree.find(side_id))));
+        var g = p.side_ctx.begin(&sub);
+        _ = g.leaf(.from("swatch"), .{ .size = .{ .px(40), .px(40) }, .fill = p.side_fill });
+        const b = g.end(font).draw;
+        try interop.compose(&p.out.draw, &p.mid.draw, b, @backingInt(side_id), &p.out.strings);
+        lcgf.damage.cull(&p.out.draw, &p.out.draw.damage);
+        std.debug.assert(p.out.draw.cmd_len <= top.draw.cmd_len + a.cmd_len + b.cmd_len);
+        return &p.out.draw;
+    }
+
+    /// Region `id`'s rect in the page, as the last frame laid it out.
+    fn regionRect(p: *const PageC, id: Id) [4]f32 {
+        const t = &p.ui.tables.t;
+        return rect4(t.rect(t.find(id)));
+    }
+};
+
+/// A 400 x 300 software target that keeps its pixels from frame to frame.
+const Screen = struct {
+    const size = [2]u32{ 400, 300 };
+    pixels: [sw.Framebuffer.len(size[0], size[1])]u32 = undefined,
+    glyphs: [256]lcgf.draw_list.Quad = undefined,
+    first: [Out.texts]u32 = undefined,
+    count: [Out.texts]u32 = undefined,
+    setup: sw.Setup = .{},
+
+    fn fb(sc: *Screen) sw.Framebuffer {
+        return .init(&sc.pixels, size[0], size[1], .rgba8);
+    }
+
+    /// Draws `d` over what the screen holds: only inside `d.damage`.
+    fn draw(sc: *Screen, d: *const DrawList) void {
+        var target = sc.fb();
+        const glyphs = lcgf.render_sw_font.glyphs(d, &sc.glyphs, &sc.first, &sc.count);
+        sc.setup.gfx.images = &lcgf.render_sw_font.images;
+        sc.setup.draw(&target, d, glyphs, .black, 1);
+    }
+
+    fn at(sc: *Screen, x: u32, y: u32) Color {
+        return sc.fb().at(x, y);
+    }
+
+    /// The pixel `dx`, `dy` from `box`'s corner.
+    fn in(sc: *Screen, box: [4]f32, dx: f32, dy: f32) Color {
+        return sc.at(@intFromFloat(box[0] + dx), @intFromFloat(box[1] + dy));
+    }
+
+    /// Paints one pixel behind the renderer's back: it shows through unless (x, y) is redrawn.
+    fn mark(sc: *Screen, x: u32, y: u32) void {
+        var target = sc.fb();
+        target.fill(.{ x, y, x + 1, y + 1 }, .white);
     }
 };
 
@@ -274,4 +432,96 @@ test "page B: a comptime panel's widgets inside a runtime page, one draw list" {
     in.buttons.left = true;
     _ = try b.frame(&in);
     try testing.expectApproxEqAbs(@as(f32, 0.75), b.ui.signals.state.volume, 0.02);
+}
+
+/// True when some slot of `g` holds all of `box`.
+fn covered(g: *const lcgf.damage.Region, box: [4]f32) bool {
+    for (0..lcgf.damage.max_rects) |k| {
+        const r = g.rect(@intCast(k));
+        if (r[0] <= box[0] and r[1] <= box[1] and r[2] >= box[2] and r[3] >= box[3]) return true;
+    }
+    return false;
+}
+
+/// Pixel (x, y) of the screen at the middle of `box`.
+fn middle(box: [4]f32) [2]u32 {
+    return .{ @intFromFloat((box[0] + box[2]) / 2), @intFromFloat((box[1] + box[3]) / 2) };
+}
+
+test "page C: a composed page redraws only what changed in the page or a region" {
+    const S = struct {
+        var p: PageC = .{};
+        var screen: Screen = .{};
+    };
+    const p = &S.p;
+    const sc = &S.screen;
+    try p.init();
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+
+    // The first frame draws everything: the page and both regions.
+    sc.draw(try p.frame(&in));
+    const canvas = p.regionRect(canvas_id);
+    const side = p.regionRect(side_id);
+    try testing.expectEqual(canvas[2], side[0]);
+    try testing.expectEqual(60, side[2] - side[0]);
+    try testing.expectEqual(canvas_red, sc.in(canvas, 25, 25));
+    try testing.expectEqual(Color.rgb(0, 0, 200), sc.in(side, 20, 20));
+
+    // Idle: nothing changed, nothing is drawn.
+    sc.mark(5, 5);
+    var d = try p.frame(&in);
+    try testing.expectEqual(0, d.damage.count());
+    try testing.expectEqual(0, d.quad_len);
+    sc.draw(d);
+    try testing.expectEqual(Color.white, sc.at(5, 5));
+
+    // A pan of the canvas: its node's rect in the page, nothing else; a pixel outside it stays.
+    const side_mid = middle(side);
+    sc.mark(side_mid[0], side_mid[1]);
+    p.camera.offset = .{ 60, 60 };
+    d = try p.frame(&in);
+    try testing.expectEqual(1, d.damage.count());
+    try testing.expectEqual(canvas, d.damage.bounds());
+    sc.draw(d);
+    try testing.expectEqual(canvas_red, sc.in(canvas, 65, 65));
+    try testing.expectEqual(canvas_ground, sc.in(canvas, 25, 25));
+    try testing.expectEqual(Color.white, sc.at(side_mid[0], side_mid[1]));
+    try testing.expectEqual(Color.white, sc.at(5, 5));
+
+    // A comptime widget's state: within that widget's rect; the regions keep their pixels.
+    const k = comptime PageC.Ui.Events.slot(.grid_box);
+    const r = p.ui.rects.c;
+    const widget = [4]f32{ r[0][k], r[1][k], r[2][k], r[3][k] };
+    const canvas_mid = middle(canvas);
+    sc.mark(canvas_mid[0], canvas_mid[1]);
+    p.ui.signals.state.grid = false;
+    d = try p.frame(&in);
+    try testing.expect(d.damage.count() > 0);
+    var within: lcgf.damage.Region = .empty;
+    within.add(widget);
+    try testing.expect(covered(&within, d.damage.bounds()));
+    sc.draw(d);
+    try testing.expectEqual(Color.white, sc.at(canvas_mid[0], canvas_mid[1]));
+    try testing.expectEqual(Color.white, sc.at(side_mid[0], side_mid[1]));
+
+    // The second region's content: its swatch's rect in the page, nothing else.
+    p.side_fill = .rgb(0, 200, 0);
+    d = try p.frame(&in);
+    try testing.expectEqual(1, d.damage.count());
+    const swatch = [4]f32{ side[0], side[1], side[0] + 40, side[1] + 40 };
+    try testing.expectEqual(swatch, d.damage.bounds());
+    sc.draw(d);
+    try testing.expectEqual(Color.rgb(0, 200, 0), sc.in(side, 20, 20));
+    try testing.expectEqual(Color.white, sc.at(canvas_mid[0], canvas_mid[1]));
+
+    // The side region grows: both regions' old and new rects are redrawn.
+    p.side_w = 100;
+    d = try p.frame(&in);
+    const side2 = p.regionRect(side_id);
+    const canvas2 = p.regionRect(canvas_id);
+    try testing.expectEqual(100, side2[2] - side2[0]);
+    for ([_][4]f32{ side, side2, canvas, canvas2 }) |box|
+        try testing.expect(covered(&d.damage, box));
+    sc.draw(d);
+    try testing.expectEqual(Color.rgb(0, 200, 0), sc.in(side2, 20, 20));
 }

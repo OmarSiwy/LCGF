@@ -1792,6 +1792,106 @@ test "x11: a canvas under damage shows its new camera, and only its rectangle is
     try testing.expectEqual(@as(u32, 0), c.errors);
 }
 
+/// A comptime page, a 30 px header over a region, with `CanvasScene`'s canvas in the region:
+/// the page records its damage, the region's context its own, and `compose` joins them.
+const ComposedScene = struct {
+    const interop = lcgf.ct_interop;
+    const page = lcgf.spec.col(.{ .size = .{ .fill, .fill } }, .{
+        lcgf.spec.row(.{ .size = .{ .fill, .px(30) }, .fill = CanvasScene.panel }, .{}),
+        interop.region(.canvas, .{ .size = .{ .fill, .fill } }),
+    });
+    const Ui = lcgf.widgets_base.ComptimeUi(struct {}, page, .default);
+    const region_id = @backingInt(lcgf.types.Id.from("canvas"));
+    const dm_bytes = blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = lcgf.damage.Damage.init(&counter, Ui.nodes);
+        break :blk counter.off;
+    };
+    const out_bytes = blk: {
+        var counter: mem.Carver = .{ .buf = null };
+        _ = lcgf.draw_list.DrawList.init(&counter, 16, 4, 4);
+        break :blk counter.off;
+    };
+    var ui: Ui = .{};
+    var dm_buf: [dm_bytes]u8 align(mem.column_align) = undefined;
+    var out_buf: [out_bytes]u8 align(mem.column_align) = undefined;
+    var strings: [64]u8 = undefined;
+    var canvases: [4]lcgf.draw_list.CanvasDraw = undefined;
+
+    canvas: CanvasScene,
+    dm: lcgf.damage.Damage,
+    out: lcgf.draw_list.DrawList,
+
+    fn init(s: *ComposedScene) !void {
+        var dm_carver: mem.Carver = .{ .buf = &dm_buf };
+        var out_carver: mem.Carver = .{ .buf = &out_buf };
+        s.dm = .init(&dm_carver, Ui.nodes);
+        s.out = .init(&out_carver, 16, 4, 4);
+        std.debug.assert(out_carver.off == out_bytes);
+        try s.canvas.init();
+        // Whole lists, so the two sides can be joined.
+        s.canvas.ctx.trackDamageWhole();
+        s.out.canvases = &canvases;
+        ui = .{};
+    }
+
+    /// The composed frame, culled once to what changed on either side.
+    fn frame(s: *ComposedScene, in: *const Input) !Output {
+        const top = ui.frame(in);
+        ui.recordDamage(&s.dm);
+        const r = top.tree.rect(top.tree.find(.from("canvas")));
+        const sub = interop.regionInput(in, .{ r.x0, r.y0, r.x1, r.y1 });
+        var f = s.canvas.ctx.begin(&sub);
+        f.ctx.enableCanvas(&s.canvas.rows);
+        _ = f.canvas(.from("schematic"), .{ .size = .{ .fill, .fill }, .fill = CanvasScene.ground }, &s.canvas.shapes, .{
+            .camera = s.canvas.camera,
+            .palette = &s.canvas.palette,
+            .ranges = &s.canvas.ranges,
+        });
+        var out = f.end(.{});
+        try interop.compose(&s.out, top.draw, out.draw, region_id, &strings);
+        lcgf.damage.cull(&s.out, &s.out.damage);
+        std.debug.assert(s.out.quad_len <= top.draw.quad_len + out.draw.quad_len);
+        out.draw = &s.out;
+        return out;
+    }
+};
+
+test "x11: a canvas region of a composed page pans, and only its rectangle is sent" {
+    const display = try testDisplay();
+    const c = &Fixture.conn;
+    try c.open(display, "");
+    defer c.close();
+    c.overrideScale(1);
+    var w: Window = undefined;
+    try w.open(c, 200, 100, "composed canvas", Fixture.buffers);
+    defer w.close();
+    var s: ComposedScene = undefined;
+    try s.init();
+    const none: render_iface.Glyphs = .{};
+
+    w.presentWith(&try s.frame(&w.held), none, &font.images);
+    try testing.expectEqual(CanvasScene.panel, try pixel(&w, 50, 15));
+    try testing.expectEqual(CanvasScene.red, try pixel(&w, 15, 45));
+
+    // Idle: nothing is sent.
+    const presents = w.presents;
+    w.presentWith(&try s.frame(&w.held), none, &font.images);
+    try testing.expectEqual(presents, w.presents);
+
+    // A pan: the region's canvas, (0, 30) to (200, 100) in the page, is all that is drawn and
+    // sent; a header pixel changed behind the window's back would show if more were.
+    s.canvas.camera.offset = .{ 50, 50 };
+    const out = try s.frame(&w.held);
+    try testing.expectEqual([4]f32{ 0, 30, 200, 100 }, out.draw.damage.bounds());
+    w.fb.fill(.{ 50, 15, 51, 16 }, .white);
+    w.presentWith(&out, none, &font.images);
+    try testing.expectEqual(CanvasScene.red, try pixel(&w, 55, 85));
+    try testing.expectEqual(CanvasScene.ground, try pixel(&w, 15, 45));
+    try testing.expectEqual(CanvasScene.panel, try pixel(&w, 50, 15));
+    try testing.expectEqual(@as(u32, 0), c.errors);
+}
+
 test "x11: closing the window ends poll" {
     const display = try testDisplay();
     const c = &Fixture.conn;

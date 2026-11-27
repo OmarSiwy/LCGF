@@ -67,6 +67,7 @@ const fmt = @import("../core/fmt.zig");
 const Input = @import("../core/input.zig").Input;
 const DrawList = @import("../draw/draw_list.zig").DrawList;
 const paint = @import("../draw/paint.zig");
+const damage = @import("../draw/damage.zig");
 const layout = @import("../layout/layout.zig");
 const Flex = @import("../layout/flex.zig").Flex;
 const grid = @import("../layout/grid.zig");
@@ -538,6 +539,22 @@ pub fn ComptimeUiTokens(comptime State: type, comptime spec: Spec, comptime th: 
         /// The event of the frame stays `frame`'s; this one reports none.
         pub fn rebuild(ui: *Self, in: *const Input) Output {
             return ui.frameAs(true, in, &ui.frame_settings, .{}, {}) catch unreachable;
+        }
+
+        /// Rows of the page's tree: the capacity of its `damage.Damage` (`recordDamage`).
+        pub const nodes = rows;
+
+        /// Records what the frame just built changed since the last one recorded into `dm`
+        /// (the caller's, `Damage.init(carver, nodes)`, kept across frames), as
+        /// `Context.trackDamageWhole` does: the frame's `draw.damage` becomes that region and
+        /// its list stays whole, for `ct_interop.compose` to join with a region's. The first
+        /// recorded frame is whole. A frame not recorded keeps the region last written.
+        pub fn recordDamage(ui: *Self, dm: *damage.Damage) void {
+            std.debug.assert(dm.cap >= rows);
+            std.debug.assert(ui.built);
+            const tb = &ui.tables;
+            _ = dm.frame(&tb.t, &tb.tx, &tb.cu, tb.strings.buf[0..tb.strings.len]);
+            tb.d.damage = dm.region;
         }
 
         /// `frame` on a real shaper (`Frame.endText`, or `endTextStyled` when the page has

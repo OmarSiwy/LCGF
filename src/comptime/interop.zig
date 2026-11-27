@@ -21,6 +21,8 @@ const Spec = spec_zig.Spec;
 const Style = @import("../core/types.zig").Style;
 const draw_list = @import("../draw/draw_list.zig");
 const DrawList = draw_list.DrawList;
+const damage = @import("../draw/damage.zig");
+const Region = damage.Region;
 
 /// A region: an empty column named `id` whose content another front end builds. Its rect comes
 /// from the comptime layout like any node's; `id` makes it a tag of `Events(spec).Widget`, whose
@@ -144,8 +146,15 @@ fn cut(clip: [4]f32, off: @Vector(4, f32), w: [4]f32) [4]f32 {
 /// caller's, a row per custom row of both) gets the host's rows, then the guest's.
 /// `out` is the caller's, carved for the host's rows plus the guest's. Nothing is written when
 /// it, or `strings`, is too small, or when the host has no such region. Batches are not merged
-/// across the seams, and `out` has no ops, depth or damage (`.everything`): run `order` or
-/// `damage` passes on it afterwards if the renderer wants them.
+/// across the seams, and `out` has no ops or depth: run `order` passes on it afterwards if the
+/// renderer wants them.
+///
+/// `out.damage` is what changed on either side: the host's region, and the guest's moved to the
+/// region and cut to it (a guest that says everything changed the whole region). A host that
+/// says everything gives everything. A chain of composes, the last `out` the next host, carries
+/// the union on. For it to be right both sides' lists are whole (`Context.trackDamageWhole`,
+/// `ComptimeUi.recordDamage`): a culled list lacks quads inside the other side's rects. A
+/// software renderer then culls `out` once (`damage.cull(out, &out.damage)`).
 pub fn compose(out: *DrawList, host: *const DrawList, guest: *const DrawList, region_id: u32, strings: []u8) error{ NoRegion, NoRoom }!void {
     const at = for (0..host.cmd_len) |k| {
         const cmd = host.command(@intCast(k));
@@ -220,7 +229,18 @@ pub fn compose(out: *DrawList, host: *const DrawList, guest: *const DrawList, re
     out.strings = strings[0..string_bytes];
     out.op_len = 0;
     out.opaque_len = 0;
-    out.damage = .everything;
+    out.damage = composedDamage(&host.damage, &guest.damage, o, window);
+}
+
+/// `host` and every rect of `guest` moved by `off` and cut to `window`. An empty slot stays
+/// empty when cut; one that is everything becomes `window`. `host` everything is everything:
+/// its infinite slot cannot take a union (`Region.add` measures areas).
+fn composedDamage(host: *const Region, guest: *const Region, off: [4]f32, window: [4]f32) Region {
+    if (std.math.isInf(host.pixels())) return .everything;
+    var g = host.*;
+    for (0..damage.max_rects) |k| g.add(cut(guest.rect(@intCast(k)), off, window));
+    std.debug.assert(g.count() <= damage.max_rects);
+    return g;
 }
 
 // ---- tests -------------------------------------------------------------------------------------
@@ -418,4 +438,27 @@ test "compose: the comptime panel's draw list in the runtime page's, in the regi
     try testing.expectError(error.NoRegion, compose(&out, host, &gd, @backingInt(types.Id.from("nope")), &strings));
     var small = DrawList.init(&out_carver, 2, 1, 1);
     try testing.expectError(error.NoRoom, compose(&small, host, &gd, @backingInt(panel_id), &strings));
+}
+
+test "composedDamage: the guest's rects move into the page, cut to the region; everything" {
+    const window = [4]f32{ 100, 50, 300, 250 };
+    const off = [4]f32{ 100, 50, 100, 50 };
+    var host: Region = .empty;
+    host.add(.{ 0, 0, 40, 20 });
+    var guest: Region = .empty;
+    guest.add(.{ 10, 10, 30, 30 });
+    guest.add(.{ 150, 150, 400, 400 }); // past the region's corner: cut to it
+    const got = composedDamage(&host, &guest, off, window);
+    try testing.expectEqual(3, got.count());
+    try testing.expectEqual([4]f32{ 0, 0, 40, 20 }, got.rect(0));
+    try testing.expectEqual([4]f32{ 110, 60, 130, 80 }, got.rect(1));
+    try testing.expectEqual([4]f32{ 250, 200, 300, 250 }, got.rect(2));
+    // Nothing changed on either side: nothing.
+    try testing.expectEqual(0, composedDamage(&.empty, &.empty, off, window).count());
+    // A guest that says everything changed its whole region, no more.
+    const whole = composedDamage(&.empty, &.everything, off, window);
+    try testing.expectEqual(window, whole.bounds());
+    // A host that says everything gives everything, and the next compose of the chain too.
+    const all = composedDamage(&.everything, &guest, off, window);
+    try testing.expect(std.math.isInf(composedDamage(&all, &.empty, off, window).pixels()));
 }

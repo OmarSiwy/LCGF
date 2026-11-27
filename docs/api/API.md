@@ -4005,6 +4005,7 @@ Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rec
 - `theme = th`: The theme the page was built with, for widgets that build their own rows.
 - `default_tokens: Table = if (Tokens == void) {} else .{}`: The table `tokens` points at until the caller sets it: the defaults.
 - `Output = struct { draw: *const DrawList, tree: *const Tree, event: ?E.Event, wake: f32 = types.inf, failure: ?anyerror = null, cursor: types.Cursor = .arrow }`
+- `nodes = rows`: Rows of the page's tree: the capacity of its `damage.Damage` (`recordDamage`).
 - `fn themeChanged(ui: *const Self) bool`: Whether the token table changed since the last frame, which lays the page out with the new values.
 - `fn needsAnimationFrame(ui: *const Self) bool`: True while a declared spring moves or its target has changed since the last frame.
 - `fn animated(ui: *const Self, comptime target: S.Field) f32`: The displayed value of a bool/f32 field, interpolated if State declares a spring for it.
@@ -4012,6 +4013,7 @@ Fields: `buf`, `tokens`, `seen`, `tables`, `signals`, `springs`, `pointer`, `rec
 - `fn frameWithSettings(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings) Output`: Uses the same accessibility settings as the runtime context.
 - `fn frameWithPresentation(ui: *Self, in: *const Input, settings: *const @import("../a11y/settings_data.zig").Settings, presentation: @import("../style/locale.…`: Optional caller-owned direction rows and device grid, sequenced at the same points as style.locale.end.
 - `fn rebuild(ui: *Self, in: *const Input) Output`: Builds, lays out and paints the frame again from the state as it is now, applying no input: for a caller that changed what the layout reads after `frame` (a fit region's kept size, `ct_interop.setFit`), so the frame shows it without waiting for the next.
+- `fn recordDamage(ui: *Self, dm: *damage.Damage) void`: Records what the frame just built changed since the last one recorded into `dm` (the caller's, `Damage.init(carver, nodes)`, kept across frames), as `Context.trackDamageWhole` does: the frame's `draw.damage` becomes that region and its list stays whole, for `ct_interop.compose` to join with a region's.
 - `fn frameText(ui: *Self, in: *const Input, text: Shaped) Output`
 - `fn push(ui: *Self, comptime n: Spec, parent: u32, next: *u32, in: *const Input) void`: Pushes `n` (spec row `next.*`) and its subtree under tree row `parent`.
 - `fn semantics(ui: *Self, s: *a11y.Semantics) void`: Names each live node of this frame that has an accessible name (`Spec.name`, set with `spec.named`) in `s` (`Semantics.label`), its bytes added to this frame's strings.
