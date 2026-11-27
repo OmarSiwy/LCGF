@@ -8,6 +8,14 @@
 //!   pub fn under(*App, *sw.Framebuffer) void                      drawn before the UI
 //!   pub fn drawCustom(*App, *sw.Framebuffer, *const CustomDraw) void   at each custom command
 //!   pub const images: fn (*App) []const sw.Image                  textures 0.. for the UI
+//!   pub fn glyphs(*App, *const DrawList, Glyphs) u32              its own glyph quads
+//!   pub fn textImages(*App) []const sw.Image                      what those quads sample
+//!
+//! Text is drawn with the bundled bitmap font unless the application has `glyphs`: then it
+//! writes the glyph quads of the frame's text runs itself (a real font: `text_stack.Stack`,
+//! a rasterizer and an atlas), `first` and `count` for every run of the draw list (0 quads for
+//! a run it does not draw), and returns how many quads it wrote. Text runs and canvas glyphs
+//! sample texture 0 of `textImages`, its atlas; without it, the bundled font's.
 //!
 //! This file is the root of the `host` module (build.zig), shared by every example.
 
@@ -37,12 +45,14 @@ pub const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
 /// runs actually submitted by draw commands are expanded. Use Incremental explicitly when
 /// the caller retains and exclusively owns both the framebuffer and glyph storage.
 pub fn draw(app: anytype, gfx: *sw.Software, fb: *sw.Framebuffer, g: Glyphs, out: *const context.Output, scale: f32, background: Color) void {
-    const n = expandGlyphs(g, out.draw);
+    const n = expandGlyphs(app, g, out.draw);
     prepare(app, gfx, g, out.draw, scale, n);
     renderPrepared(app, gfx, fb, out.draw, background, fb.all());
 }
 
-fn expandGlyphs(g: Glyphs, d: *const DrawList) u32 {
+/// The glyph quads of `d`'s text runs: the application's own, or the bundled font's.
+fn expandGlyphs(app: anytype, g: Glyphs, d: *const DrawList) u32 {
+    if (comptime @hasDecl(@TypeOf(app.*), "glyphs")) return app.glyphs(d, g);
     return (Mono{}).quadsForCommands(atlas, d, g.quads, .{ .first = g.first, .count = g.count }) catch unreachable;
 }
 
@@ -54,7 +64,7 @@ fn prepare(app: anytype, gfx: *sw.Software, g: Glyphs, d: *const DrawList, scale
 fn renderPrepared(app: anytype, gfx: *const sw.Software, fb: *sw.Framebuffer, d: *const DrawList, background: Color, scissor: [4]u32) void {
     const App = @TypeOf(app.*);
     var text = gfx.*;
-    text.images = &.{atlas.image};
+    text.images = if (comptime @hasDecl(App, "textImages")) app.textImages() else &.{atlas.image};
     fb.fill(scissor, background);
     // Incremental rejects underlays/custom drawing because those hooks have no damage or
     // clipping contract. Such applications arrive here only with the full target scissor.
@@ -154,7 +164,9 @@ pub const Incremental = struct {
         const capacities = [3]usize{ g.quads.len, g.first.len, g.count.len };
         const same_storage = std.mem.eql(usize, &self.glyph_addresses, &addresses) and
             std.mem.eql(usize, &self.glyph_capacities, &capacities);
-        const same_glyphs = same_text and same_storage;
+        // The bundled font's quads follow from the text alone; an application's own may not.
+        const own_glyphs = comptime @hasDecl(@TypeOf(app.*), "glyphs");
+        const same_glyphs = same_text and same_storage and !own_glyphs;
         const eligible = out.status.ok() and supportsIncremental(@TypeOf(app.*), gfx, d);
         const same_target = self.target == @intFromPtr(fb.pixels.ptr) and
             std.mem.eql(u32, &self.size, &.{ fb.width, fb.height, fb.stride }) and
@@ -193,7 +205,7 @@ pub const Incremental = struct {
 
         if (update.len != 0) {
             if (!same_glyphs) {
-                self.glyph_len = expandGlyphs(g, d);
+                self.glyph_len = expandGlyphs(app, g, d);
                 update.glyphs_rebuilt = true;
             }
             prepare(app, gfx, g, d, scale, self.glyph_len);
@@ -396,6 +408,8 @@ inline fn sameRow(comptime T: type, a: *const T, b: *const T) bool {
 
 fn supportsIncremental(comptime App: type, gfx: *const sw.Software, d: *const DrawList) bool {
     if (@hasDecl(App, "under") or @hasDecl(App, "drawCustom") or @hasDecl(App, "images")) return false;
+    // An application's own glyphs and atlas can change with no change in the draw list.
+    if (@hasDecl(App, "glyphs") or @hasDecl(App, "textImages")) return false;
     if (d.custom_len != 0 or gfx.images.len != 1) return false;
     const image = gfx.images[0];
     if (image.pixels.ptr != sw.Image.white.pixels.ptr or image.width != 1 or image.height != 1 or image.alpha8.len != 0) return false;
@@ -770,6 +784,48 @@ test "incremental host retains full drawing for mutable images and application u
     try testing.expect((try other.compare(&under, 1, .black)).full);
     under.color = .rgb(21, 63, 99);
     try testing.expect((try other.compare(&under, 1, .black)).full);
+}
+
+test "host draws an application's own glyphs from its own atlas, in full every frame" {
+    const FontApp = struct {
+        texel: [1]u32 = .{0xffffffff},
+        image: [1]sw.Image = undefined,
+        asked: u32 = 0,
+        const ink: Color = .rgb(250, 240, 10);
+        pub fn textImages(app: *@This()) []const sw.Image {
+            app.image[0] = .{ .pixels = &app.texel, .width = 1, .height = 1 };
+            return &app.image;
+        }
+        /// One block for the first run, clear of the fixture's quads; no other run drawn.
+        pub fn glyphs(app: *@This(), d: *const DrawList, g: Glyphs) u32 {
+            app.asked += 1;
+            @memset(g.first[0..d.run_len], 0);
+            @memset(g.count[0..d.run_len], 0);
+            if (d.run_len == 0) return 0;
+            g.quads[0] = .{
+                .rect = .{ 62, 54, 70, 60 },
+                .clip = d.runs[0].clip,
+                .params = @splat(0),
+                .uv = .{ 0, 0, 1, 1 },
+                .radii = @splat(0),
+                .fill = ink.bitsOf(),
+                .border_color = 0,
+                .border = 0,
+                .opacity = 1,
+            };
+            g.count[0] = 1;
+            return 1;
+        }
+    };
+    var app: FontApp = .{};
+    var fixture: Differential = .{};
+    fixture.init(.bgra8);
+    try testing.expect((try fixture.compare(&app, 1, .black)).full);
+    try testing.expectEqual(FontApp.ink, fixture.fb.at(66, 57));
+    // The bundled font would have drawn "HELLO" inside the run's rect: nothing of it is there.
+    const asked = app.asked;
+    try testing.expect((try fixture.compare(&app, 1, .black)).full);
+    try testing.expect(app.asked > asked);
 }
 
 test "incremental host falls back safely when snapshot capacity is smaller than the frame" {
