@@ -248,6 +248,36 @@ pub fn build(b: *std.Build) void {
     swbench_run.addPassthruArgs();
     b.step("swbench", "Run the software renderer benchmark (Linux)").dependOn(&swbench_run.step);
     b.step("swbench-build", "Build zig-out/bin/swbench").dependOn(&b.addInstallArtifact(swbench, .{}).step);
+    // The window layer's text service over 300 runs (bench/micro/apptext.zig).
+    const apptext_mod = b.createModule(.{
+        .root_source_file = b.path("bench/micro/apptext.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "lcgf", .module = lcgf_fast },
+            .{ .name = "app_text", .module = b.createModule(.{
+                .root_source_file = b.path("src/app/text.zig"),
+                .target = target,
+                .optimize = .ReleaseFast,
+                .imports = &.{
+                    .{ .name = "lcgf", .module = lcgf_fast },
+                    .{ .name = "font_system", .module = b.createModule(.{
+                        .root_source_file = b.path("src/text/fallback/system.zig"),
+                        .target = target,
+                        .optimize = .ReleaseFast,
+                        .imports = &.{.{ .name = "lcgf", .module = lcgf_fast }},
+                    }) },
+                },
+            }) },
+        },
+    });
+    const layout_ttf = b.path("src/text/layout/testdata/layout.ttf");
+    apptext_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = layout_ttf });
+    const symbols_ttf = b.path("src/app/testdata/symbols.ttf");
+    apptext_mod.addAnonymousImport("symbols.ttf", .{ .root_source_file = symbols_ttf });
+    const apptext = b.addExecutable(.{ .name = "apptext-bench", .root_module = apptext_mod });
+    const apptext_run = b.addRunArtifact(apptext);
+    b.step("app-text-bench", "Time the text service's frames (Linux)").dependOn(&apptext_run.step);
     // The canvas batch in software: 100k primitives panned and zoomed (bench/micro/canvasbench.zig).
     const canvasbench = b.addExecutable(.{ .name = "canvasbench", .root_module = b.createModule(.{
         .root_source_file = b.path("bench/micro/canvasbench.zig"),
