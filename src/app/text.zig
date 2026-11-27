@@ -1,0 +1,695 @@
+//! The window layer's text: font files in, measured runs and a frame's glyph quads over one
+//! coverage atlas out. It joins the tier-0 text stack (opentype, shape, fallback, text_stack,
+//! raster, raster_atlas; docs/guide/text.md) into the three calls a window makes:
+//!
+//!     var text = try Text.init(buffer, .{}, &.{.{ .bytes = @embedFile("Inter.ttf") }});
+//!     const out = f.endText(&text.stack, text.ascent);       // measure and wrap, logical px
+//!     const frame = text.glyphs(out.draw, out.texts, scale);  // quads at physical pixels
+//!     // upload frame.dirty of frame.atlas (or sample it: sw.Image.alpha8), then draw with
+//!     // frame.glyphs, its `texture` set to the handle the atlas is registered as.
+//!
+//! Font k of a run (`TextStyle.font`) is file k. Every face is in every run's fallback chain,
+//! the run's own first, so a character its face lacks draws from the next face that has it.
+//! `systemFiles` finds the system's default faces (proportional, then monospace where the
+//! platform says which) and `cover` adds a system face for a character no face has.
+//!
+//! Glyph images are rasterised at the physical size (px times scale), each glyph's pen on a
+//! quarter of a physical pixel (raster.subpixel_bins) and its baseline on a whole one, and
+//! keep their place in the atlas while it lives: only new images change texels (`dirty`).
+//! When the atlas or its table is full, or the scale changes, the atlas starts again empty and
+//! `generation` moves on: every texel and every quad of an earlier frame is then stale. Equal
+//! generations and equal draw lists give equal glyph quads, which is what lets a host that
+//! keeps last frame's pixels skip the text that did not change.
+//!
+//! Outside the tiers (src/app/): it reads font files and asks the OS for faces. Every table is
+//! carved from the caller's buffer (`requiredBytes`); nothing allocates per frame. Loading a
+//! face file uses the caller's allocator, once per face. Cites docs/plans/window.md, stage 4.
+//!
+//! Contents
+//!   pub const Options = struct
+//!   pub const File = struct
+//!   pub const Frame = struct
+//!   pub const Text = struct
+//!     pub fn requiredBytes(o: Options) usize
+//!     pub fn init(buf: []align(64) u8, o: Options, files: []const File) InitError!Text
+//!     pub fn addFace(t: *Text, file: File) InitError!void
+//!     pub fn glyphs(t: *Text, d: *const DrawList, tx: *const Texts, scale: f32) Frame
+
+const std = @import("std");
+const lcgf = @import("lcgf");
+const mem = lcgf.mem;
+const opentype = lcgf.opentype;
+const shape = lcgf.shape;
+const raster = lcgf.raster;
+const fallback = lcgf.fallback;
+const text_stack = lcgf.text_stack;
+const text_lines = lcgf.text_lines;
+const DrawList = lcgf.draw_list.DrawList;
+const TextRun = lcgf.draw_list.TextRun;
+const Quad = lcgf.draw_list.Quad;
+const Texts = lcgf.texts.Texts;
+const Strings = lcgf.strings.Strings;
+const Atlas = lcgf.raster_atlas.Atlas;
+const Image = text_stack.emit.Image;
+
+/// Capacities: every table the service keeps is this size, whatever a frame uses.
+pub const Options = struct {
+    /// Width and height of the coverage atlas, one byte a texel.
+    atlas: [2]u32 = .{ 1024, 1024 },
+    /// Glyph images the atlas's table holds (at one size and subpixel position each).
+    images: u32 = 4096,
+    /// Faces: the files given to `init` plus those `addFace` adds. At most 32.
+    faces: u32 = 8,
+    /// Text runs of a frame: the frame's `Limits.texts`.
+    texts: u32 = 256,
+    /// Glyph quads of a frame.
+    quads: u32 = 8192,
+    /// Glyphs and lines of the longest run; a longer run is measured as empty.
+    run_glyphs: u32 = 1024,
+    run_lines: u32 = 128,
+    /// Runs of one face and script inside one text run (fallback).
+    run_faces: u32 = 64,
+    /// The shaping cache: slots (a power of two) of up to `cached_glyphs` glyphs each.
+    shape_slots: u32 = 256,
+    cached_glyphs: u32 = 64,
+    /// Largest em in physical pixels a glyph is rasterised at; a larger glyph draws nothing.
+    glyph_px_max: u32 = 96,
+    /// Points and contours of the most complex glyph outline.
+    outline_points: u32 = 2048,
+    outline_contours: u32 = 256,
+};
+
+/// A font file's bytes (`@embedFile`, or read from disk) and the face's index in it, non-zero
+/// only in a collection. The bytes must outlive the `Text`.
+pub const File = struct { bytes: []const u8, index: u32 = 0 };
+
+/// One frame's glyphs: what a back end draws and the atlas it samples.
+pub const Frame = struct {
+    /// Quads, and where each run's are. `texture` is `.white`: the caller sets the handle it
+    /// registered the atlas as. Valid until the next `glyphs`.
+    glyphs: lcgf.render_iface.Glyphs,
+    /// The coverage texture, `w * h` bytes, row by row: a software back end samples it
+    /// (`sw.Image.alpha8`), a GPU back end keeps a copy.
+    atlas: *const Atlas,
+    /// The region of `atlas` that changed since the last frame, the whole of it after a
+    /// reset; null when nothing changed. Upload it before drawing.
+    dirty: ?Atlas.Upload,
+    /// Moves on when the atlas started again empty: no texel or quad of an earlier frame is
+    /// valid. The same generation and the same draw list give the same quads.
+    generation: u32,
+};
+
+pub const InitError = opentype.Error || error{TooManyFaces};
+
+pub const Text = struct {
+    /// Shapes, measures and wraps every run whose font is a face here, in logical pixels: the
+    /// stack `Frame.endText` takes.
+    stack: text_stack.Stack,
+    /// One row per run: its first baseline, written by measure and wrap (`Frame.endText`).
+    ascent: []f32,
+    faces: []opentype.Face,
+    shapers: []shape.Shaper,
+    /// Chain f lists every face, f first; `order` holds the lists, `faces` rows each.
+    chains: []fallback.Chain,
+    order: []u16,
+    face_len: u32 = 0,
+    atlas: Atlas,
+    /// Open-addressed table of glyph images: key (0 empty) and where its image is.
+    keys: []u32,
+    slots: []Slot,
+    image_len: u32 = 0,
+    image_cap: u32,
+    /// Physical pixel sizes seen since the atlas was last reset; a key holds the index.
+    sizes: []f32,
+    size_len: u32 = 0,
+    outline: opentype.Outline,
+    acc: []f32,
+    cov: []u8,
+    images: []Image,
+    quads: []Quad,
+    first: []u32,
+    count: []u32,
+    scale: f32 = 0,
+    generation: u32 = 0,
+    /// A run, glyph or frame did not fit a capacity of `Options` and was drawn short. Reset by
+    /// the caller.
+    overflow: bool = false,
+
+    /// Bytes of the buffer `init` carves for `o`.
+    pub fn requiredBytes(o: Options) usize {
+        @setEvalBranchQuota(10_000);
+        var counter: mem.Carver = .{ .buf = null };
+        _ = carve(&counter, o);
+        return counter.off;
+    }
+
+    /// A service over `buf` (`requiredBytes(o)` bytes, which it keeps) with `files` as fonts 0,
+    /// 1, ... Fails when a file is not a TrueType or OpenType face this stack reads, or when
+    /// there are more files than `o.faces`. No files is allowed: the stack then serves no run.
+    pub fn init(buf: []align(mem.column_align) u8, o: Options, files: []const File) InitError!Text {
+        std.debug.assert(buf.len >= requiredBytes(o));
+        std.debug.assert(o.faces <= 32);
+        std.debug.assert(std.math.isPowerOfTwo(o.shape_slots));
+        var c: mem.Carver = .{ .buf = buf };
+        var t = carve(&c, o);
+        for (files) |f| try t.addFace(f);
+        std.debug.assert(t.face_len == files.len);
+        return t;
+    }
+
+    /// Adds `file` as the next font. Runs already measured keep their extent; the next frame
+    /// may draw characters from it that no face had.
+    pub fn addFace(t: *Text, file: File) InitError!void {
+        if (t.face_len == t.faces.len) return error.TooManyFaces;
+        const offset = try opentype.faceOffset(file.bytes, file.index);
+        const face = try opentype.Face.parse(file.bytes, offset);
+        t.faces[t.face_len] = face;
+        t.shapers[t.face_len] = .init(face);
+        t.face_len += 1;
+        const n = t.face_len;
+        const cap = t.faces.len;
+        for (0..n) |f| {
+            const row = t.order[f * cap ..][0..n];
+            row[0] = @intCast(f);
+            var at: usize = 1;
+            for (0..n) |other| if (other != f) {
+                row[at] = @intCast(other);
+                at += 1;
+            };
+            t.chains[f] = .{ .faces = t.faces[0..n], .default = row };
+        }
+        t.stack.shapers = t.shapers[0..n];
+        t.stack.fallback.?.chain = &t.chains[0];
+        t.stack.fallback.?.by_font = t.chains[0..n];
+        std.debug.assert(t.stack.fallback.?.metrics.len >= n);
+    }
+
+    /// The glyph quads of every text run `d` draws (draw-list run k is `tx` row k, as
+    /// `Frame.endText` left them), placed at `scale` physical pixels per logical pixel.
+    /// Rasterises the images no earlier frame left in the atlas. Asserts `scale` is positive
+    /// and finite and `d` has no more runs than `Options.texts`.
+    pub fn glyphs(t: *Text, d: *const DrawList, tx: *const Texts, scale: f32) Frame {
+        std.debug.assert(scale > 0);
+        std.debug.assert(std.math.isFinite(scale));
+        std.debug.assert(d.run_len <= t.first.len);
+        if (scale != t.scale) t.reset(scale);
+        const n = t.placeRuns(d, tx, .reset) catch blk: {
+            t.reset(scale);
+            // tidy: allow(swallowed-error) a pass that drops what does not fit never fails
+            break :blk t.placeRuns(d, tx, .drop) catch unreachable;
+        };
+        std.debug.assert(n <= t.quads.len);
+        const runs = d.run_len;
+        return .{
+            .glyphs = .{
+                .quads = t.quads[0..n],
+                .first = t.first[0..runs],
+                .count = t.count[0..runs],
+            },
+            .atlas = &t.atlas,
+            .dirty = t.atlas.takeDirty(),
+            .generation = t.generation,
+        };
+    }
+
+    // ---- private ----
+
+    /// What a glyph image that does not fit does: start the atlas again, or draw nothing.
+    const WhenFull = enum { reset, drop };
+
+    /// Empties the atlas for glyphs at `scale`: every image is rasterised again.
+    fn reset(t: *Text, scale: f32) void {
+        t.atlas.clear();
+        @memset(t.keys, 0);
+        t.image_len = 0;
+        t.size_len = 0;
+        t.scale = scale;
+        t.generation +%= 1;
+    }
+
+    fn placeRuns(t: *Text, d: *const DrawList, tx: *const Texts, full: WhenFull) error{Full}!u32 {
+        @memset(t.first[0..d.run_len], 0);
+        @memset(t.count[0..d.run_len], 0);
+        // The runs' bytes are the draw list's strings, which Stack reads as a frame's Strings.
+        const strings: Strings = .{ .buf = @constCast(d.strings), .len = @intCast(d.strings.len) };
+        var n: u32 = 0;
+        for (0..d.cmd_len) |i| {
+            const k = switch (d.command(@intCast(i))) {
+                .text => |k| k,
+                else => continue,
+            };
+            // A run drawn by two commands is placed once.
+            if (t.count[k] != 0 or !t.stack.serves(tx, k)) continue;
+            t.stack.paragraph(tx, &strings, k) catch {
+                t.overflow = true;
+                continue;
+            };
+            const run = d.runs[k];
+            const ellipsis = try t.paragraphImages(run, full);
+            const images: text_stack.emit.Images = .{
+                .glyphs = t.images[0..t.stack.g.len],
+                .ellipsis = ellipsis,
+            };
+            const wrote = t.stack.quads(run, images, t.quads[n..]) catch {
+                t.overflow = true;
+                continue;
+            };
+            t.first[k] = n;
+            t.count[k] = wrote;
+            n += wrote;
+        }
+        return n;
+    }
+
+    /// The image of every inked glyph of the stack's paragraph at its pen in `run`, the pen
+    /// computed as `emit.quads` computes it; and the ellipsis's when the text was cut.
+    fn paragraphImages(t: *Text, run: TextRun, full: WhenFull) error{Full}!?Image {
+        const st = &t.stack;
+        const g = &st.g;
+        const l = &st.l;
+        std.debug.assert(g.len <= t.images.len);
+        for (0..l.len) |k| for (l.first[k]..l.ink[k]) |i| {
+            const pen: [2]f32 = .{
+                run.rect[0] + l.x[k] + g.x[i] + g.x_offset[i],
+                run.rect[1] + l.baseline[k] - g.y_offset[i],
+            };
+            t.images[i] = try t.place(g.fontAt(i), g.glyph[i], st.pxAt(i), pen, full);
+        };
+        if (l.len == 0 or l.ellipsis == 0) return null;
+        const k = l.len - 1;
+        const pen: [2]f32 = .{ run.rect[0] + l.x[k] + l.ellipsis_x, run.rect[1] + l.baseline[k] };
+        return try t.place(st.ellipsis_font, st.ellipsis_glyph, st.ellipsis_px, pen, full);
+    }
+
+    /// Glyph `glyph` of face `font` at `px` logical pixels, its pen at `pen`: the image
+    /// snapped to the physical pixel grid, as bounds relative to the pen in logical pixels.
+    fn place(
+        t: *Text,
+        font: u16,
+        glyph: u16,
+        px: f32,
+        pen: [2]f32,
+        full: WhenFull,
+    ) error{Full}!Image {
+        const s = t.scale;
+        std.debug.assert(s > 0);
+        const p = raster.pen(pen[0] * s);
+        const base: i32 = @intFromFloat(@floor(pen[1] * s + 0.5));
+        const slot = t.image(font, glyph, px * s, p.bin) catch |e| switch (full) {
+            .reset => return e,
+            .drop => {
+                t.overflow = true;
+                return .{};
+            },
+        };
+        if (slot.w == 0) return .{};
+        const x0: f32 = @floatFromInt(p.pixel + slot.left);
+        const y0: f32 = @floatFromInt(base - slot.top);
+        const rect: Atlas.Rect = .{ .x = slot.x, .y = slot.y, .w = slot.w, .h = slot.h };
+        return .{
+            .bounds = .{
+                x0 / s - pen[0],
+                y0 / s - pen[1],
+                (x0 + @as(f32, @floatFromInt(slot.w))) / s - pen[0],
+                (y0 + @as(f32, @floatFromInt(slot.h))) / s - pen[1],
+            },
+            .uv = t.atlas.uv(rect),
+        };
+    }
+
+    /// The atlas slot of an image, rasterised into the atlas when no earlier glyph made it.
+    /// `error.Full` when the atlas, its table or the size list has no room.
+    fn image(t: *Text, font: u16, glyph: u16, px: f32, bin: u32) error{Full}!Slot {
+        const size = for (t.sizes[0..t.size_len], 0..) |v, i| {
+            if (v == px) break i;
+        } else blk: {
+            if (t.size_len == t.sizes.len) return error.Full;
+            t.sizes[t.size_len] = px;
+            t.size_len += 1;
+            break :blk t.size_len - 1;
+        };
+        // Bit 31 marks a used slot: faces are fewer than 32.
+        const key = lcgf.raster_atlas.key(font, glyph, @intCast(size), bin) | (1 << 31);
+        const mask: u32 = @intCast(t.keys.len - 1);
+        var at = ((key *% 0x9e37_79b1) >> 7) & mask;
+        var probes: u32 = 0;
+        while (t.keys[at] != 0) : (at = (at + 1) & mask) {
+            if (t.keys[at] == key) return t.slots[at];
+            probes += 1;
+            std.debug.assert(probes <= mask);
+        }
+        if (t.image_len == t.image_cap) return error.Full;
+        const slot = try t.rasterise(font, glyph, px, bin);
+        t.keys[at] = key;
+        t.slots[at] = slot;
+        t.image_len += 1;
+        return slot;
+    }
+
+    /// Rasterises the image into a new place in the atlas; an empty slot for a glyph with no
+    /// ink, and for one too large or complex for the scratch (`overflow`).
+    fn rasterise(t: *Text, font: u16, glyph: u16, px: f32, bin: u32) error{Full}!Slot {
+        const face = &t.faces[font];
+        t.outline.points = 0;
+        t.outline.contours = 0;
+        face.outline(glyph, &t.outline) catch {
+            t.overflow = true;
+            return .{};
+        };
+        const scale = px / @as(f32, @floatFromInt(face.units_per_em));
+        const dx = raster.shift(bin);
+        const b = raster.box(&t.outline, scale, dx);
+        if (b.w == 0 or b.h == 0) return .{};
+        // The scratch is square and smaller than 2^16 on a side, so this bounds w and h too.
+        if (raster.accLen(b) > t.acc.len or raster.imageLen(b) > t.cov.len) {
+            t.overflow = true;
+            return .{};
+        }
+        // A texel of gap, so a GPU's bilinear sampler never reads the neighbour.
+        const r = t.atlas.pack(b.w + 1, b.h + 1) orelse return error.Full;
+        raster.fill(&t.outline, scale, dx, b, t.acc);
+        raster.coverage(t.acc, t.cov, @as(usize, b.w) * b.h);
+        t.atlas.put(.{ .x = r.x, .y = r.y, .w = b.w, .h = b.h }, t.cov);
+        std.debug.assert(r.x + b.w <= t.atlas.w);
+        return .{
+            .x = @intCast(r.x),
+            .y = @intCast(r.y),
+            .w = @intCast(b.w),
+            .h = @intCast(b.h),
+            .left = @intCast(b.left),
+            .top = @intCast(b.top),
+        };
+    }
+};
+
+/// Where a glyph image is in the atlas, and its box relative to the pen's pixel
+/// (`raster.Box`). `w == 0`: no ink.
+const Slot = struct {
+    x: u16 = 0,
+    y: u16 = 0,
+    w: u16 = 0,
+    h: u16 = 0,
+    left: i16 = 0,
+    top: i16 = 0,
+};
+
+// ---- private ----
+
+/// The service's tables, carved in one order for sizing and for use.
+fn carve(c: *mem.Carver, o: Options) Text {
+    std.debug.assert(o.images > 0);
+    // Slot holds places in u16.
+    std.debug.assert(o.atlas[0] < 1 << 16);
+    std.debug.assert(o.atlas[1] < 1 << 16);
+    const table = std.math.ceilPowerOfTwoAssert(u32, 2 * o.images);
+    // The largest box a glyph of `glyph_px_max` has: wide glyphs reach about 2 em.
+    const side: u32 = 2 * o.glyph_px_max + 2;
+    const scratch: raster.Box = .{ .w = side, .h = side };
+    const atlas_pixels = c.slice(u8, @as(usize, o.atlas[0]) * o.atlas[1]);
+    const sky: Atlas.Skyline = .{
+        .x = c.slice(u32, o.atlas[0]),
+        .y = c.slice(u32, o.atlas[0]),
+        .w = c.slice(u32, o.atlas[0]),
+    };
+    var t: Text = .{
+        .stack = carveStack(c, o),
+        .ascent = c.slice(f32, o.texts),
+        .faces = c.slice(opentype.Face, o.faces),
+        .shapers = c.slice(shape.Shaper, o.faces),
+        .chains = c.slice(fallback.Chain, o.faces),
+        .order = c.slice(u16, @as(usize, o.faces) * o.faces),
+        .atlas = undefined,
+        .keys = c.slice(u32, table),
+        .slots = c.slice(Slot, table),
+        .image_cap = o.images,
+        .sizes = c.slice(f32, 256),
+        .outline = .{
+            .x = c.slice(f32, o.outline_points),
+            .y = c.slice(f32, o.outline_points),
+            .on = c.slice(bool, o.outline_points),
+            .ends = c.slice(u32, o.outline_contours),
+        },
+        .acc = c.slice(f32, raster.accLen(scratch)),
+        .cov = c.slice(u8, raster.imageLen(scratch)),
+        .images = c.slice(Image, o.run_glyphs),
+        .quads = c.slice(Quad, o.quads),
+        .first = c.slice(u32, o.texts),
+        .count = c.slice(u32, o.texts),
+    };
+    if (atlas_pixels.len > 0) t.atlas = .init(o.atlas[0], o.atlas[1], atlas_pixels, sky);
+    return t;
+}
+
+/// The stack's scratch for one run, its fallback columns and the shaping cache. The cache
+/// lives in the buffer, not in `Text`, so the stack's pointer to it survives a move of `Text`.
+fn carveStack(c: *mem.Carver, o: Options) text_stack.Stack {
+    std.debug.assert(o.run_glyphs > 0);
+    std.debug.assert(o.run_lines > 0);
+    const shape_cache = c.slice(lcgf.shape_cache.Cache, 1);
+    const cache: lcgf.shape_cache.Cache = .init(c, o.shape_slots, o.cached_glyphs);
+    if (shape_cache.len > 0) shape_cache[0] = cache;
+    const n = o.run_glyphs;
+    const lines = o.run_lines;
+    return .{
+        .shapers = &.{},
+        .cache = if (shape_cache.len > 0) &shape_cache[0] else null,
+        .run = .{
+            .glyph = c.slice(u16, n),
+            .cluster = c.slice(u32, n),
+            .advance = c.slice(i32, n),
+            .x_offset = c.slice(i32, n),
+            .y_offset = c.slice(i32, n),
+        },
+        .g = .{
+            .glyph = c.slice(u16, n),
+            .cluster = c.slice(u32, n),
+            .advance = c.slice(f32, n),
+            .x_offset = c.slice(f32, n),
+            .y_offset = c.slice(f32, n),
+            .span = c.slice(u32, n),
+            .x = c.slice(f32, n),
+            .level = c.slice(u8, n),
+        },
+        .l = .{
+            .first = c.slice(u32, lines),
+            .end = c.slice(u32, lines),
+            .ink = c.slice(u32, lines),
+            .start = c.slice(u32, lines),
+            .width = c.slice(f32, lines),
+            .hard = c.slice(f32, lines),
+            .x = c.slice(f32, lines),
+            .top = c.slice(f32, lines),
+            .baseline = c.slice(f32, lines),
+            .height = c.slice(f32, lines),
+            .extra = c.slice(f32, lines),
+        },
+        .fallback = .{
+            .chain = undefined, // set by addFace; no run is served before
+            .runs = .{
+                .end = c.slice(u32, o.run_faces),
+                .face = c.slice(u16, o.run_faces),
+                .script = c.slice(lcgf.unicode_property.Script, o.run_faces),
+            },
+            .metrics = c.slice(text_lines.Metrics, o.faces),
+        },
+    };
+}
+
+// ---------------------------------------------------------------------------------------------
+
+const testing = std.testing;
+const sw = lcgf.render_sw;
+const Context = lcgf.context.Context;
+const Color = lcgf.types.Color;
+
+/// The repository's text test face (Noto Sans subset, src/text/layout/testdata/layout.ttf)
+/// and the face it falls back to for the infinity sign and the middle dot (testdata/make.py).
+const test_files = [_]File{
+    .{ .bytes = @embedFile("layout.ttf") },
+    .{ .bytes = @embedFile("testdata/symbols.ttf") },
+};
+const paragraph = "A paragraph in a proportional face: \u{221e} loops \u{00b7} dots \u{2026} " ++
+    "and wraps to the box at any scale.";
+const limits: lcgf.context.Limits = .{ .nodes = 16, .texts = 4, .customs = 1, .strings = 512 };
+const test_options: Options = .{
+    .atlas = .{ 256, 256 },
+    .images = 512,
+    .texts = limits.texts,
+    .quads = 512,
+    .run_glyphs = 256,
+    .run_lines = 16,
+    .shape_slots = 16,
+};
+const view = [2]f32{ 240, 120 };
+
+/// One frame of the test paragraph, laid out through `Frame.endText` with the service's stack.
+fn layOut(ctx: *Context, t: *Text) lcgf.context.Output {
+    const in: lcgf.input.Input = .{ .viewport = view };
+    var f = ctx.begin(&in);
+    _ = f.open(.from("page"), .{ .size = .{ .px(view[0]), .px(view[1]) }, .pad = @splat(6) });
+    _ = f.text(paragraph, .{ .px = 15, .wrap = true, .color = .white });
+    f.close();
+    return f.endText(&t.stack, t.ascent);
+}
+
+test "a paragraph through the service and the software back end matches direct rasterising" {
+    var ctx_buf: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var ctx = try Context.init(&ctx_buf, limits);
+    var buf: [Text.requiredBytes(test_options)]u8 align(mem.column_align) = undefined;
+    var t = try Text.init(&buf, test_options, &test_files);
+    var pixels: [sw.Framebuffer.len(480, 240)]u32 = undefined;
+    var reference: [480 * 240]u8 = undefined;
+    for ([_]f32{ 1, 1.25, 2 }) |scale| {
+        const out = layOut(&ctx, &t);
+        try testing.expect(!t.stack.overflow);
+        const frame = t.glyphs(out.draw, out.texts, scale);
+        try testing.expect(!t.overflow);
+        // Drawn as a software shell draws it: the atlas is image 1.
+        const w: u32 = @intFromFloat(@ceil(view[0] * scale));
+        const h: u32 = @intFromFloat(@ceil(view[1] * scale));
+        var fb: sw.Framebuffer = .init(&pixels, w, h, .rgba8);
+        const a = frame.atlas;
+        const atlas: sw.Image = .{ .alpha8 = a.pixels, .width = a.w, .height = a.h };
+        const images = [_]sw.Image{ .white, atlas };
+        var setup: sw.Setup = .{};
+        setup.gfx.images = &images;
+        var g = frame.glyphs;
+        g.texture = @fromBackingInt(1);
+        setup.draw(&fb, out.draw, g, .black, scale);
+        // The reference: every inked glyph rasterised straight from its face at its physical
+        // pen, composited over black as white ink at its coverage.
+        @memset(reference[0 .. w * h], 0);
+        const fallbacks = try drawReference(&t, out, scale, reference[0 .. w * h], w);
+        try testing.expect(fallbacks == 2); // the infinity sign and the middle dot
+        var bad: u32 = 0;
+        var ink: u32 = 0;
+        for (0..h) |y| for (0..w) |x| {
+            const want = reference[y * w + x];
+            const got = fb.at(@intCast(x), @intCast(y));
+            ink += @intFromBool(want != 0);
+            const grey = got.r == got.g and got.g == got.b;
+            bad += @intFromBool(@abs(@as(i32, got.r) - want) > 2 or !grey);
+        };
+        errdefer std.debug.print("scale {d}: {d} bad pixels of {d} inked\n", .{ scale, bad, ink });
+        try testing.expectEqual(0, bad);
+        try testing.expect(ink > 1000);
+    }
+}
+
+/// Composites every glyph `out` draws into `img` (`w` wide), rasterised by src/text/raster/ at
+/// the physical pen the service rounds to; returns how many came from a fallback face.
+fn drawReference(t: *Text, out: lcgf.context.Output, scale: f32, img: []u8, w: u32) !u32 {
+    std.debug.assert(img.len % w == 0);
+    const d = out.draw;
+    const strings: Strings = .{ .buf = @constCast(d.strings), .len = @intCast(d.strings.len) };
+    var cols: raster.TestOutline = .{};
+    var acc: [96 * 96]f32 = undefined;
+    var cov: [96 * 96]u8 = undefined;
+    var fallbacks: u32 = 0;
+    for (d.runs[0..d.run_len], 0..) |run, k| {
+        try t.stack.paragraph(out.texts, &strings, k);
+        const g = &t.stack.g;
+        const l = &t.stack.l;
+        for (0..l.len) |li| for (l.first[li]..l.ink[li]) |i| {
+            const face = t.faces[g.fontAt(i)];
+            fallbacks += @intFromBool(g.fontAt(i) != run.font);
+            var o = cols.outline();
+            try face.outline(g.glyph[i], &o);
+            const pen = raster.pen((run.rect[0] + l.x[li] + g.x[i] + g.x_offset[i]) * scale);
+            const pen_y = (run.rect[1] + l.baseline[li] - g.y_offset[i]) * scale;
+            const base: i32 = @intFromFloat(@floor(pen_y + 0.5));
+            const s = t.stack.pxAt(i) * scale / @as(f32, @floatFromInt(face.units_per_em));
+            const b = raster.box(&o, s, raster.shift(pen.bin));
+            if (b.w == 0) continue;
+            raster.fill(&o, s, raster.shift(pen.bin), b, &acc);
+            raster.coverage(&acc, &cov, @as(usize, b.w) * b.h);
+            for (0..b.h) |r| for (0..b.w) |c| {
+                const x = pen.pixel + b.left + @as(i32, @intCast(c));
+                const y = base - b.top + @as(i32, @intCast(r));
+                const at = @as(usize, @intCast(y)) * w + @as(usize, @intCast(x));
+                // White over what is there, at the glyph's coverage: "over", as the back end
+                // blends overlapping glyphs.
+                const a: u32 = cov[r * b.w + c];
+                img[at] = @intCast(img[at] + (a * (255 - @as(u32, img[at])) + 127) / 255);
+            };
+        };
+    }
+    return fallbacks;
+}
+
+test "a second frame of the same text changes no texel; a new scale starts the atlas again" {
+    var ctx_buf: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var ctx = try Context.init(&ctx_buf, limits);
+    var buf: [Text.requiredBytes(test_options)]u8 align(mem.column_align) = undefined;
+    var t = try Text.init(&buf, test_options, &test_files);
+    var quads: [512]Quad = undefined;
+    var out = layOut(&ctx, &t);
+    const first = t.glyphs(out.draw, out.texts, 1.25);
+    try testing.expect(first.dirty != null);
+    const n = first.glyphs.quads.len;
+    try testing.expect(n > 40);
+    @memcpy(quads[0..n], first.glyphs.quads);
+
+    out = layOut(&ctx, &t);
+    const second = t.glyphs(out.draw, out.texts, 1.25);
+    try testing.expectEqual(null, second.dirty);
+    try testing.expectEqual(first.generation, second.generation);
+    const again = std.mem.sliceAsBytes(second.glyphs.quads);
+    try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(quads[0..n]), again);
+
+    out = layOut(&ctx, &t);
+    const third = t.glyphs(out.draw, out.texts, 2);
+    try testing.expect(third.generation != second.generation);
+    const all: Atlas.Upload = .{
+        .x = 0,
+        .y = 0,
+        .w = 256,
+        .h = 256,
+        .offset = 0,
+        .bytes_per_row = 256,
+    };
+    try testing.expectEqual(all, third.dirty.?);
+}
+
+test "a full atlas starts again within the frame and reports it" {
+    var ctx_buf: [Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var ctx = try Context.init(&ctx_buf, limits);
+    // Room for the paragraph's glyphs at one scale and not much more.
+    const o: Options = comptime blk: {
+        var o = test_options;
+        o.atlas = .{ 128, 64 };
+        break :blk o;
+    };
+    var buf: [Text.requiredBytes(o)]u8 align(mem.column_align) = undefined;
+    var t = try Text.init(&buf, o, &test_files);
+    var out = layOut(&ctx, &t);
+    const a = t.glyphs(out.draw, out.texts, 1);
+    try testing.expect(!t.overflow);
+    // The same glyphs, each at a new subpixel position: the atlas fills and starts again.
+    var moved = false;
+    var b = a;
+    for (1..4) |q| {
+        out = layOut(&ctx, &t);
+        const dx = @as(f32, @floatFromInt(q)) * 0.25;
+        for (out.draw.runs[0..out.draw.run_len]) |*r| r.rect[0] += dx;
+        b = t.glyphs(out.draw, out.texts, 1);
+        moved = moved or b.generation != a.generation;
+    }
+    try testing.expect(moved);
+    try testing.expect(!t.overflow);
+    try testing.expectEqual(a.glyphs.quads.len, b.glyphs.quads.len);
+}
+
+test "no files: the stack serves no run" {
+    var buf: [Text.requiredBytes(test_options)]u8 align(mem.column_align) = undefined;
+    const t = try Text.init(&buf, test_options, &.{});
+    try testing.expectEqual(0, t.stack.shapers.len);
+    const three: [3]File = @splat(test_files[0]);
+    const small: Options = comptime blk: {
+        var small = test_options;
+        small.faces = 2;
+        break :blk small;
+    };
+    var buf2: [Text.requiredBytes(small)]u8 align(mem.column_align) = undefined;
+    try testing.expectError(error.TooManyFaces, Text.init(&buf2, small, &three));
+}

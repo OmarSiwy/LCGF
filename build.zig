@@ -1623,6 +1623,18 @@ pub fn build(b: *std.Build) void {
         .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "lcgf_app", .module = app_mod } },
     }) });
     b.step("app-example", "Build zig-out/bin/app-example: examples/app through lcgf_app (any desktop -Dtarget)").dependOn(&b.addInstallArtifact(app_example, .{}).step);
+    // The window layer's text service (src/app/text.zig), headless: the repository's test font
+    // drawn through it and the software back end.
+    const app_text_tests = b.addTest(.{ .name = "app-text-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/app/text.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
+    }) });
+    app_text_tests.root_module.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
+    const app_text_run = b.addRunArtifact(app_text_tests);
+    test_step.dependOn(&app_text_run.step);
+    b.step("app-text", "Test the window layer's text service alone").dependOn(&app_text_run.step);
 
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
     // cannot parse.
