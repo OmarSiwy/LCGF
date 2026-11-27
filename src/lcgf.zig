@@ -141,6 +141,7 @@ pub const widgets_accordion = @import("widgets/accordion.zig");
 pub const widgets_tabs = @import("widgets/tabs.zig");
 pub const widgets_keys = @import("widgets/keys.zig");
 pub const widgets_splitter = @import("widgets/splitter.zig");
+pub const widgets_dock = @import("widgets/dock.zig");
 pub const widgets_scroll = @import("widgets/scroll.zig");
 pub const widgets_toolbar = @import("widgets/toolbar.zig");
 pub const widgets_statusbar = @import("widgets/statusbar.zig");

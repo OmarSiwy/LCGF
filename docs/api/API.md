@@ -5318,6 +5318,37 @@ Fields: `split`, `wire`
 Fields: `split`, `files`, `wire`, `wire_text`
 
 
+## `lcgf.widgets_dock` (src/widgets/dock.zig)
+
+Dock (tier 2): a docking layout of up to five panes, a left, top, bottom and right pane around the centre, with a splitter between each side pane and the rest.
+
+### Top level
+
+- `Pane = enum(u3) { left, top, centre, bottom, right }`: A pane's place, in the order the panes are built.
+- `Panes = struct { left: bool = true, top: bool = true, bottom: bool = true, right: bool = true }`: Which side panes exist; the centre always does.
+- `f6: u8 = 0x3f`: The key that moves focus between panes (USB HID usage), as in most desktop editors.
+- `fn paneId(id: Id, p: Pane) Id`: The id of pane `p` of dock `id`; its splitters are `id.with(1)` to `id.with(4)`.
+- `fn rootStyle(th: *const Theme) Style`: The dock: fills its parent.
+- `fn paneStyle(th: *const Theme) Style`: A pane: fills its splitter's pane, its children in a column, clipped.
+- `fn has(panes: Panes, p: Pane) bool`: Whether pane `p` exists in `panes`.
+- `fn cycle(panes: Panes, from: ?Pane, step: i8) Pane`: The pane that focus moves to from `from` (or from no pane, `null`) by `step` (+1 F6, -1 Shift+F6), wrapping and skipping the panes `panes` lacks.
+- `fn open(f: *Frame, th: *const Theme, id: Id, st: *State, panes: Panes) Dock`: Opens dock `id` with the side panes `panes`, sized by `st`; F6 and Shift+F6 in this frame's events move focus first.
+- `fn openFace(f: *Frame, th: *const Theme, id: Id, st: *State, panes: Panes, face: Style) Dock`: `open` with the dock laid out by `face` instead of `rootStyle(th)`.
+
+### `State` (struct)
+The sizes, as the four splitters' fractions (`splitter.open`'s `split`), in the caller's memory, one per dock id.
+
+Fields: `splits`
+
+
+### `Dock` (struct)
+A dock being built: which pane comes next.
+
+Fields: `th`, `id`, `st`, `panes`, `next`, `in_pane`
+
+- `fn pane(d: *Dock, f: *Frame, p: Pane) void`: Ends the pane being built, if any, and opens pane `p`, which must exist and come after it; build its children next.
+- `fn close(d: *Dock, f: *Frame) void`: Ends the last pane and the dock.
+
 ## `lcgf.widgets_scroll` (src/widgets/scroll.zig)
 
 Scroll area (tier 2): a viewport that clips its content and shows the part at a vertical offset.
