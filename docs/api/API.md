@@ -3827,10 +3827,17 @@ Caller-owned rows for `Stack.style`: a paragraph and a rich row per text, spans 
 Fields: `paragraphs`, `rich`, `spans`, `start`, `font`, `px`, `color`, `metrics`
 
 
+### `Extents` (struct)
+Extents kept across frames: a run whose bytes, font, size, width and wrap flag were measured before costs a hash and a lookup in `measure` and `wrap`, not a layout.
+
+Fields: `key`, `w`, `h`, `ascent`, `generation`
+
+- `fn keyOf(e: *const Extents, text: []const u8, font: u16, px: f32, at: f32, wrap: f32) u64`: The key of `text` in `font` at `px`, broken at width `at` (`wrap` 1.0 when it wraps).
+
 ### `Stack` (struct)
 Shapers by font index, and scratch for one paragraph.
 
-Fields: `shapers`, `cache`, `font_ids`, `font_generations`, `run`, `g`, `l`, `bidi`, `direction`, `paragraphs`, `default_paragraph`, `normalization`, `fallback`, `rich`, `paint_colors`, `span_px`, `px`, `text`, `normalized`, `ellipsis_glyph`, `ellipsis_font`, `ellipsis_px`, `overflow`
+Fields: `shapers`, `cache`, `extents`, `font_ids`, `font_generations`, `run`, `g`, `l`, `bidi`, `direction`, `paragraphs`, `default_paragraph`, `normalization`, `fallback`, `rich`, `paint_colors`, `span_px`, `px`, `text`, `normalized`, `ellipsis_glyph`, `ellipsis_font`, `ellipsis_px`, `overflow`
 
 - `fn style(st: *Stack, tx: *const Texts, s: protocol.Styled, rows: StyledRows) error{NoSpace}!void`: Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as `spec.paragraph` and `spec.spans` lower to): each listed row's paragraph, and for a run with spans a rich row whose first span is the run's own style.
 - `fn decorate(st: *Stack, tx: *const Texts, strings: *const Strings, s: protocol.Styled, d: *DrawList, rects: []Rect) void`: After `paint.emit`: the decorations of `s`'s decorated runs as solid quads right after each run's text (`protocol.insertAfter`), each run laid out again as drawn (`paragraph`) and decorated by `text_decorations.quads` with its face's metrics.

@@ -128,11 +128,70 @@ pub const StyledRows = struct {
     metrics: []lines.Metrics,
 };
 
+/// Extents kept across frames: a run whose bytes, font, size, width and wrap flag were measured
+/// before costs a hash and a lookup in `measure` and `wrap`, not a layout. Two ways: a key
+/// lives in one of a pair of slots, and a new key evicts the older of the pair. The caller's
+/// columns, `key.len` a power of two and at least 2; four times the runs a frame measures
+/// misses about one key in a thousand. Only runs laid out with `default_paragraph` and no rich
+/// spans are kept: a row of its own is not part of the key.
+pub const Extents = struct {
+    /// 0 marks an empty slot; `keyOf` never returns 0.
+    key: []u64,
+    w: []f32,
+    h: []f32,
+    ascent: []f32,
+    /// The caller changes it when what a key does not hold changes: the shapers, the
+    /// fallback chain, `default_paragraph`, `direction`. Every entry is then stale.
+    generation: u64 = 0,
+
+    /// The key of `text` in `font` at `px`, broken at width `at` (`wrap` 1.0 when it wraps).
+    pub fn keyOf(e: *const Extents, text: []const u8, font: u16, px: f32, at: f32, wrap: f32) u64 {
+        const size: u64 = @as(u32, @bitCast(px));
+        const width: u32 = @bitCast(at);
+        const words = [4]u64{ e.generation, font, (size << 32) | width, @as(u32, @bitCast(wrap)) };
+        var hash: std.hash.Wyhash = .init(0x6578_7465_6e74_73);
+        hash.update(std.mem.asBytes(&words));
+        hash.update(text);
+        return hash.final() | 1;
+    }
+
+    /// The slot holding key `k`, or null.
+    fn get(e: *const Extents, k: u64) ?usize {
+        const s = e.pair(k);
+        if (e.key[s] == k) return s;
+        if (e.key[s + 1] == k) return s + 1;
+        return null;
+    }
+
+    /// A slot for key `k`, written: the first of its pair, the other one keeping the older key.
+    fn put(e: *Extents, k: u64, w: f32, h: f32, ascent: f32) void {
+        const s = e.pair(k);
+        if (e.key[s] != 0) {
+            e.key[s + 1] = e.key[s];
+            e.w[s + 1] = e.w[s];
+            e.h[s + 1] = e.h[s];
+            e.ascent[s + 1] = e.ascent[s];
+        }
+        e.key[s] = k;
+        e.w[s] = w;
+        e.h[s] = h;
+        e.ascent[s] = ascent;
+    }
+
+    fn pair(e: *const Extents, k: u64) usize {
+        std.debug.assert(std.math.isPowerOfTwo(e.key.len));
+        std.debug.assert(e.key.len >= 2);
+        return @intCast((k >> 1) & (e.key.len - 2));
+    }
+};
+
 /// Shapers by font index, and scratch for one paragraph. The caller owns all of it.
 pub const Stack = struct {
     shapers: []const shape.Shaper,
     /// Optional persistent caller cache; direct uncached layout remains the default.
     cache: ?*@import("../shape/cache.zig").Cache = null,
+    /// Optional extents kept across frames (`Extents`), the caller's.
+    extents: ?*Extents = null,
     font_ids: []const u64 = &.{},
     font_generations: []const u64 = &.{},
     run: shape.Run,
@@ -411,16 +470,33 @@ pub const Stack = struct {
     }
 
     fn fill(st: *Stack, tx: *Texts, strings: *const Strings, k: usize, at: f32, ascent: []f32) void {
-        st.layoutRow(tx, strings, k, at, tx.c.wrap[k] > 0) catch {
+        std.debug.assert(k < tx.len);
+        const c = &tx.c;
+        // A row of its own (paragraph or spans) is not in the key: such rows are not kept.
+        const own = k < st.paragraphs.len or (k < st.rich.len and st.rich[k] != null);
+        const kept = if (own) null else st.extents;
+        var key: u64 = 0;
+        if (kept) |e| {
+            const text = strings.get(.{ .start = c.start[k], .bytes = c.bytes[k] });
+            key = e.keyOf(text, c.font[k], c.px[k], at, c.wrap[k]);
+            if (e.get(key)) |s| {
+                c.w[k] = e.w[s];
+                c.h[k] = e.h[s];
+                ascent[k] = e.ascent[s];
+                return;
+            }
+        }
+        st.layoutRow(tx, strings, k, at, c.wrap[k] > 0) catch {
             st.overflow = true;
-            tx.c.w[k] = 0;
-            tx.c.h[k] = 0;
+            c.w[k] = 0;
+            c.h[k] = 0;
             ascent[k] = 0;
             return;
         };
-        tx.c.w[k] = lines.widest(&st.l);
-        tx.c.h[k] = lines.stackHeight(&st.l);
+        c.w[k] = lines.widest(&st.l);
+        c.h[k] = lines.stackHeight(&st.l);
         ascent[k] = metrics_.baseline(&st.l, st.options(k).baseline_source);
+        if (kept) |e| e.put(key, c.w[k], c.h[k], ascent[k]);
     }
 };
 
@@ -490,6 +566,51 @@ test "measure and wrap fill w, h and ascent of the runs in this stack's fonts" {
     st.default_paragraph.baseline_source = .last;
     st.measure(&tx, &strings, &ascent);
     try testing.expectEqual(m.height() + m.ascent, ascent[d]);
+}
+
+test "kept extents: a second measure and wrap lay nothing out and write the same rows" {
+    const mem = @import("../../core/mem.zig");
+    const face = try @import("../font/opentype.zig").Face.parse(golden.font, 0);
+    const shapers = [_]shape.Shaper{.init(face)};
+    var buf: [4096]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &buf };
+    var tx: Texts = .init(&carver, 2);
+    var bytes: [64]u8 = undefined;
+    var strings: Strings = .{ .buf = &bytes };
+    _ = tx.push(0, strings.add("one two three"), &.{ .px = 20, .wrap = true });
+    _ = tx.push(1, strings.add("label"), &.{ .px = 14 });
+    var p: golden.Para = .{};
+    p.bind();
+    var cols: golden.RunCols = .{};
+    var key: [8]u64 = @splat(0);
+    var w: [8]f32 = undefined;
+    var h: [8]f32 = undefined;
+    var up: [8]f32 = undefined;
+    var kept: Extents = .{ .key = &key, .w = &w, .h = &h, .ascent = &up };
+    var st: Stack = .{
+        .shapers = &shapers,
+        .run = cols.run(),
+        .g = p.g,
+        .l = p.l,
+        .extents = &kept,
+    };
+    var ascent: [2]f32 = undefined;
+    st.measure(&tx, &strings, &ascent);
+    tx.c.avail[0] = 60;
+    st.wrap(&tx, &strings, &ascent);
+    const first = .{ tx.c.w[0..2].*, tx.c.h[0..2].*, ascent };
+    try testing.expect(tx.c.h[0] > tx.c.h[1]); // wrapped
+    // Scratch cleared: a hit writes the rows without laying the run out again.
+    st.g.len = 0;
+    @memset(tx.c.w[0..2], -1);
+    st.measure(&tx, &strings, &ascent);
+    st.wrap(&tx, &strings, &ascent);
+    try testing.expectEqual(0, st.g.len);
+    try testing.expectEqual(first, .{ tx.c.w[0..2].*, tx.c.h[0..2].*, ascent });
+    // A new generation misses.
+    kept.generation += 1;
+    st.measure(&tx, &strings, &ascent);
+    try testing.expect(st.g.len > 0);
 }
 
 test "golden: a frame measured, wrapped and painted through the stack matches the reference" {
