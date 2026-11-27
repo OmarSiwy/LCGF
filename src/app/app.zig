@@ -46,6 +46,21 @@ const Event = lcgf.input.Input.Event;
 /// The window's text: real fonts at the window's scale (src/app/text.zig).
 pub const text = @import("text.zig");
 const TextService = text.Text;
+const render = @import("render_options").render;
+/// Whether this build draws the window with a GPU: Vulkan over X11 on Linux (src/app/gpu.zig).
+pub const has_gpu = builtin.os.tag == .linux and render == .vk;
+const gpu_app = if (has_gpu) @import("gpu.zig") else struct {};
+const no_gpu = std.fmt.comptimePrint(
+    "lcgf_app: this build (-Drender={t}, {t}) has no GPU path; " ++
+        "surfaces and `draw` need -Drender=vk on Linux",
+    .{ render, builtin.os.tag },
+);
+/// `lcgf_render.gpu` on the build's back end: what `App.draw` renders a `Surface` with.
+pub const gpu = if (has_gpu) gpu_app.gpu else @compileError(no_gpu);
+/// A rectangle of the window the application draws itself (src/app/gpu.zig).
+pub const Surface = if (has_gpu) gpu_app.Surface else @compileError(no_gpu);
+/// What `App.draw` draws with (src/app/gpu.zig).
+pub const GpuFrame = if (has_gpu) gpu_app.GpuFrame else @compileError(no_gpu);
 
 /// An application's image, which the UI draws through `Style.texture` (texture k + 1 is image
 /// k of `App.images`). RGBA8 texels (`types.Color` bits), `size[0]` by `size[1]`, row by row;
@@ -80,6 +95,7 @@ pub const Options = struct {
 /// draw them, the macOS shell, on Metal, not yet).
 pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime options: Options) !void {
     if (!@hasDecl(App, "build")) @compileError(@typeName(App) ++ " needs `pub fn build(*App, *lcgf.frame.Frame, *const lcgf.shell_iface.Events) void`");
+    if (@hasDecl(App, "draw") and !has_gpu) @compileError(no_gpu);
     const B = Buffers(options);
     const seconds: f32 = if (init.environ_map.get("LCGF_APP_SECONDS")) |s| std.fmt.parseFloat(f32, s) catch lcgf.types.inf else lcgf.types.inf;
     const clock: Clock = .{ .io = init.io, .t0 = std.Io.Timestamp.now(init.io, .awake), .seconds = seconds };
@@ -92,6 +108,10 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     const fonts: []const text.File = if (mac) &.{} else options.fonts;
     var tw = try text.Window.open(&B.service, textOptions(options), fonts, !mac, init.gpa, init.io);
     defer tw.close();
+    if (has_gpu) switch (try runGpu(App, app, gpuEnv(init), options, clock, &ctx, &tw)) {
+        .done => return,
+        .software => ctx.trackDamage(),
+    };
     switch (builtin.os.tag) {
         .linux => {
             const env = init.minimal.environ;
@@ -160,6 +180,95 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
         },
         else => @compileError("lcgf app: no desktop shell for " ++ @tagName(builtin.os.tag) ++ "; the web, Android and iOS start from their shells' examples (src/shell/web, android, ios)"),
     }
+}
+
+/// How a GPU build's window ran: to the end on the GPU, or not at all (the software path).
+const GpuRun = enum { done, software };
+
+/// What the environment says about the GPU window: `LCGF_RENDER`, `DISPLAY`, and the X
+/// authority cookie file's bytes.
+const GpuEnv = struct { render: []const u8 = "", display: []const u8 = "", auth: []const u8 = "" };
+
+fn gpuEnv(init: std.process.Init) GpuEnv {
+    const env = init.environ_map;
+    return .{
+        .render = env.get("LCGF_RENDER") orelse "",
+        .display = env.get("DISPLAY") orelse "",
+        .auth = readAuth(init) catch "",
+    };
+}
+
+/// The window on the GPU when the build has one: X11 with Vulkan where `DISPLAY` is set
+/// (under Wayland, through XWayland) and `LCGF_RENDER` is not `sw`. `.software` when it
+/// cannot (no display, no Vulkan device, or forced), so `run` opens the software window
+/// instead; an `App` with `draw` has no software window and gets error.NoGpu.
+// tidy: allow-fn(large-generic-function) one instance per App
+// tidy: allow(too-many-parameters) `run`'s own inputs, passed through
+fn runGpu(
+    comptime App: type,
+    app: *App,
+    env: GpuEnv,
+    comptime options: Options,
+    clock: anytype,
+    ctx: *context.Context,
+    tw: *text.Window,
+) !GpuRun {
+    const B = Buffers(options);
+    std.debug.assert(ctx.limits.damage);
+    const forced = std.mem.eql(u8, env.render, "sw");
+    if (pickGpu(forced, env.display) == .software) {
+        if (@hasDecl(App, "draw")) return error.NoGpu;
+        return .software;
+    }
+    const x11 = @import("x11");
+    const display = env.display;
+    const conn = &B.x11_conn;
+    try conn.open(display, env.auth);
+    defer conn.close();
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = &.{},
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, @intCast(options.size[0]), @intCast(options.size[1]), options.title, bufs);
+    defer w.close();
+    const gw = &B.gpu_window;
+    gw.open(&w, display, .{}) catch {
+        if (@hasDecl(App, "draw")) return error.NoGpu;
+        return .software;
+    };
+    defer gw.close();
+    ctx.trackDamageWhole();
+    const run_: gpu_app.Run = .{
+        .w = &w,
+        .ctx = ctx,
+        .tw = tw,
+        .quads = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try gpu_app.loop(App, app, gw, run_, clock);
+    return .done;
+}
+
+/// Where a GPU build draws: on the GPU unless `LCGF_RENDER=sw` forces software or there is no
+/// X display (`display` empty) to draw on.
+fn pickGpu(forced_software: bool, display: []const u8) GpuRun {
+    if (forced_software or display.len == 0) return .software;
+    return .done;
+}
+
+/// The X authority cookie file's bytes: `XAUTHORITY`, else ~/.Xauthority.
+fn readAuth(init: std.process.Init) ![]u8 {
+    var buf: [512]u8 = undefined;
+    const env = init.environ_map;
+    const path = env.get("XAUTHORITY") orelse if (env.get("HOME")) |home|
+        try std.fmt.bufPrint(&buf, "{s}/.Xauthority", .{home})
+    else
+        "";
+    return std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .limited(1 << 20));
 }
 
 /// The X11 window as the loop's shell: its pixels follow its size before each frame.
@@ -302,6 +411,7 @@ fn Buffers(comptime options: Options) type {
         // Win32 paints into a fixed buffer that covers a 2560 x 1600 client.
         var win32_pixels: [if (builtin.os.tag == .windows) lcgf.render_sw.Framebuffer.len(2560, 1600) else 0]u32 = undefined;
         var x11_conn: if (builtin.os.tag == .linux) @import("x11").Connection else void = if (builtin.os.tag == .linux) .{} else {};
+        var gpu_window: if (has_gpu) gpu_app.Window else void = undefined;
     };
 }
 
@@ -311,7 +421,7 @@ const Clock = struct {
     t0: std.Io.Timestamp,
     seconds: f32,
 
-    fn left(c: Clock) f32 {
+    pub fn left(c: Clock) f32 {
         const ns = c.t0.durationTo(std.Io.Timestamp.now(c.io, .awake)).toNanoseconds();
         return c.seconds - @as(f32, @floatCast(@as(f64, @floatFromInt(ns)) / std.time.ns_per_s));
     }
@@ -364,6 +474,10 @@ fn loop(
 
 const testing = std.testing;
 const Color = lcgf.types.Color;
+
+test {
+    if (has_gpu) _ = gpu_app;
+}
 
 /// An application with one image of its own, drawn on a node, and a line of text.
 const ImageApp = struct {
@@ -419,6 +533,49 @@ test "textures: image k is texture k + 1, the font last; a new generation or cou
 /// A clock that ends `loop` after `seconds`.
 fn clockFor(seconds: f32) Clock {
     return .{ .io = testing.io, .t0 = .now(testing.io, .awake), .seconds = seconds };
+}
+
+test "a GPU build draws in software when forced or without a device; an App with draw cannot" {
+    if (!has_gpu) return error.SkipZigTest;
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const options: Options = .{ .limits = .{ .nodes = 16, .texts = 4 } };
+    const B = Buffers(options);
+    var ctx = try context.Context.init(&B.ctx, limitsOf(options));
+    const gpa = testing.allocator;
+    var tw = try text.Window.open(&B.service, textOptions(options), &.{}, false, gpa, testing.io);
+    defer tw.close();
+    const DrawApp = struct {
+        pub fn build(_: *@This(), _: *lcgf.frame.Frame, _: *const Events) void {}
+        pub fn draw(_: *@This(), _: *GpuFrame) !void {}
+    };
+    var app: ImageApp = .{};
+    var drawing: DrawApp = .{};
+    const k = clockFor(0.1);
+    const forced: GpuEnv = .{ .render = "sw", .display = display };
+    try testing.expectEqual(.software, try runGpu(ImageApp, &app, forced, options, k, &ctx, &tw));
+    try testing.expectError(error.NoGpu, runGpu(DrawApp, &drawing, forced, options, k, &ctx, &tw));
+    const headless: GpuEnv = .{};
+    try testing.expectEqual(.software, try runGpu(ImageApp, &app, headless, options, k, &ctx, &tw));
+
+    // No Vulkan driver to load: the window opens, the device does not.
+    const libc = struct {
+        extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+        extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+    };
+    var kept: [4096]u8 = undefined;
+    const was: ?[:0]const u8 = if (std.c.getenv("VK_ICD_FILENAMES")) |v| blk: {
+        const s = std.mem.span(v);
+        @memcpy(kept[0..s.len], s);
+        kept[s.len] = 0;
+        break :blk kept[0..s.len :0];
+    } else null;
+    const name = "VK_ICD_FILENAMES";
+    defer _ = if (was) |v| libc.setenv(name, v, 1) else libc.unsetenv(name);
+    _ = libc.setenv("VK_ICD_FILENAMES", "/nonexistent/lcgf_no_icd.json", 1);
+    const gpu_env: GpuEnv = .{ .display = display };
+    try testing.expectEqual(.software, try runGpu(ImageApp, &app, gpu_env, options, k, &ctx, &tw));
+    try testing.expectError(error.NoGpu, runGpu(DrawApp, &drawing, gpu_env, options, k, &ctx, &tw));
 }
 
 test "app on X11: the app's image and text in the bundled font draw; an idle second presents none" {

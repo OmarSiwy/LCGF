@@ -1049,7 +1049,8 @@ test "the system's default faces and a face for each character they lack draw te
     var buf: [Text.requiredBytes(test_options)]u8 align(mem.column_align) = undefined;
     var t = try Text.init(&buf, test_options, &.{});
     defer t.deinit(gpa);
-    var d = try Discovery.init();
+    // lcgf_app's own tests link libc in a GPU build too, on machines without fontconfig.
+    var d = Discovery.init() catch return error.SkipZigTest;
     defer d.deinit();
     try t.addSystemDefaults(gpa, testing.io, &d);
     try testing.expectEqual(2, t.face_len);

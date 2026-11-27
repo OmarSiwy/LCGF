@@ -1364,10 +1364,26 @@ pub fn build(b: *std.Build) void {
         },
         else => lcgf_import,
     };
-    const app_mod = b.addModule("lcgf_app", .{ .root_source_file = b.path("src/app/app.zig"), .target = target, .optimize = optimize, .link_libc = target.result.os.tag == .macos, .imports = app_imports });
+    // libc on macOS, and on Linux exactly when the back end is a GPU one (its loader is opened
+    // with dlopen): `-Drender=sw` stays without.
+    const linux = target.result.os.tag == .linux;
+    const app_libc = target.result.os.tag == .macos or (linux and render != .sw);
+    const app_mod = b.addModule("lcgf_app", .{ .root_source_file = b.path("src/app/app.zig"), .target = target, .optimize = optimize, .link_libc = app_libc, .imports = app_imports });
+    app_mod.addOptions("render_options", render_options);
+    // The GPU window (src/app/gpu.zig): Vulkan over the X11 shell's window.
+    if (linux and render == .vk) if (renderBackend(b, .vk, target, optimize, lcgf, wgpu_native_mod)) |app_vk| {
+        app_mod.addImport("vk", app_vk);
+        app_mod.addImport("x11_gpu", b.createModule(.{
+            .root_source_file = b.path("src/shell/x11/gpu.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk", .module = app_vk }, .{ .name = "x11", .module = app_imports[1].module } },
+        }));
+    };
     // The text service's font discovery (src/app/text.zig), linking what lcgf_app links, and
     // the test face of its tests.
-    app_mod.addImport("font_system", appText(b, target, optimize, lcgf, target.result.os.tag == .macos).import_table.get("font_system").?);
+    app_mod.addImport("font_system", appText(b, target, optimize, lcgf, app_libc).import_table.get("font_system").?);
     app_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
     // examples/app: the hello window through lcgf_app, for any desktop target.
     const app_example = b.addExecutable(.{ .name = "app-example", .root_module = b.createModule(.{
@@ -1377,6 +1393,18 @@ pub fn build(b: *std.Build) void {
         .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "lcgf_app", .module = app_mod } },
     }) });
     b.step("app-example", "Build zig-out/bin/app-example: examples/app through lcgf_app (any desktop -Dtarget)").dependOn(&b.addInstallArtifact(app_example, .{}).step);
+    // examples/surface: widgets around rings a WGSL shader draws into a `Surface`, on Vulkan.
+    if (linux and render == .vk) {
+        const wave: GpuShader = .{ .name = "wave", .path = b.path("examples/surface/wave.wgsl") };
+        const surface_shaders = addGpuShaders(b, .vk, .{ .prebuilt = b.path("examples/surface/gen") }, &.{wave});
+        const surface_example = b.addExecutable(.{ .name = "surface-example", .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/surface/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "lcgf_app", .module = app_mod }, .{ .name = "surface_shaders", .module = surface_shaders } },
+        }) });
+        b.step("surface-example", "Build zig-out/bin/surface-example: examples/surface, a shader's rings in a Surface (Linux, -Drender=vk)").dependOn(&b.addInstallArtifact(surface_example, .{}).step);
+    }
     // The window layer's text service (src/app/text.zig), headless: the repository's test font
     // drawn through it and the software back end. Built with libc too, for fallback-system:
     // asking fontconfig for the system's faces needs libc's loader on Linux.

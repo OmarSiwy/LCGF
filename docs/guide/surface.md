@@ -1,0 +1,60 @@
+# Drawing your own pixels in an `lcgf_app` window
+
+A `Surface` is a rectangle of the window that you draw yourself with `lcgf_render.gpu`
+([Custom drawing with lcgf_render.gpu](gpu.md)): a plot, a viewport, a video frame. It has a
+texture of its own, and the UI shows that texture as an ordinary quad at its node's place in
+paint order. Widgets over it cover it, and its node's clip, radius and opacity apply.
+
+The whole program is [`examples/surface/main.zig`](../../examples/surface/main.zig): a button
+and rings that a WGSL shader animates. It is not quoted here because the guides' examples
+build without a GPU; `ci/run.sh app` builds it and runs it on Xvfb, where it fails if no
+ring was drawn.
+
+```sh
+zig build surface-example && zig-out/bin/surface-example
+```
+
+It needs a Vulkan build on Linux (`-Drender=vk`, the default there). The window is X11, and a
+Wayland session runs it through XWayland when `DISPLAY` is set. Another build that uses
+`Surface`, `GpuFrame` or `draw` fails to compile and says why.
+
+## The two functions
+
+An application with surfaces has the `build` every `lcgf_app` application has, and one more:
+
+- `build(app, f, events)` lays out the widgets. A surface is a node in it:
+  `app.plot.node(f, .from("plot"), style)`, where `plot` is a `lcgf_app.Surface` kept in the
+  application's state, as a `<canvas>` lives in a page.
+- `draw(app, g)` draws into the surfaces, on `g.device`, with `g.upload` for buffer and texture
+  writes and `g.encoder()` for passes. Make the pipelines and buffers in `g.arena` when
+  `g.fresh` is set (the first `draw`). Render into
+  `plot.texture.createView()`, `Surface.format`, over its first `plot.size` pixels.
+
+## What each frame costs
+
+The window draws again only what changed:
+
+| What changed | `build` | `draw` | Drawn again |
+|---|---|---|---|
+| A widget (input, a signal, a timer) | yes | no | the frame's damage, from the new rows |
+| A surface (`plot.redraw()`, or its node's size) | no | yes | the surface's rectangle, from the rows already on the GPU |
+| Nothing | no | no | nothing: no frame, the loop sleeps |
+
+So a widget that changes never calls `draw`, and an animation never builds. To animate, call
+`plot.redraw()` at the end of `draw`: it asks for the next frame, which the display's refresh
+(FIFO) paces. Calling it in `build`, for example when a button is clicked, asks for one frame.
+
+## When the window is not shown
+
+A minimised, hidden or blanked window takes no frames. The loop gives the frame up
+(`Stats.not_shown`) without calling `draw`, owes the whole window, and sleeps: it tries again
+on the next event or after `retry_seconds` (half a second). When the window takes a frame
+again, it is drawn whole from the rows and the surface textures already on the GPU; `draw`
+runs only if a surface asked for it.
+
+## Without a GPU
+
+`LCGF_RENDER=sw` forces the software window, and a machine without a display or a Vulkan
+device falls back to it. An application without `draw` then runs as it always did. An
+application with `draw` has nothing to draw its surfaces with, so `run` returns
+`error.NoGpu`.
