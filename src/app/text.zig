@@ -78,6 +78,9 @@ pub const Options = struct {
     run_lines: u32 = 128,
     /// Runs of one face and script inside one text run (fallback).
     run_faces: u32 = 64,
+    /// Extents kept across frames (`text_stack.Extents`): slots, a power of two, about four
+    /// times the runs a frame measures (a wrapping run takes two).
+    extents: u32 = 2048,
     /// The shaping cache: slots (a power of two) of up to `cached_glyphs` glyphs each.
     shape_slots: u32 = 256,
     cached_glyphs: u32 = 64,
@@ -144,7 +147,19 @@ pub const Text = struct {
     acc: []f32,
     cov: []u8,
     images: []Image,
+    /// This frame's glyph quads, and last frame's: a run whose key (`runKey`) matches one of
+    /// last frame's is copied from there, not laid out and placed again. The two swap each
+    /// frame, so the quads `glyphs` returns stay valid until the frame after next.
     quads: []Quad,
+    kept_quads: []Quad,
+    /// Open-addressed tables of run keys (0 empty) to `{ first, count }` in `quads` and in
+    /// `kept_quads`; they swap with them.
+    run_keys: []u64,
+    run_at: [][2]u32,
+    kept_keys: []u64,
+    kept_at: [][2]u32,
+    /// Extents kept across frames for the stack's measure and wrap, in the caller's buffer.
+    extents: *text_stack.Extents,
     first: []u32,
     count: []u32,
     scale: f32 = 0,
@@ -207,6 +222,8 @@ pub const Text = struct {
         t.stack.fallback.?.chain = &t.chains[0];
         t.stack.fallback.?.by_font = t.chains[0..n];
         std.debug.assert(t.stack.fallback.?.metrics.len >= n);
+        // A run measured before may draw from this face now: no kept extent or run holds.
+        t.extents.generation +%= 1;
     }
 
     /// The glyph quads of every text run `d` draws (draw-list run k is `tx` row k, as
@@ -225,7 +242,7 @@ pub const Text = struct {
         };
         std.debug.assert(n <= t.quads.len);
         const runs = d.run_len;
-        return .{
+        const frame: Frame = .{
             .glyphs = .{
                 .quads = t.quads[0..n],
                 .first = t.first[0..runs],
@@ -235,6 +252,10 @@ pub const Text = struct {
             .dirty = t.atlas.takeDirty(),
             .generation = t.generation,
         };
+        std.mem.swap([]Quad, &t.quads, &t.kept_quads);
+        std.mem.swap([]u64, &t.run_keys, &t.kept_keys);
+        std.mem.swap([][2]u32, &t.run_at, &t.kept_at);
+        return frame;
     }
 
     /// Adds the system's default faces as the next two fonts: the proportional face, then the
@@ -340,6 +361,7 @@ pub const Text = struct {
     fn placeRuns(t: *Text, d: *const DrawList, tx: *const Texts, full: WhenFull) error{Full}!u32 {
         @memset(t.first[0..d.run_len], 0);
         @memset(t.count[0..d.run_len], 0);
+        @memset(t.run_keys, 0);
         // The runs' bytes are the draw list's strings, which Stack reads as a frame's Strings.
         const strings: Strings = .{ .buf = @constCast(d.strings), .len = @intCast(d.strings.len) };
         var n: u32 = 0;
@@ -350,6 +372,21 @@ pub const Text = struct {
             };
             // A run drawn by two commands is placed once.
             if (t.count[k] != 0 or !t.stack.serves(tx, k)) continue;
+            const key = t.runKey(d, tx, k);
+            if (find(t.kept_keys, key)) |at| {
+                // Unchanged since last frame: its quads, copied.
+                const span = t.kept_at[at];
+                if (span[1] > t.quads.len - n) {
+                    t.overflow = true;
+                    continue;
+                }
+                @memcpy(t.quads[n..][0..span[1]], t.kept_quads[span[0]..][0..span[1]]);
+                t.keep(key, n, span[1]);
+                t.first[k] = n;
+                t.count[k] = span[1];
+                n += span[1];
+                continue;
+            }
             t.stack.paragraph(tx, &strings, k) catch {
                 t.overflow = true;
                 continue;
@@ -364,11 +401,44 @@ pub const Text = struct {
                 t.overflow = true;
                 continue;
             };
+            t.keep(key, n, wrote);
             t.first[k] = n;
             t.count[k] = wrote;
             n += wrote;
         }
         return n;
+    }
+
+    /// What run `k`'s quads depend on: its bytes, its draw-list row (rect, clip, size, colour,
+    /// font, transform), the width layout gave it, the scale, the atlas generation and the
+    /// faces. Its place in `strings` is not part of it.
+    fn runKey(t: *const Text, d: *const DrawList, tx: *const Texts, k: u32) u64 {
+        var run = d.runs[k];
+        const bytes = d.strings[run.start..][0..run.bytes];
+        run.start = 0;
+        const scale: u32 = @bitCast(t.scale);
+        const avail: u32 = @bitCast(tx.c.avail[k]);
+        const wrap: u32 = @bitCast(tx.c.wrap[k]);
+        const words = [3]u64{ t.generation, t.extents.generation, (@as(u64, scale) << 32) | avail };
+        var hash: std.hash.Wyhash = .init(wrap);
+        hash.update(std.mem.asBytes(&words));
+        hash.update(std.mem.asBytes(&run));
+        hash.update(bytes);
+        return hash.final() | 1;
+    }
+
+    /// Records this frame's run `key` at `{ first, count }` of `quads`. A second run with the
+    /// same key (the same text drawn twice at one place) replaces the first's, which is equal.
+    fn keep(t: *Text, key: u64, first: u32, count: u32) void {
+        const mask = t.run_keys.len - 1;
+        var at: usize = @intCast((key >> 1) & mask);
+        var probes: usize = 0;
+        while (t.run_keys[at] != 0 and t.run_keys[at] != key) : (at = (at + 1) & mask) {
+            probes += 1;
+            std.debug.assert(probes < t.run_keys.len); // twice the runs: never full
+        }
+        t.run_keys[at] = key;
+        t.run_at[at] = .{ first, count };
     }
 
     /// The image of every inked glyph of the stack's paragraph at its pen in `run`, the pen
@@ -515,6 +585,17 @@ fn carve(c: *mem.Carver, o: Options) Text {
     // The largest box a glyph of `glyph_px_max` has: wide glyphs reach about 2 em.
     const side: u32 = 2 * o.glyph_px_max + 2;
     const scratch: raster.Box = .{ .w = side, .h = side };
+    // Twice the runs, so the run tables never fill.
+    const runs = std.math.ceilPowerOfTwoAssert(u32, 2 * o.texts);
+    // In the buffer, not in `Text`, so the stack's pointer to it survives a move of `Text`.
+    const extents = c.slice(text_stack.Extents, 1);
+    const kept: text_stack.Extents = .{
+        .key = c.slice(u64, o.extents),
+        .w = c.slice(f32, o.extents),
+        .h = c.slice(f32, o.extents),
+        .ascent = c.slice(f32, o.extents),
+    };
+    if (extents.len > 0) extents[0] = kept;
     const atlas_pixels = c.slice(u8, @as(usize, o.atlas[0]) * o.atlas[1]);
     const sky: Atlas.Skyline = .{
         .x = c.slice(u32, o.atlas[0]),
@@ -543,12 +624,19 @@ fn carve(c: *mem.Carver, o: Options) Text {
         .cov = c.slice(u8, raster.imageLen(scratch)),
         .images = c.slice(Image, o.run_glyphs),
         .quads = c.slice(Quad, o.quads),
+        .kept_quads = c.slice(Quad, o.quads),
+        .run_keys = c.slice(u64, runs),
+        .run_at = c.slice([2]u32, runs),
+        .kept_keys = c.slice(u64, runs),
+        .kept_at = c.slice([2]u32, runs),
+        .extents = if (extents.len > 0) &extents[0] else undefined,
         .first = c.slice(u32, o.texts),
         .count = c.slice(u32, o.texts),
         .loaded = c.slice([]u8, o.faces),
         .missing = c.slice(u21, 64),
     };
     if (atlas_pixels.len > 0) t.atlas = .init(o.atlas[0], o.atlas[1], atlas_pixels, sky);
+    if (extents.len > 0) t.stack.extents = t.extents;
     return t;
 }
 
@@ -605,6 +693,20 @@ fn carveStack(c: *mem.Carver, o: Options) text_stack.Stack {
             .metrics = c.slice(text_lines.Metrics, o.faces),
         },
     };
+}
+
+/// The slot of `key` in the open-addressed table `keys` (0 empty), or null.
+fn find(keys: []const u64, key: u64) ?usize {
+    std.debug.assert(std.math.isPowerOfTwo(keys.len));
+    std.debug.assert(key != 0);
+    const mask = keys.len - 1;
+    var at: usize = @intCast((key >> 1) & mask);
+    for (0..keys.len) |_| {
+        if (keys[at] == key) return at;
+        if (keys[at] == 0) return null;
+        at = (at + 1) & mask;
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -761,6 +863,50 @@ test "a second frame of the same text changes no texel; a new scale starts the a
         .bytes_per_row = 256,
     };
     try testing.expectEqual(all, third.dirty.?);
+}
+
+test "kept runs: a frame draws what a new service draws, and one changed run is laid out alone" {
+    var ctx_buf: [2][Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    var ctx = try Context.init(&ctx_buf[0], limits);
+    var fresh_ctx = try Context.init(&ctx_buf[1], limits);
+    var buf: [Text.requiredBytes(test_options)]u8 align(mem.column_align) = undefined;
+    var fresh_buf: [Text.requiredBytes(test_options)]u8 align(mem.column_align) = undefined;
+    var t = try Text.init(&buf, test_options, &test_files);
+    for (0..3) |frame| {
+        // Measured from kept extents from frame 1 on; frame 2 changes the middle label only.
+        t.stack.g.len = 0;
+        const out = labelled(&ctx, &t, frame == 2);
+        if (frame == 1) try testing.expectEqual(0, t.stack.g.len);
+        if (frame == 2) try testing.expectEqualStrings("changed", t.stack.text);
+        const kept = t.glyphs(out.draw, out.texts, 1.25);
+        // The same frame through a new service, which keeps nothing.
+        var fresh = try Text.init(&fresh_buf, test_options, &test_files);
+        const again = labelled(&fresh_ctx, &fresh, frame == 2);
+        try testing.expectEqualSlices(f32, again.texts.c.w[0..3], out.texts.c.w[0..3]);
+        try testing.expectEqualSlices(f32, again.texts.c.h[0..3], out.texts.c.h[0..3]);
+        try testing.expectEqualSlices(f32, fresh.ascent[0..3], t.ascent[0..3]);
+        const new = fresh.glyphs(again.draw, again.texts, 1.25);
+        try testing.expectEqualSlices(u32, new.glyphs.first, kept.glyphs.first);
+        try testing.expectEqualSlices(u32, new.glyphs.count, kept.glyphs.count);
+        // Equal up to where each atlas put the images.
+        for (kept.glyphs.quads, new.glyphs.quads) |a, b| {
+            try testing.expectEqual(a.rect, b.rect);
+            try testing.expectEqual(a.fill, b.fill);
+            try testing.expectEqual(a.clip, b.clip);
+        }
+    }
+}
+
+/// Three labels, the middle one "changed" when `changed`, ended through `t`'s stack.
+fn labelled(ctx: *Context, t: *Text, changed: bool) lcgf.context.Output {
+    const in: lcgf.input.Input = .{ .viewport = view };
+    var f = ctx.begin(&in);
+    _ = f.open(.from("page"), .{ .size = .{ .px(view[0]), .px(view[1]) } });
+    _ = f.text("first label", .{ .px = 14 });
+    _ = f.text(if (changed) "changed" else "second", .{ .px = 14 });
+    _ = f.text("third \u{221e}", .{ .px = 14 });
+    f.close();
+    return f.endText(&t.stack, t.ascent);
 }
 
 test "a full atlas starts again within the frame and reports it" {
