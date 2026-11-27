@@ -21,6 +21,9 @@ const Layers = @import("../layout/overlay.zig").Layers;
 const geometry = @import("geometry.zig");
 const inherit = @import("inherit.zig");
 const radiiOf = @import("../core/tree.zig").radiiOf;
+const Look = @import("../core/tree.zig").Look;
+const features = @import("features.zig");
+const W = simd.lanes;
 const none = types.none;
 
 /// Tree and side lists in, draw list out. `strings` is the storage `TextRun.start` indexes.
@@ -42,8 +45,13 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
     const c = &t.c;
     const x = &t.x;
     const sign: V4 = .{ 1, 1, -1, -1 };
-    if (tx.len | cu.len != 0 or !nodeOps(t, ordered, order, d, false)) {
-        _ = nodeOps(t, ordered, order, d, true);
+    // A tree of long runs of siblings (`Tree.wide`) takes the form of sweep 1 that looks for
+    // them: one jump per frame, and the other trees pay nothing for it.
+    const wide = (comptime !ordered and !small and W > 1) and t.wide;
+    const plain_only = tx.len | cu.len == 0 and
+        (if (wide) nodeOps(t, ordered, order, d, false, true) else nodeOps(t, ordered, order, d, false, false));
+    if (!plain_only) {
+        _ = if (wide) nodeOps(t, ordered, order, d, true, true) else nodeOps(t, ordered, order, d, true, false);
     }
 
     // 2. Side lists -> geometry. One row per text run or custom draw that
@@ -82,7 +90,7 @@ inline fn paintIn(t: *const Tree, tx: *const Texts, cu: *const Customs, strings:
     }
     d.custom_len = cu.len;
     d.strings = strings;
-    encode(d);
+    encodeOps(d, t.wide);
 }
 
 /// Node `i`'s quad read through its extras rows, its own (`extra`) and the one it inherits
@@ -109,10 +117,99 @@ inline fn quadOf(t: *const Tree, i: usize, alpha: f32) Quad {
     };
 }
 
+/// The quad of a node that reads row 0 of the extras for everything: its rect, its parent's
+/// clip and its look, with no reference or outset, unit UVs, the look's radius, no border,
+/// opacity 1, the identity and a square clip.
+inline fn plainQuad(rect: [4]f32, look: *const Look, clip: V4) Quad {
+    return .{
+        // Outset by nothing, as the rows' way does: a -0 edge comes out the same bits.
+        .rect = geometry.expand(rect, .{ 0, 0, 0, 0 }),
+        .clip = clip,
+        .params = look.params,
+        .uv = .{ 0, 0, 1, 1 },
+        .fill = look.fill,
+        .border_color = look.border_color,
+        .radii = @splat(look.radius),
+        .border = 0,
+        .opacity = 1,
+    };
+}
+
+/// Debug and ReleaseSafe: `quad`, a `plainQuad`, is what the rows give node `i`. Every test in
+/// those builds is the differential check.
+inline fn checkPlain(t: *const Tree, i: usize, quad: *const Quad) void {
+    if (!std.debug.runtime_safety) return;
+    const by_rows = quadOf(t, i, geometry.nodeAlpha(t, i));
+    std.debug.assert(t.participation(@intCast(i)).paint);
+    std.debug.assert(std.mem.eql(u8, std.mem.asBytes(quad), std.mem.asBytes(&by_rows)));
+}
+
+/// Where sweep 1 has got to: the next row, and the quads and ops written.
+const Painted = struct { row: usize, q: u32, o: u32 };
+
+/// Sweep 1 for whole vectors of plain siblings: from row `first`, while the next `W` rows have
+/// `first`'s parent, no extras row of their own or inherited, and no text or custom draw.
+/// Their parent's clip is read once and each row is its rect, its look and three op stores,
+/// with nothing to test. `at` is the first row and the quads and ops so far, `n` the tree's
+/// length; returns the same after the rows it painted. Out of line, so a tree without such
+/// runs pays one compare a row.
+noinline fn plainQuads(t: *const Tree, d: *DrawList, n: usize, at: Painted) Painted {
+    const c = &t.c;
+    const first = at.row;
+    std.debug.assert(first + W <= n);
+    const p = c.parent[first];
+    var done = at;
+    // A parent under an extras row hands it to its children: they take the rows' way.
+    if (c.scope[p] != 0) return done;
+    const cols = .{ c.parent, c.extra, c.scope, c.text, c.custom };
+    const rect = c.rect;
+    const looks = c.look;
+    const visible = c.visible;
+    const quads = d.quads;
+    const op = d.op;
+    const sign: V4 = .{ 1, 1, -1, -1 };
+    const clip = @as(V4, c.child_clip[p]) * sign;
+    const shadow = @backingInt(features.Kind.shadow);
+    // Ends at the first vector that is not all plain siblings, or at a stock shadow.
+    while (done.row + W <= n) {
+        const i = done.row;
+        const plain = (simd.loadU(cols[0], i) == simd.u(p)) &
+            ((simd.loadU(cols[1], i) | simd.loadU(cols[2], i)) == simd.u(0)) &
+            ((simd.loadU(cols[3], i) & simd.loadU(cols[4], i)) == simd.u(none));
+        if (!@reduce(.And, plain)) break;
+        for (i..i + W) |r| {
+            const look = &looks[r];
+            const params: [4]u32 = @bitCast(look.params);
+            // rare: the stock shadow paints past its rect, so `visible` is not its answer.
+            if (params[0] == shadow) return done;
+            const edges: [4]f32 = .{ rect[0][r], rect[1][r], rect[2][r], rect[3][r] };
+            quads[done.q] = plainQuad(edges, look, clip);
+            checkPlain(t, r, &quads[done.q]);
+            // Painted when either colour has alpha: the write index advances by 0 or 1.
+            const coloured = ((look.fill | look.border_color) >> 24) != 0;
+            const has_quad = @as(u32, @intFromBool(visible[r] != 0)) & @intFromBool(coloured);
+            op.kind[done.o] = @backingInt(DrawList.Kind.quads);
+            op.key[done.o] = (@as(u32, look.texture) << 16) | look.material;
+            op.ref[done.o] = done.q;
+            done.q += has_quad;
+            done.o += has_quad;
+            done.row = r + 1;
+        }
+    }
+    return done;
+}
+
 /// Appends quads and the ordered ops. Without side lists the quad and op
 /// indices advance together, and each node writes one candidate operation.
 /// Returns false when directly populated text or custom links need the full path.
-inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d: *DrawList, comptime mixed: bool) bool {
+inline fn nodeOps(
+    t: *const Tree,
+    comptime ordered: bool,
+    order: []const u32,
+    d: *DrawList,
+    comptime mixed: bool,
+    comptime by_runs: bool,
+) bool {
     const c = &t.c;
     // 1. Nodes -> quads and an ordered op stream. Every row writes its
     //    candidate output; the write index advances by 0 or 1.
@@ -125,7 +222,29 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
     var links: u32 = none;
     var q: u32 = 0;
     var o: u32 = 0;
-    for (0..t.len) |k| {
+    const n: usize = t.len;
+    const parents = c.parent;
+    // The row from which whole vectors of plain siblings are looked for again (`by_runs`).
+    var again: usize = 0;
+    var k: usize = 0;
+    // Ends at `n`: a turn paints row `k`, or `plainQuads` moves `k` on by whole vectors.
+    while (k < n) : (k += 1) {
+        // From `again` on, a row with a sibling after it: are the next `W` rows a vector of
+        // plain siblings?
+        if (comptime by_runs) {
+            if (k >= again and parents[k + 1] == parents[k] and k + W <= n) {
+                const p = parents[k];
+                const plain = parents[k + W - 1] == p and (c.text[k] & c.custom[k]) == none;
+                const here: Painted = .{ .row = k, .q = q, .o = o };
+                const at = if (plain) plainQuads(t, d, n, here) else here;
+                q = at.q;
+                o = at.o;
+                // Nothing painted: this vector is not plain, so its rows go one at a time.
+                if (at.row == k) again = k + W;
+                if (at.row == n) break;
+                k = at.row;
+            }
+        }
         const i = if (ordered) order[k] else k;
         const look = &looks[i];
         const parent = c.parent[i];
@@ -139,25 +258,8 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
         if (!small and (c.extra[i] | c.scope[i] | c.scope[parent]) == 0) {
             vis = @intFromBool(geometry.nodeShown(t, i));
             const rect: [4]f32 = .{ c.rect[0][i], c.rect[1][i], c.rect[2][i], c.rect[3][i] };
-            quads[q] = .{
-                // Outset by nothing, as the rows' way does: a -0 edge comes out the same bits.
-                .rect = geometry.expand(rect, .{ 0, 0, 0, 0 }),
-                .clip = @as(V4, c.child_clip[parent]) * sign,
-                .params = look.params,
-                .uv = .{ 0, 0, 1, 1 },
-                .fill = look.fill,
-                .border_color = look.border_color,
-                .radii = @splat(look.radius),
-                .border = 0,
-                .opacity = 1,
-            };
-            if (std.debug.runtime_safety) {
-                // Every Debug and ReleaseSafe test is the differential check against the rows.
-                const by_rows = quadOf(t, i, geometry.nodeAlpha(t, i));
-                std.debug.assert(t.participation(@intCast(i)).paint);
-                const same = std.mem.eql(u8, std.mem.asBytes(&quads[q]), std.mem.asBytes(&by_rows));
-                std.debug.assert(same);
-            }
+            quads[q] = plainQuad(rect, look, @as(V4, c.child_clip[parent]) * sign);
+            checkPlain(t, i, &quads[q]);
         } else {
             const paints = t.participation(@intCast(i)).paint;
             vis = @intFromBool(geometry.nodeShown(t, i)) & @intFromBool(paints);
@@ -196,15 +298,40 @@ inline fn nodeOps(t: *const Tree, comptime ordered: bool, order: []const u32, d:
 /// must reference consecutive quads, as sweep 1 writes them. For passes that reorder ops
 /// (`order.mergeAcrossText`) and then encode again.
 pub fn encode(d: *DrawList) void {
-    const o = d.op_len;
+    encodeOps(d, false);
+}
+
+/// `encode`. `long` says the ops have long stretches of quads with one key (a tree of long
+/// runs of siblings, `Tree.wide`): a whole vector of them then only makes the batch longer, so
+/// it is one compare, and the count the one store. The same commands either way.
+fn encodeOps(d: *DrawList, long: bool) void {
+    const o: usize = d.op_len;
+    std.debug.assert(o <= d.op.kind.len);
+    const kinds = d.op.kind;
+    const keys = d.op.key;
+    const quads = @backingInt(DrawList.Kind.quads);
+    const wide = W > 1 and long;
     var n: u32 = 0;
     var first: u32 = 0;
     var count: u32 = 0;
     var prev_kind: u8 = 0xff;
     var prev_key: u32 = 0;
-    for (0..o) |j| {
-        const kind = d.op.kind[j];
-        const key = d.op.key[j];
+    var j: usize = 0;
+    // Ends at `o`: a turn takes one op, or a whole vector of them.
+    while (j < o) {
+        if (wide and prev_kind == quads and j + W <= o and keys[j + W - 1] == prev_key) {
+            const kind: simd.Bytes = kinds[j..][0..W].*;
+            const more = @reduce(.And, kind == @as(simd.Bytes, @splat(quads))) and
+                @reduce(.And, simd.loadU(keys, j) == simd.u(prev_key));
+            if (more) {
+                count += W;
+                d.cmd.count[n - 1] = count;
+                j += W;
+                continue;
+            }
+        }
+        const kind = kinds[j];
+        const key = keys[j];
         const brk: u32 = @intFromBool(kind != 0) | @intFromBool(kind != prev_kind) | @intFromBool(key != prev_key);
         n += brk;
         const k = n - 1; // the first op always breaks, so n >= 1 here
@@ -216,6 +343,7 @@ pub fn encode(d: *DrawList) void {
         d.cmd.count[k] = count;
         prev_kind = kind;
         prev_key = key;
+        j += 1;
     }
     d.cmd_len = n;
 }
@@ -230,6 +358,7 @@ pub inline fn fade(color: u32, alpha: f32) u32 {
 const testing = std.testing;
 const mem = @import("../core/mem.zig");
 const layout = @import("../layout/layout.zig");
+const check = @import("../layout/check.zig");
 const Strings = @import("../core/strings.zig").Strings;
 const Id = types.Id;
 const Color = types.Color;
@@ -313,6 +442,57 @@ test "sweep 1: visible painted nodes become quads, every node its ops in paint o
     try testing.expectEqualSlices(u8, &.{ 0, 0, 1, 2, 0, 0 }, d.op.kind[0..6]);
     try testing.expectEqualSlices(u32, &.{ 0, 0, 0, 0, 3 << 16, 0 }, d.op.key[0..6]);
     try testing.expectEqualSlices(u32, &.{ 0, 1, 0, 0, 2, 3 }, d.op.ref[0..6]);
+}
+
+test "a tree of long runs paints the same quads, ops and commands by runs as row by row" {
+    const Lists = struct {
+        var raw: [4 * 1024 * 1024]u8 align(mem.column_align) = undefined;
+    };
+    var carver: mem.Carver = .{ .buf = &Lists.raw };
+    var t = Tree.init(&carver, 1000);
+    var tx = Texts.init(&carver, 4);
+    const cu = Customs.init(&carver, 4);
+    var s: Strings = .{ .buf = carver.slice(u8, 64) };
+    var d: [2]DrawList = .{ .init(&carver, 1000, 4, 4), .init(&carver, 1000, 4, 4) };
+    var prng: std.Random.DefaultPrng = .init(0x9a17);
+    const r = prng.random();
+    for (0..100) |round| {
+        check.randomRuns(&t, r, 1 + r.uintLessThan(u32, t.cap));
+        tx.reset();
+        s.len = 0;
+        // Most rows painted, a few on another texture, a few with the stock shadow; every
+        // other tree has a text run, so both forms of sweep 1 are held to the row-by-row one.
+        for (t.c.look[0..t.len]) |*look| {
+            look.fill = if (r.uintLessThan(u32, 8) == 0) 0 else 0xff20_4060;
+            if (r.uintLessThan(u32, 16) == 0) look.texture = 3;
+        }
+        if (round % 2 == 0) {
+            const node = r.uintLessThan(u32, t.len);
+            t.c.text[node] = tx.push(node, s.add("hello"), &.{ .px = 10 });
+        }
+        layout.run(&t, &tx, .{ 1280, 800 });
+        for (&d, [2]bool{ false, true }) |*list, wide| {
+            t.wide = wide;
+            emit(&t, &tx, &cu, s.buf[0..s.len], list);
+        }
+        try testing.expectEqual(d[0].quad_len, d[1].quad_len);
+        try testing.expectEqual(d[0].op_len, d[1].op_len);
+        try testing.expectEqual(d[0].cmd_len, d[1].cmd_len);
+        const quads = [2][]const u8{
+            std.mem.sliceAsBytes(d[0].quads[0..d[0].quad_len]),
+            std.mem.sliceAsBytes(d[1].quads[0..d[1].quad_len]),
+        };
+        try testing.expectEqualSlices(u8, quads[0], quads[1]);
+        const ops = d[0].op_len;
+        try testing.expectEqualSlices(u8, d[0].op.kind[0..ops], d[1].op.kind[0..ops]);
+        try testing.expectEqualSlices(u32, d[0].op.key[0..ops], d[1].op.key[0..ops]);
+        try testing.expectEqualSlices(u32, d[0].op.ref[0..ops], d[1].op.ref[0..ops]);
+        const cmds = d[0].cmd_len;
+        try testing.expectEqualSlices(u8, d[0].cmd.kind[0..cmds], d[1].cmd.kind[0..cmds]);
+        try testing.expectEqualSlices(u32, d[0].cmd.key[0..cmds], d[1].cmd.key[0..cmds]);
+        try testing.expectEqualSlices(u32, d[0].cmd.first[0..cmds], d[1].cmd.first[0..cmds]);
+        try testing.expectEqualSlices(u32, d[0].cmd.count[0..cmds], d[1].cmd.count[0..cmds]);
+    }
 }
 
 test "sweep 2: text runs get the content box, custom draws the node rect, both the parent clip" {
@@ -473,7 +653,7 @@ test "quad-only frames preserve the general op stream on reused, reordered and d
             t.c.custom[Scene.box] = 13;
         }
         inline for (.{ false, true }) |ordered| {
-            _ = nodeOps(t, ordered, &reverse, &expected.d, true);
+            _ = nodeOps(t, ordered, &reverse, &expected.d, true, false);
             encode(&expected.d);
             paintIn(t, &sc.tx, &sc.cu, "storage", ordered, &reverse, &sc.d);
             const want = &expected.d;

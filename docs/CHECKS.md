@@ -136,6 +136,16 @@ jump those merges added was removed). Each remaining jump was read in the disass
   instructions a frame and form 49,501 instead of 52,807, against 102,036 and 49,061 before
   any pass went by runs; springs took 468,970 and resize 132,514, the survey's own cost over
   464,791 and 131,846.
+- `p_paint` jcc 24 -> 53, back 6 -> 8, short_fwd 0 -> 2; `p_paint_layered` 25 -> 23: sweep 1
+  has a second form for a tree of long runs (`Tree.wide`, one jump per frame), so the count is
+  of both. That form asks of a row from which it has not just failed whether the next vector
+  of rows is plain siblings, and `plainQuads` then paints whole vectors with the parent's clip
+  read once and nothing to test per row; `encode` takes a vector of quads with the batch's key
+  as one compare. The two short forward jumps are that question's `and`, in the forms with
+  and without text: they skip the test of the row's text and custom links when the row
+  `lanes - 1` on has another parent. On bench/vs/lcgf (x86_64_v3, 3,000 polls) springs took
+  421,638 instead of 468,970 instructions a frame; list 102,557 (102,988), form 49,411
+  (49,501) and resize 133,859 (132,514), whose long runs are rows of text.
 - `p_hit_layered` jcc 2 -> 7, back 1 -> 2, short_fwd 0 -> 2: the once-per-call choice between the
   SIMD hit and `atExact` (transforms or rounded clips), and `needsExactHit`'s scan over the extras
   rows (bound and unroll remainder only). A select would run the exact walk on every query.
