@@ -608,7 +608,9 @@ pub fn crtcInfo(r: []const u8) ?struct { crtc: Crtc, mode: u32 } {
 /// Seconds between frames of `mode` in a GetScreenResourcesCurrent reply: the pixels of a
 /// frame, blanking included, over the dot clock, as xrandr computes the rate. Null when the
 /// reply lists no such mode or the mode has no timing (Xvfb's own mode has a clock of 0).
+/// Asserts that `mode` is not None (0).
 pub fn modeRefresh(r: []const u8, mode: u32) ?f32 {
+    std.debug.assert(mode != 0); // None: a CRTC that is off has no mode (`crtcInfo`)
     if (r.len < 32) return null;
     const crtcs: usize = get(u16, r, 16);
     const outputs: usize = get(u16, r, 18);
@@ -625,7 +627,9 @@ pub fn modeRefresh(r: []const u8, mode: u32) ?f32 {
         if (flags & 0x20 != 0) v_total *= 2; // DoubleScan: every line twice
         if (flags & 0x10 != 0) v_total /= 2; // Interlace: half the lines a field
         if (clock == 0 or h_total == 0 or v_total == 0) return null;
-        return h_total * v_total / clock;
+        const period = h_total * v_total / clock;
+        std.debug.assert(period > 0);
+        return period;
     }
     return null;
 }
@@ -1225,7 +1229,8 @@ test "crtcInfo and refreshAt: the CRTC under the window's centre, else the first
     std.mem.writeInt(u32, r[20..24], 0x229, .little);
     const on = crtcInfo(&r).?;
     try testing.expectEqual(@as(u32, 0x229), on.mode);
-    try testing.expectEqual(Crtc{ .x = 2560, .y = 0, .width = 1920, .height = 1080, .refresh = refresh_default }, on.crtc);
+    const want: Crtc = .{ .x = 2560, .y = 0, .width = 1920, .height = 1080, .refresh = 1.0 / 60.0 };
+    try testing.expectEqual(want, on.crtc);
     std.mem.writeInt(u32, r[20..24], 0, .little);
     try testing.expectEqual(null, crtcInfo(&r));
 

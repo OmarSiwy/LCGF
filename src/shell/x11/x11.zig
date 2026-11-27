@@ -192,7 +192,8 @@ pub const Connection = struct {
                 c.screen_px = screen.px;
                 c.screen_mm = screen.mm;
             }
-            const version = try c.reply(c.send(wire.randr_query_version_size, wire.randrQueryVersion, .{randr}));
+            const version_size = wire.randr_query_version_size;
+            const version = try c.reply(c.send(version_size, wire.randrQueryVersion, .{randr}));
             const major = wire.get(u32, version, 8);
             const minor = wire.get(u32, version, 12);
             if (major > 1 or minor >= 3) c.randr = randr;
@@ -210,11 +211,12 @@ pub const Connection = struct {
             if (slot) |w| w.refresh_stale = true;
         }
         if (c.randr == 0) return;
-        const root = c.setup.root;
+        const on_root = .{ c.randr, c.setup.root };
         const resources_size = wire.randr_get_screen_resources_current_size;
+        const resources = wire.randrGetScreenResourcesCurrent;
         var ids: [crtcs_max]u32 = undefined;
         const n = blk: {
-            const r = try c.reply(c.send(resources_size, wire.randrGetScreenResourcesCurrent, .{ c.randr, root }));
+            const r = try c.reply(c.send(resources_size, resources, on_root));
             // ponytail: CRTCs past crtcs_max are not read; a window on one paces to the first.
             const n: usize = @min(wire.get(u16, r, 16), crtcs_max);
             if (r.len < 32 + 4 * n) return;
@@ -222,16 +224,21 @@ pub const Connection = struct {
             break :blk n;
         };
         var asked: [crtcs_max]u16 = undefined;
-        for (ids[0..n], asked[0..n]) |crtc, *seq| seq.* = c.send(wire.randr_get_crtc_info_size, wire.randrGetCrtcInfo, .{ c.randr, crtc });
-        const again = c.send(resources_size, wire.randrGetScreenResourcesCurrent, .{ c.randr, root });
+        for (ids[0..n], asked[0..n]) |crtc, *seq| {
+            const info_size = wire.randr_get_crtc_info_size;
+            seq.* = c.send(info_size, wire.randrGetCrtcInfo, .{ c.randr, crtc });
+        }
+        const again = c.send(resources_size, resources, on_root);
         var modes: [crtcs_max]u32 = undefined;
+        var active: u8 = 0;
         for (asked[0..n]) |seq| {
             const on = wire.crtcInfo(try c.reply(seq)) orelse continue;
-            c.crtcs[c.crtcs_len] = on.crtc;
-            modes[c.crtcs_len] = on.mode;
-            c.crtcs_len += 1;
+            c.crtcs[active] = on.crtc;
+            modes[active] = on.mode;
+            active += 1;
         }
-        std.debug.assert(c.crtcs_len <= n);
+        std.debug.assert(active <= n);
+        c.crtcs_len = active;
         const r = try c.reply(again);
         for (c.crtcs[0..c.crtcs_len], modes[0..c.crtcs_len]) |*crtc, mode| {
             crtc.refresh = wire.modeRefresh(r, mode) orelse wire.refresh_default;
@@ -1415,7 +1422,9 @@ pub const Window = struct {
         var centre: [2]i32 = .{ 0, 0 };
         if (c.crtcs_len > 1) {
             const half: [2]i16 = .{ @intCast(w.width / 2), @intCast(w.height / 2) };
-            const r = try c.reply(c.send(wire.translate_coordinates_size, wire.translateCoordinates, .{ w.id, c.setup.root, half[0], half[1] }));
+            const to_root = .{ w.id, c.setup.root, half[0], half[1] };
+            const size = wire.translate_coordinates_size;
+            const r = try c.reply(c.send(size, wire.translateCoordinates, to_root));
             centre = .{ wire.get(i16, r, 12), wire.get(i16, r, 14) };
         }
         w.refresh = wire.refreshAt(c.crtcs[0..c.crtcs_len], centre[0], centre[1]);
@@ -2360,20 +2369,29 @@ test "x11: display pacing follows the CRTC's mode, 60 Hz when the mode has no ti
     // The CRTC switches to a mode of the same size at 120.06 Hz (xrandr's 1024x768 timing):
     // the ScreenChangeNotify that follows is read, and the window paces to it.
     const root = c.setup.root;
-    const resources = try c.reply(c.send(wire.randr_get_screen_resources_current_size, wire.randrGetScreenResourcesCurrent, .{ c.randr, root }));
+    const resources_size = wire.randr_get_screen_resources_current_size;
+    const get_resources = wire.randrGetScreenResourcesCurrent;
+    const resources = try c.reply(c.send(resources_size, get_resources, .{ c.randr, root }));
     const config_time = wire.get(u32, resources, 12);
     const crtc = wire.get(u32, resources, 32);
     const output = wire.get(u32, resources, 36);
-    const old_mode = wire.get(u32, try c.reply(c.send(wire.randr_get_crtc_info_size, wire.randrGetCrtcInfo, .{ c.randr, crtc })), 20);
+    const info_size = wire.randr_get_crtc_info_size;
+    const crtc_info = try c.reply(c.send(info_size, wire.randrGetCrtcInfo, .{ c.randr, crtc }));
+    const old_mode = wire.get(u32, crtc_info, 20);
     var info: [32]u8 = @splat(0);
-    for ([_][2]u32{ .{ 4, 1024 }, .{ 6, 768 }, .{ 16, 1328 }, .{ 24, 853 }, .{ 26, 5 } }) |f| std.mem.writeInt(u16, info[f[0]..][0..2], @intCast(f[1]), .little);
+    // Width, height, total width, total height and name length, at their MODEINFO offsets.
+    const fields = [_][2]u32{ .{ 4, 1024 }, .{ 6, 768 }, .{ 16, 1328 }, .{ 24, 853 }, .{ 26, 5 } };
+    for (fields) |f| std.mem.writeInt(u16, info[f[0]..][0..2], @intCast(f[1]), .little);
     std.mem.writeInt(u32, info[8..12], 136_000_000, .little);
-    const mode = wire.get(u32, try c.reply(c.send(48, testRandrCreateMode, .{ c.randr, root, &info, "hz120" })), 8);
+    const create = .{ c.randr, root, &info, "hz120" };
+    const created = try c.reply(c.send(48, testRandrCreateMode, create));
+    const mode = wire.get(u32, created, 8);
     _ = c.send(12, testRandrOutputMode, .{ c.randr, 18, output, mode });
     _ = try c.reply(c.send(32, testRandrSetCrtc, .{ c.randr, crtc, config_time, mode, output }));
     const switched = waitRefresh(&w, 1328.0 * 853.0 / 136e6);
     // Back to Xvfb's mode, and the new one removed, whether or not the test passed.
-    _ = try c.reply(c.send(32, testRandrSetCrtc, .{ c.randr, crtc, config_time, old_mode, output }));
+    const restore = .{ c.randr, crtc, config_time, old_mode, output };
+    _ = try c.reply(c.send(32, testRandrSetCrtc, restore));
     _ = c.send(12, testRandrOutputMode, .{ c.randr, 19, output, mode });
     _ = c.send(8, testRandrDestroyMode, .{ c.randr, mode });
     try switched;
@@ -2391,7 +2409,13 @@ fn waitRefresh(w: *Window, want: f32) !void {
 }
 
 /// RandR CreateMode (minor 16): `info`, a MODEINFO whose name length is `name.len`.
-fn testRandrCreateMode(b: *wire.Buf, randr: u8, window: u32, info: *const [32]u8, name: []const u8) void {
+fn testRandrCreateMode(
+    b: *wire.Buf,
+    randr: u8,
+    window: u32,
+    info: *const [32]u8,
+    name: []const u8,
+) void {
     b.head(randr, 16, (40 + name.len + wire.pad4(name.len)) / 4);
     b.int(u32, window);
     for (info) |byte| b.int(u8, byte);
@@ -2412,7 +2436,14 @@ fn testRandrDestroyMode(b: *wire.Buf, randr: u8, mode: u32) void {
 }
 
 /// RandR SetCrtcConfig (minor 21): `crtc` at (0, 0) in `mode`, unrotated, on `output`.
-fn testRandrSetCrtc(b: *wire.Buf, randr: u8, crtc: u32, config_time: u32, mode: u32, output: u32) void {
+fn testRandrSetCrtc(
+    b: *wire.Buf,
+    randr: u8,
+    crtc: u32,
+    config_time: u32,
+    mode: u32,
+    output: u32,
+) void {
     b.head(randr, 21, 8);
     b.int(u32, crtc);
     b.int(u32, 0); // timestamp: CurrentTime
