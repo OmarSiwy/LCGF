@@ -7,7 +7,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 prefix=${1:-$root/zig-out}
 work=${LCGF_CHECK_DIR:-$root/zig-out/bindings-check}
 rm -rf "$work"; mkdir -p "$work"
-python3 "$root/bindings/check/inputs.py" "$work/inputs.txt" "$work/page.txt"
+python3 "$root/bindings/check/inputs.py" "$work/inputs.txt"
 
 cmake -S "$root/bindings/cpp/check" -B "$work/cpp" -DCMAKE_PREFIX_PATH="$prefix" \
     -DLCGF_SPECS="$root/src/abi/testdata" -DLCGF_SHADERS="$root/src/render/gpu" -DCMAKE_BUILD_TYPE=Release >/dev/null
@@ -35,24 +35,6 @@ for ui in toolbar mixer panel; do
     frames=$(grep -vc '^set' "$work/inputs.txt")
     echo "ok   $ui: $frames frames, $(wc -c < "$work/$ui.zig.bin") bytes of draw lists, identical in Zig, $langs"
 done
-
-# examples/markup's HTML page: its Zig spec frontend (the Zig widgets), and its `.zon` through the
-# seam in Zig, C++ (lcgf_add_ui) and Rust (include_ui!). Every draw list and event must be
-# byte-identical.
-ui=counter
-"$prefix/bin/lcgf-dump" $ui comptime "$work/page.txt" "$work/$ui.zig.bin"
-"$prefix/bin/lcgf-dump" $ui seam "$work/page.txt" "$work/$ui.seam.bin"
-"$work/cpp/lcgf-cpp-check" $ui "$work/page.txt" "$work/$ui.cpp.bin"
-cmp "$work/$ui.zig.bin" "$work/$ui.seam.bin"
-cmp "$work/$ui.zig.bin" "$work/$ui.cpp.bin"
-langs="Zig through the seam, C++"
-if [ $have_rust = yes ]; then
-    "$work/rust/release/lcgf-check" $ui "$work/page.txt" "$work/$ui.rust.bin"
-    cmp "$work/$ui.zig.bin" "$work/$ui.rust.bin"
-    langs="$langs, Rust"
-fi
-python3 "$root/bindings/check/events.py" "$work/$ui.zig.bin" >/dev/null
-echo "ok   markup $ui: $(grep -vc '^set' "$work/page.txt") frames, $(wc -c < "$work/$ui.zig.bin") bytes of draw lists, identical in Zig's spec frontend, $langs"
 
 # The GPU half: one frame through lcgf_render.gpu (Zig), lcgf/gpu.hpp (C++) and lcgf::gpu (Rust),
 # recorded as native calls (bindings/check/record.c); the logs must be equal.
@@ -211,8 +193,7 @@ for cc in clang gcc; do
             cargo build --release --quiet --manifest-path "$root/bindings/rust/Cargo.toml" --target-dir "$work/rust-$cc" -p lcgf-check --bin lcgf-ct-check
     fi
 done
-# volume is an HTML page in the static subset (lcgf-gen page.html --static), against a Zig twin.
-for ui in mixer card settings badge dash todo feed controls palette meter volume; do
+for ui in mixer card settings badge dash todo feed controls palette meter; do
     "$prefix/bin/lcgf-ct-dump" "$ui" 240 "$work/ct-$ui.zig.bin"
     for how in cpp cpp-clang cpp-gcc; do
         "$work/$how/lcgf-cpp-ct-check" "$ui" 240 "$work/ct-$ui.$how.bin"

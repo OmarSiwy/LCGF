@@ -1,6 +1,0 @@
-labelledby.html:4:25: error: aria-labelledby names 'missing', which is no element's id
-  <nav aria-labelledby="missing"><span>A</span></nav>
-                        ^
-labelledby.html:6:27: error: aria-labelledby reads the text of 'live' at build time; it cannot show a field
-  <aside aria-labelledby="live"><span>B</span></aside>
-                          ^

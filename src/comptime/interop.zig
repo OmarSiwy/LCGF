@@ -29,7 +29,7 @@ pub fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec {
     return canvas(id, style, 0);
 }
 
-/// A region sized by its content (markup E1): on each axis whose `style` size is `fit`, it
+/// A region sized by its content: on each axis whose `style` size is `fit`, it
 /// takes the size its owner measured last (`setFit`). The comptime layout runs before the content
 /// exists, so the owner builds the content in a viewport of its own after it, reports its size,
 /// and on a change lays the page out again in the same frame (`ComptimeUi.rebuild`).

@@ -1,3 +1,0 @@
-unread.html:5:16: error: 'color' on <optgroup> is not lowered: nothing on this element reads it
-    optgroup { color: blue; }
-               ^

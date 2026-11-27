@@ -1,8 +1,8 @@
 // Runs a generated UI frame by frame and writes its draw lists in the dump format of
 // bindings/check/dump.zig, so bindings/check/run.sh can compare C++ with Zig byte for byte.
 //
-//   lcgf-cpp-check <toolbar|mixer|panel|counter> <inputs.txt> <out.bin>
-//   lcgf-cpp-check <toolbar|mixer|panel|counter> <inputs.txt> --bench   (ns per frame, 200 passes)
+//   lcgf-cpp-check <toolbar|mixer|panel> <inputs.txt> <out.bin>
+//   lcgf-cpp-check <toolbar|mixer|panel> <inputs.txt> --bench   (ns per frame, 200 passes)
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "counter.lcgf.hpp"
 #include "mixer.lcgf.hpp"
 #include "panel.lcgf.hpp"
 #include "toolbar.lcgf.hpp"
@@ -73,10 +72,6 @@ void set(panel::Ui& ui, const std::string& field, std::uint32_t v) {
     if (field == "len") ui.set_len(v);
     if (field == "mode") ui.set_mode(static_cast<std::uint8_t>(v));
 }
-void set(counter::Ui& ui, const std::string& field, std::uint32_t v) {
-    if (field == "count") ui.set_count(static_cast<float>(v));
-    if (field == "clicks") ui.set_clicks(v);
-}
 
 bool bench = false;
 const char* ui_name = "";
@@ -132,13 +127,12 @@ int run(UiT& ui, std::istream& inputs, std::vector<char>& out) {
 lcgf::Buffer<toolbar::bytes> toolbar_buffer;
 lcgf::Buffer<mixer::bytes> mixer_buffer;
 lcgf::Buffer<panel::bytes> panel_buffer;
-lcgf::Buffer<counter::bytes> counter_buffer;
 
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc != 4) {
-        std::fprintf(stderr, "usage: lcgf-cpp-check <toolbar|mixer|panel|counter> <inputs.txt> <out.bin>\n");
+        std::fprintf(stderr, "usage: lcgf-cpp-check <toolbar|mixer|panel> <inputs.txt> <out.bin>\n");
         return 2;
     }
     std::ifstream inputs(argv[2]);
@@ -148,9 +142,6 @@ int main(int argc, char** argv) {
     int status;
     if (std::strcmp(argv[1], "mixer") == 0) {
         mixer::Ui ui(mixer_buffer.span());
-        status = run(ui, inputs, out);
-    } else if (std::strcmp(argv[1], "counter") == 0) {
-        counter::Ui ui(counter_buffer.span());
         status = run(ui, inputs, out);
     } else if (std::strcmp(argv[1], "panel") == 0) {
         panel::Ui ui(panel_buffer.span());

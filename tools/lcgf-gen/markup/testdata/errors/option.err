@@ -1,9 +1,0 @@
-option.html:10:39: error: CSS on an <option> lays out its row: margins, var() bound at run time, gradients, box-shadow and outline are not lowered there
-  <select id="pick" bind:value="pick"><option>A</option><option>B</option><option class="wide">C</option></select>
-                                      ^
-option.html:5:27: error: 'line-height' on an <option> is not lowered: its caption is one line
-    option { margin: 2px; line-height: 20px; }
-                          ^
-option.html:10:75: error: every <option> of a <select> draws in one style: give them all the same CSS
-  <select id="pick" bind:value="pick"><option>A</option><option>B</option><option class="wide">C</option></select>
-                                                                          ^

@@ -24,14 +24,6 @@
 //!
 //!   lcgf-gen --wgsl <s.wgsl> --name tinted --lang cpp|rust [--spirv <s.spv>] [--glsl <entry>=<file>]... [--msl <s.metal>] [--hlsl <s.hlsl>] -o <out>
 //!   lcgf-gen --wgsl <s.wgsl> --entry-points    (one line per entry point: name, naga stage, GLSL profile, file extension)
-//!
-//! An HTML page and its CSS: a generated UI module (markup/main.zig, docs/guide/markup.md).
-//!
-//!   lcgf-gen <page.html> [--css <extra.css>]... --lang zig -o <page_ui.zig> [--depfile <d>]
-//!   lcgf-gen <page.html> --lang zon|cpp|rust|words [-o <out>] [--depfile <d>]   (seam subset)
-//!   lcgf-gen <page.html> --static --lang zon|cpp|rust|c|zig|words [-o <out>] [--depfile <d>]   (static subset)
-//!   lcgf-gen --mappings    (the HTML/CSS mapping manifest as TSV)
-//!
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -41,21 +33,12 @@ const reflect = lcgf.gpu_reflect;
 const seam = lcgf.abi_seam;
 const ct = lcgf.abi_ct;
 const naga = lcgf.gpu_naga;
-const markup = @import("markup/main.zig");
 
 const Lang = enum { cpp, rust, c, zig, words, zon };
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const arena = init.arena.allocator();
-    {
-        // An HTML page goes to the markup compiler (markup/main.zig).
-        var all = try init.minimal.args.iterateAllocator(arena);
-        _ = all.next();
-        var list: std.ArrayList([]const u8) = .empty;
-        while (all.next()) |a| try list.append(arena, a);
-        if (markup.wants(list.items)) std.process.exit(try markup.main(io, arena, list.items, .{ .tables = tablesOf, .static = staticOf }));
-    }
     var args = try init.minimal.args.iterateAllocator(arena);
     _ = args.next();
     var input: ?[]const u8 = null;
@@ -186,7 +169,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 /// A static `.zon` spec (`src`, read from `path`) as `lang`'s static-UI code (`StaticGen`), or
-/// null after logging what is wrong. The markup front end calls it for `page.html --static`.
+/// null after logging what is wrong.
 fn staticOf(arena: std.mem.Allocator, lang_name: []const u8, src: [:0]const u8, path: []const u8) ?[]const u8 {
     return staticOrError(arena, lang_name, src, path) catch |e| {
         std.log.err("{s}: {s}", .{ path, @errorName(e) });
@@ -217,7 +200,7 @@ fn staticOrError(arena: std.mem.Allocator, lang_name: []const u8, src: [:0]const
 }
 
 /// A `.zon` spec (`src`, read from `path`) as `lang`'s widget tables: `cpp`, `rust`, `words`, or
-/// `zon` (echoed). Null after logging what is wrong. The markup front end calls it too.
+/// `zon` (echoed). Null after logging what is wrong.
 fn tablesOf(arena: std.mem.Allocator, lang_name: []const u8, src: [:0]const u8, path: []const u8) ?[]const u8 {
     return tablesOrError(arena, lang_name, src, path) catch |e| {
         std.log.err("{s}: {s}", .{ path, @errorName(e) });

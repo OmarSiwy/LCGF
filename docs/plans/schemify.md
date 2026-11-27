@@ -2,10 +2,9 @@
 
 Schemify, an EDA schematic editor, is moving its GUI onto LCGF. Its owner wants every gap closed in LCGF, not worked around in Schemify. Its priorities, in order:
 1. A schematic canvas that draws on the GPU back ends and on `sw` from one source.
-2. Run-time theme values (sizes, fonts, radii, spacing, not only colours) in compiled markup pages.
-3. The markup gaps in its UI spec (`Schemify-zig/docs/port/ui.md` §7.5).
+2. Run-time theme values (sizes, fonts, radii, spacing, not only colours) in compiled pages.
 
-It needs them in a few weeks. Sources: the research replies of 2026-11-26 (file:line evidence is kept below where it decides something), `docs/plans/markup-compiler.md` (MC) and `docs/plans/markup-engine-api.md` (EA).
+It needs them in a few weeks. Sources: the research replies of 2026-11-26 (file:line evidence is kept below where it decides something).
 
 ## 1. The canvas
 
@@ -72,73 +71,19 @@ const r = f.interact(node, .{ .hover = true, .drag = true });   // pan, select: 
 
 ## 2. Run-time theme values in compiled pages
 
-Today a comptime page folds the theme: `var()` is substituted by the compiler (`tools/lcgf-gen/markup/lower.zig:75-120`), the theme is a comptime parameter (`ComptimeUi(State, spec, theme)`, `emit_zig.zig:404`), and only colours change at run time (`theme.recolor`, `src/theme/theme.zig:263`). Lengths are harder, because they feed measure and layout: they must enter when rows are pushed, and a theme change must force a relayout.
+Today a comptime page folds the theme: the theme is a comptime parameter (`ComptimeUi(State, spec, theme)`), and only colours change at run time (`theme.recolor`, `src/theme/theme.zig:263`). Lengths are harder, because they feed measure and layout: they must enter when rows are pushed, and a theme change must force a relayout.
 
 **Design (the research's option C).**
-- **Compiler:** `var(--t-*)` becomes a token index on the `Spec`.
+- **Spec:** a token index on the `Spec`.
 - **Push:** writes the listed fields from a caller-owned `ThemeTable` of lengths, font sizes and colours.
 - **Relayout:** a theme generation counter makes a changed table relayout the page.
 - **Cost:** pages without tokens are unchanged, byte for byte.
-- **Order:** the runtime emitter (§3, N-FE) gets it first, then comptime pages, so a page keeps its CSS when it changes front end.
+- **Order:** the runtime front end gets it first, then comptime pages.
 
 | WP | What |
 |---|---|
 | T-RT | `ThemeTable` and token fields on `Spec`/push, the theme generation in the dirty state; runtime front end |
-| T-CT | The same in `ComptimeUi` and the compiler (`--runtime-vars=t-`) |
-
-## 3. The markup gaps (Schemify ui.md §7.5, mapped onto the current compiler)
-
-- **Already done:**
-  - literal text G1 (`lower.zig:996-1018`);
-  - IME preedit;
-  - resize cursors;
-  - canvas custom draw and capture (`Frame.custom`/`interact`);
-  - virtual lists;
-  - `on:change`;
-  - filled path/polygon as an atlas quad (`src/draw/paths.zig`);
-  - SVG path icons.
-- **In existing plan entries:**
-  - G4 overlays: F10;
-  - G6 state CSS: F3b;
-  - class bindings: F3;
-  - prose and wrap: F2/F11;
-  - ellipsis: F12b;
-  - tables and trees over data: M8.2;
-  - forced runtime page: M7.2;
-  - `sfy-*` custom elements: M8.3;
-  - `on:submit`: M4.2 and F18;
-  - list, dialog and status roles: F1.
-- **New:**
-  - N-THEME (§2);
-  - N-FE: a per-page `lcgf-frontend="runtime"`, with M7.2 brought forward;
-  - N-SUBMIT: per-field `on:submit` (Enter; Ctrl+Enter in a textarea);
-  - F1+: roles menu, menu_item, tab, tab_list, combobox, scroll_view, figure.
-- **App components, out of LCGF's scope:**
-  - button icon and mark;
-  - multi-cascade menus;
-  - docks;
-  - pixel splits;
-  - growing text areas;
-  - scancode chords;
-  - math;
-  - waves graph.
-
-  Schemify builds these as `sfy-*` custom elements (M8.3).
-
-**Order:**
-1. T1 text controls.
-2. N-FE runtime emitter.
-3. T-RT.
-4. M8.3 components.
-5. M8.2 each.
-6. F3.
-7. F18 and N-SUBMIT.
-8. F3b.
-9. T-CT.
-10. F1+.
-11. F2, F11, F12b.
-12. F10.
-13. SVG icons in markup.
+| T-CT | The same in `ComptimeUi` |
 
 ## Landed (on `main`)
 
@@ -149,22 +94,13 @@ Today a comptime page folds the theme: `var()` is substituted by the compiler (`
 | C4: `canvas.wgsl`, one pipeline; vk, wgpu, gles, web, d3d12 at 0 bad pixels; metal cross-built only | a2b7c437, 6a71ab01, 83571bd1, 37c89e7d, 68c6b4b1, a656aee3, c59dee32 |
 | C5 (sw): canvas golden scene, integer cull, 100k benchmark, per-frame tile bin (`sw.Setup.bins`) | 68b6ec7a..70481997, 7bb8710f, d3844a9e |
 | T-RT, T-CT: run-time theme tokens on runtime and comptime pages | ac391ab0, dba544f2, aad15faf, de869134 |
-| Engine for the markup gaps: flex, placeholders, roles, link, choice, heading, button text style | 472f74c9..c49d9be2 |
-| N-FE runtime front end; N-SUBMIT on:submit | e863cf0e, 999c2329 |
 | C4/C5 GPU: canvas golden in draw-golden on the GPU, vk benchmark (RTX 5060: 0.55 ms/frame for 100k at 1080p; pan uploads 160 B), batch placement fix | 1e06d82c..00b85934 |
 | sw canvas: transform and rounded-clip parents, `Frame.reuse` (`enableCanvas` now takes 2 × customs rows), cheaper shading (71M instr/frame for 100k, 1 thread), golden through the bin, dashes on arcs | ea5ff09e, 58e13807, d42136f3, fdcd4a68, 2ae59430, b64b2381 |
 | GPU transformed nodes, rounded clips, dashed arcs; C6 canvas from C, C++ and Rust (safe Rust `Frame::canvas`); address-free damage; comptime `CanvasRenderer` (apps without a canvas pay 0 B); caller-set limits in `Desc` (`canvas_batches` ≤32, `canvas_draws` ≤64, `canvas_overrides` ≤512) | d48e38d1, 90db0223, 8af3f1ea, 7b81d32c..403133d8 |
 | Per-row mark colours for large selections: `Instances.init(…, .{ .marks = true })`, `mark(i, color)`; a mark beats a range override. **API change:** `Instances.init`/`requiredBytes` take an `Options` (`.{}` for none) | 2154cef9, b522005b |
-| Markup: `sfy-*` components (page theme and tokens passed in; one name for page and region forms), `lcgf-else`, page-level text on:change, accessible names, `aria-labelledby` | 33ba5e41, 55665436, bd55d7d3, b3aafd3a, 691a139c, 885ca6b2, 3e857e94, 84583f36 |
-| Text fields inside regions: `value="{row.f}"`, on:change(index, text), on:submit(index) | c4168b13 |
-| M8.2 `<each of>`; E2 several regions; per-row view state; E1 fit-sized regions; one-way per-item on:change over `[]const T` | 1d39f356, fa569c09, 71f60ea2, 357f6c33, 83987184, d72829fc |
-| Markup CSS and elements: `align-self`, `align-items: baseline`, `flex-wrap`, `align-content`, `aspect-ratio`; `<select>`/`<option>`/`<optgroup>` and modal `<dialog>` (F10 overlays in comptime pages); `@font-face` with `font-family`/`font-weight`/`font-style`; `<input type=password>`; `line-height`, `letter-spacing`, `word-spacing`, `text-overflow` | c26d10f2..4492ddc1, 177ecbf8..c775f84f, 9f95686c..f52afb9f |
-| **Re-pin here for your (1)+(2):** E1, a fit-sized `lcgf-each` region takes its content's size in the same frame and its clicks land in the final rect, in both frontends; per-item on:change over `[]const T` and display-only `checked="{row.f}"` (from d72829fc) included | cb47649c, 06c0e429; main 9e9a492b |
-| Markup: images (`<img>`, `background-image: url()`, local PNG and SVG); `<a href>`, lists and counter styles, `<details>`; `justify-content` space-*, box-shadow, outline, accent-color, text-transform (Unicode); gradients with any number of stops; tooltips (`title=`), popovers, `<menu popover>`; text decorations and inline runs in `<p>`; CSS on every widget in the runtime frontend; CSS on `<select>`, `<dialog>` (+`::backdrop`), `<details>`, `<option>`; an error for any CSS that wins but is never read | 5eafb7eb..9e9a492b |
+| E2 several regions; per-row view state; E1 fit-sized regions | 1d39f356, fa569c09, 71f60ea2, 357f6c33, 83987184, d72829fc |
+| **Re-pin here for your (1)+(2):** E1, a fit-sized region takes its content's size in the same frame and its clicks land in the final rect, in both frontends | cb47649c, 06c0e429; main 9e9a492b |
 | C++ and Rust: static UIs through a Zig-built per-UI frame (`ct.hpp` and `ct.rs` deleted); one HTML page from Zig, C++ and Rust (`lcgf_add_ui`/`include_ui!` take HTML, the seam subset) | 08e35e82, 93f62797, 024094de |
 | census-src passes (0 lines over baseline); embedded flash at or below the earlier main | 93f62797 |
-| Your #4, both halves: `:hover`/`:active`/`:focus`/`:focus-visible`/`:focus-within`/`:checked`/`:disabled`/`:invalid`… with `@media`/`@supports`, transitions and `@keyframes`, on every widget, on plain boxes and on rows inside `lcgf-each` (per-copy state, so hovered/selected list rows work); and `display: grid` (tracks, areas, subgrid, auto-fill), `<table>` (rowspan, colspan, caption, col), z-index/sticky/fixed, `overflow: auto` scroll areas, `columns`. Comptime pages also lay out styled text on a real shaper (`ComptimeUi.frameText`) | a49dc73c, 8d408372, dc3b8adb, 7d4e561d |
-
-**Next:** your #5 (tooltip `title=`, `popover`/`popovertarget` and `<menu popover>` already landed in f26bcbcd; submenus next); the full markup set in C++ and Rust through a Zig-built per-UI page (Zig required at build time); abi-gen A5–A7.
 
 LCGF fixes bugs Schemify finds at the root, on `main`: send them to the LCGF session with the commit and a repro.

@@ -9,8 +9,6 @@ add_executable(lcgf-cpp-check check.cpp)
 lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/toolbar.zon)
 lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/mixer.zon)
 lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/panel.zon)
-# examples/markup's HTML page, through lcgf-gen's HTML front end.
-lcgf_add_ui(lcgf-cpp-check ${LCGF_SPECS}/../../../examples/markup/ui/counter.html)
 
 # The GPU half: one frame recorded through lcgf/gpu.hpp into bindings/check/record.c's recorder.
 find_library(LCGF_RECORD lcgf_record PATH_SUFFIXES lib REQUIRED)
@@ -79,8 +77,6 @@ add_executable(lcgf-cpp-ct-check ct_check.cpp)
 foreach(_ui mixer card settings badge dash todo feed controls palette meter)
   lcgf_add_ui(lcgf-cpp-ct-check ${LCGF_SPECS}/static/${_ui}.zon STATIC)
 endforeach()
-# A page in the static subset, from its HTML (lcgf-gen page.html --static).
-lcgf_add_ui(lcgf-cpp-ct-check ${LCGF_SPECS}/../../../tools/lcgf-gen/markup/testdata/seam/volume.html STATIC)
 
 # The runtime front end from C++: bench/scenes' scenes, compared with Zig's frames.
 add_executable(lcgf-cpp-rt-check rt_check.cpp)

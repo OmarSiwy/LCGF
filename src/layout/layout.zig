@@ -109,7 +109,7 @@ pub fn fitSpan(t: anytype, axis: Axis, first: u32, last: u32) void {
 /// The rows past `last` that `fitOf` clears with whole vectors were folded by an earlier piece
 /// (grid.zig), so their sums are kept around it. `opts` as `fitFlexOpts`.
 // ponytail: saved and restored rather than an exact clear in fitOf, which moved stack slots in
-// every page's frame (markup-zero-cost).
+// every frame.
 pub fn fitSpanFlex(t: *Tree, fx: *const Flex, axis: Axis, first: u32, last: u32, comptime opts: FlexOptions) void {
     const a = @backingInt(axis);
     const tail = simd.padded(last) - last;

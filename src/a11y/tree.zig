@@ -644,7 +644,7 @@ test "types.Role: every tag a front end writes reads back as the a11y role of it
     inline for (@typeInfo(types.Role).@"enum".field_names) |name| {
         try testing.expectEqualStrings(name, roleName(@backingInt(@field(types.Role, name))));
     }
-    // The document and widget roles the markup compiler emits (markup-engine-api.md F1).
+    // The document and widget roles.
     inline for (.{ .link, .separator, .list, .list_item, .table, .row, .cell, .column_header, .row_header, .dialog, .status }) |r| {
         try testing.expectEqual(@backingInt(@as(Role, r)), @backingInt(@as(types.Role, r)));
     }

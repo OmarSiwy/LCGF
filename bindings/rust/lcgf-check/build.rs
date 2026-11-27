@@ -12,7 +12,6 @@ fn main() {
         ] {
             lcgf_build::static_ui(&format!("static/{ui}.zon"));
         }
-        lcgf_build::static_ui("../../../tools/lcgf-gen/markup/testdata/seam/volume.html");
     }
     let prefix = std::env::var("LCGF_PREFIX").expect("LCGF_PREFIX");
     println!("cargo::rerun-if-env-changed=LCGF_PREFIX");

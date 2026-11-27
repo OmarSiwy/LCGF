@@ -1,9 +1,0 @@
-textcss.html:5:13: error: 'color' on <label> is not lowered: the control draws its text in the theme's style
-    .loud { color: #f00; }
-            ^
-textcss.html:6:13: error: 'font-size' on <input> is not lowered: the control draws its text in the theme's style
-    #name { font-size: 20px; }
-            ^
-textcss.html:7:14: error: 'line-height' on a <button> is not lowered: its caption is one line
-    button { line-height: 2; }
-             ^

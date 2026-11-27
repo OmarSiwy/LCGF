@@ -80,8 +80,6 @@ add_executable(app main.cpp)
 lcgf_add_ui(app mixer.zon)             # runs lcgf-gen: mixer.lcgf.hpp; links liblcgf
 ```
 
-`lcgf_add_ui(app page.html)` takes an HTML page instead (docs/guide/markup.md, "C++ and Rust").
-
 ```cpp
 #include "mixer.lcgf.hpp"
 
@@ -99,8 +97,7 @@ say. You can read and write `ui.state` directly between frames.
 ## Rust (2024 edition, cargo)
 
 Depend on `bindings/rust/lcgf` and set `LCGF_PREFIX=/opt/lcgf` for the build. The `ui!` macro
-takes the spec as Rust tokens; `include_ui!("mixer.zon")` takes the file, and
-`include_ui!("page.html")` an HTML page (docs/guide/markup.md, "C++ and Rust"). All run `lcgf-gen`
+takes the spec as Rust tokens; `include_ui!("mixer.zon")` takes the file. Both run `lcgf-gen`
 while the crate compiles:
 
 ```rust
@@ -227,7 +224,7 @@ argument moves the label, so `relayout<Field::level>()` covers it.
 
 A UI whose rows are all known from its spec (rows, columns, labels, checkboxes and sliders,
 and the regions `when`, `list`, `choice` and `virtual_list`, whose rows are reserved; no
-buttons or custom draws; or an HTML page in that subset, docs/guide/markup.md) can use Zig's
+buttons or custom draws) can use Zig's
 comptime pipeline instead of the widgets' tables:
 `ct_layout` folds every subtree whose layout does not depend on the viewport, `ct_paint`
 paints from one quad template per node, and `ct_events` hit-tests the widgets.

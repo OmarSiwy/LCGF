@@ -3831,7 +3831,7 @@ Shapers by font index, and scratch for one paragraph.
 
 Fields: `shapers`, `cache`, `font_ids`, `font_generations`, `run`, `g`, `l`, `bidi`, `direction`, `paragraphs`, `default_paragraph`, `normalization`, `fallback`, `rich`, `paint_colors`, `span_px`, `px`, `text`, `normalized`, `ellipsis_glyph`, `ellipsis_font`, `ellipsis_px`, `overflow`
 
-- `fn style(st: *Stack, tx: *const Texts, s: protocol.Styled, rows: StyledRows) error{NoSpace}!void`: Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as `spec.paragraph`, `spec.spans` and the markup lower to): each listed row's paragraph, and for a run with spans a rich row whose first span is the run's own style.
+- `fn style(st: *Stack, tx: *const Texts, s: protocol.Styled, rows: StyledRows) error{NoSpace}!void`: Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as `spec.paragraph` and `spec.spans` lower to): each listed row's paragraph, and for a run with spans a rich row whose first span is the run's own style.
 - `fn decorate(st: *Stack, tx: *const Texts, strings: *const Strings, s: protocol.Styled, d: *DrawList, rects: []Rect) void`: After `paint.emit`: the decorations of `s`'s decorated runs as solid quads right after each run's text (`protocol.insertAfter`), each run laid out again as drawn (`paragraph`) and decorated by `text_decorations.quads` with its face's metrics.
 - `fn serves(st: *const Stack, tx: *const Texts, k: usize) bool`: Whether this stack measures row `k`.
 - `fn layoutAt(st: *Stack, tx: *const Texts, strings: *const Strings, k: usize, width: f32) error{NoSpace}!void`: Lays row `k` of `tx` out into the scratch (`g`, `l`), start aligned, broken at `width`: shaped with its font at its size, then `lines.breakLines`, `lines.place` and, with `bidi`, `lines.reorder`.
@@ -8552,7 +8552,7 @@ Interop between the two front ends (tier 1): a runtime `Frame` inside a region o
 ### Top level
 
 - `fn region(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region: an empty column named `id` whose content another front end builds.
-- `fn fitRegion(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region sized by its content (markup E1): on each axis whose `style` size is `fit`, it takes the size its owner measured last (`setFit`).
+- `fn fitRegion(comptime id: @EnumLiteral(), comptime style: Style) Spec`: A region sized by its content: on each axis whose `style` size is `fit`, it takes the size its owner measured last (`setFit`).
 - `fn FitRegion(comptime name: [:0]const u8) type`: The `Spec.widget` of a `fitRegion` named `name`.
 - `fn setFit(ui: anytype, comptime id: @EnumLiteral(), size: [2]f32) bool`: Records the content size `size` of the `fitRegion` named `id` in comptime UI `ui`, for its next frame.
 - `fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec`: A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.

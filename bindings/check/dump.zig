@@ -2,14 +2,12 @@
 //! its draw lists written in the dump format the C++ and Rust checks write too. Equal files
 //! mean the three languages drew the same frames.
 //!
-//!   lcgf-dump <toolbar|mixer|panel|counter> <comptime|seam> <inputs.txt> <out.bin>
-//!   lcgf-dump <toolbar|mixer|panel|counter> <comptime|seam> <inputs.txt> --bench   (ns per frame)
+//!   lcgf-dump <toolbar|mixer|panel> <comptime|seam> <inputs.txt> <out.bin>
+//!   lcgf-dump <toolbar|mixer|panel> <comptime|seam> <inputs.txt> --bench   (ns per frame)
 //!   lcgf-dump sizes
 //!
 //! `comptime` runs `ComptimeUi` (the spec unrolled by the Zig compiler, no seam). `seam` runs
-//! the same tables through the prebuilt frame. `counter` is examples/markup's HTML page:
-//! `comptime` its Zig spec-frontend module, `seam` the `.zon` lcgf-gen lowers it to, expanded
-//! and planned here at run time as lcgf-gen does for C++ and Rust. Inputs are one frame per line on an 800 x 600
+//! the same tables through the prebuilt frame. Inputs are one frame per line on an 800 x 600
 //! viewport: `x y buttons [tabs]` (pointer in logical pixels, buttons as bits, Tab presses),
 //! or `set <field> <value>` to write a u32 or enum field of the panel before the next frame.
 
@@ -24,8 +22,6 @@ const DrawList = lcgf.draw_list.DrawList;
 const Toolbar = base.Reference(.default);
 const MixerUi = base.ComptimeUi(zon.MixerState, zon.mixer_spec, .default);
 const PanelUi = base.ComptimeUi(zon.PanelState, zon.panel_spec, .default);
-const counter_ui = @import("counter_ui");
-const counter_zon: zon.ZSpec = @import("counter_zon");
 
 /// Each UI twice: through the Zig compiler and through the seam.
 const Uis = struct {
@@ -35,55 +31,9 @@ const Uis = struct {
     var toolbar_seam: seam.SeamUi(Toolbar.State, Toolbar.spec, .default) = .{};
     var mixer_seam: seam.SeamUi(zon.MixerState, zon.mixer_spec, .default) = .{};
     var panel_seam: seam.SeamUi(zon.PanelState, zon.panel_spec, .default) = .{};
-    var counter_ct: counter_ui.Ui = .{};
-    var counter_seam: *seam.Ui = undefined;
-    var counter_state: []u8 = undefined;
-    var counter_fields: []const lcgf.abi_plan.Field = &.{};
 };
 
-/// `set <field> <value>` on the counter page, both ways: an f32 or u32 field.
-fn setCounter(field: []const u8, value: u32) !void {
-    const f = for (Uis.counter_fields) |f| {
-        if (std.mem.eql(u8, f.name, field)) break f;
-    } else return error.UnknownField;
-    const at = Uis.counter_state[f.offset..][0..4];
-    if (std.mem.eql(u8, field, "count")) {
-        const v: f32 = @floatFromInt(value);
-        Uis.counter_ct.signals.set(.count, v);
-        at.* = std.mem.toBytes(v);
-        return;
-    }
-    if (std.mem.eql(u8, field, "clicks")) {
-        Uis.counter_ct.signals.set(.clicks, value);
-        at.* = std.mem.toBytes(value);
-        return;
-    }
-    return error.UnknownField;
-}
-
-const Which = enum { toolbar, mixer, panel, counter };
-
-/// The counter page's tables and state struct, from its `.zon` (strings point into it).
-fn counterInit(arena: std.mem.Allocator) !void {
-    const x = try zon.expand(arena, counter_zon);
-    const words = try zon.tables(arena, &x);
-    const buf = try arena.alignedAlloc(u8, .fromByteUnits(lcgf.mem.column_align), try seam.Ui.bytes(words));
-    Uis.counter_seam = try seam.Ui.init(words, buf);
-    const st = lcgf.abi_plan.layoutState(x.fields);
-    Uis.counter_fields = x.fields;
-    Uis.counter_state = try arena.alignedAlloc(u8, .@"16", st.size);
-    for (counter_zon.state, x.fields) |z, f| {
-        const at = Uis.counter_state[f.offset..];
-        if (z.str) |v| {
-            @memcpy(at[0..@sizeOf(usize)], std.mem.asBytes(&@intFromPtr(v.ptr)));
-            @memcpy(at[@sizeOf(usize)..][0..@sizeOf(usize)], std.mem.asBytes(&v.len));
-        } else if (z.bool) |v| {
-            at[0] = @intFromBool(v);
-        } else if (z.f32) |v| {
-            @memcpy(at[0..4], std.mem.asBytes(&v));
-        } else if (z.u32) |v| @memcpy(at[0..4], std.mem.asBytes(&v)) else return error.UnknownField;
-    }
-}
+const Which = enum { toolbar, mixer, panel };
 
 const Frame = struct { draw: *const DrawList, widget: u32, focus: u32, wake: f32 };
 
@@ -94,7 +44,6 @@ fn frame(which: Which, via_seam: bool, in: *const Input) Frame {
             .toolbar => Uis.toolbar_seam.frame(in),
             .mixer => Uis.mixer_seam.frame(in),
             .panel => Uis.panel_seam.frame(in),
-            .counter => Uis.counter_seam.frame(Uis.counter_state.ptr, in),
         };
         return .{ .draw = o.draw, .widget = o.widget, .focus = o.focus, .wake = o.wake };
     }
@@ -104,7 +53,6 @@ fn frame(which: Which, via_seam: bool, in: *const Input) Frame {
                 .toolbar => &Uis.toolbar_ct,
                 .mixer => &Uis.mixer_ct,
                 .panel => &Uis.panel_ct,
-                .counter => &Uis.counter_ct,
             };
             const E = @TypeOf(ui.*).Events;
             const o = ui.frame(in);
@@ -150,7 +98,6 @@ pub fn main(init: std.process.Init) !void {
     try Uis.toolbar_seam.init();
     try Uis.mixer_seam.init();
     try Uis.panel_seam.init();
-    try counterInit(arena);
 
     var lines: std.ArrayList(Line) = .empty;
     var it = std.mem.tokenizeScalar(u8, inputs, '\n');
@@ -191,7 +138,6 @@ pub fn main(init: std.process.Init) !void {
     for (lines.items) |*l| switch (l.*) {
         .set => |s| switch (which) {
             .panel => try set(s.field, s.value),
-            .counter => try setCounter(s.field, s.value),
             else => {},
         },
         .frame => |*in| try dump(arena, &out, frame(which, via_seam, in)),

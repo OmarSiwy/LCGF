@@ -7,9 +7,9 @@
 //!
 //! Runtime: `image.image(f, th, pic, .{})`. Comptime: `image.ct.image(th, pic, .{})`.
 //!
-//! A picture decoded when the program is built (lcgf-gen's asset table for `<img src>`,
-//! or `embed.embed`) is an `Asset`: its pixels in read-only data and the texture the
-//! application uploads them as; `Asset.picture` is the `Image` the widget shows.
+//! A picture decoded when the program is built (`embed.embed`) is an `Asset`: its pixels in
+//! read-only data and the texture the application uploads them as; `Asset.picture` is the
+//! `Image` the widget shows.
 
 const std = @import("std");
 const base = @import("base.zig");

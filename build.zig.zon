@@ -2,14 +2,6 @@
     .name = .lcgf,
     .version = "0.0.0",
     .dependencies = .{
-        // Lexbor 3.0.1: HTML5 tree construction and CSS tokenization for the markup compiler
-        // (tools/lcgf-gen/markup/). Host only, never linked into an application; fetched only
-        // when lcgf-gen is built with it.
-        .lexbor = .{
-            .url = "https://github.com/lexbor/lexbor/archive/refs/tags/v3.0.1.tar.gz",
-            .hash = "N-V-__8AABbVvAJ6W3IAOXu1CuKXDihBIiJuvDPd8NDcYyWf",
-            .lazy = true,
-        },
         .ucd = .{
             .url = "https://www.unicode.org/Public/16.0.0/ucd/UCD.zip",
             .hash = "N-V-__8AALTJcQJ3hosujokSgxYTsa3q1mDZ2dasYhuJwaOV",

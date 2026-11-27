@@ -789,7 +789,7 @@ pub const Frame = struct {
     /// `finish`, painting in the stacking-layer order of `layers`, whose rows go back to layer
     /// 0 afterwards.
     // ponytail: a copy of `finish`. Folding the two into one function, even an inline one,
-    // grew every runtime page's .text by 64 B (ci/run.sh markup-zero-cost).
+    // grew every runtime frame's .text by 64 B.
     fn finishLayered(f: *Frame, layers: *overlay.Layers) Output {
         const ctx = f.ctx;
         const t = f.tree();

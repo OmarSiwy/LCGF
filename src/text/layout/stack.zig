@@ -166,7 +166,7 @@ pub const Stack = struct {
     overflow: bool = false,
 
     /// Points the stack at the styled runs `s` (the description `MonoParagraphs` measures, as
-    /// `spec.paragraph`, `spec.spans` and the markup lower to): each listed row's paragraph,
+    /// `spec.paragraph` and `spec.spans` lower to): each listed row's paragraph,
     /// and for a run with spans a rich row whose first span is the run's own style. Rows not
     /// listed take `default_paragraph`. Call after the tree is built and before `measure`;
     /// `rows` must outlive the frame's measure, wrap and drawing. NoSpace leaves the stack

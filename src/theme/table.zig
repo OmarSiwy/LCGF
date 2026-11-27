@@ -2,7 +2,7 @@
 //! compiled page reads while it builds (lengths, font sizes, radii, spacing, colours), with a
 //! generation that every change bumps, so a page that saw another generation lays out again.
 //! Tier 2: plain data, no allocation. `Tokens` is a struct of the token values with their
-//! defaults; lcgf-gen generates it from a page's `--t-*` custom properties.
+//! defaults.
 //!
 //!     var tokens: ThemeTable(page.Tokens) = .{};
 //!     page_ui.tokens = &tokens;
