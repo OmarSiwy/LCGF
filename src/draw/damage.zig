@@ -168,6 +168,28 @@ inline fn hashInto(t: *const Tree, tx: *const Texts, cu: *const Customs, strings
         };
         const text = strings[tx.c.start[k]..][0..tx.c.bytes[k]];
         out[n] ^= @truncate(std.hash.Wyhash.hash(std.hash.Wyhash.hash(1, std.mem.asBytes(&run)), text));
+        if (@TypeOf(bounds) != @TypeOf(null)) {
+            // A run is clipped by its parent, not its node (`paint.emit`): its measured extent,
+            // from the content box's corner, may reach past the node, and repaints with it.
+            const x0 = c.rect[0][n] + c.pad_lo[0][n];
+            const y0 = c.rect[1][n] + c.pad_lo[1][n];
+            const box = geometry.paintBounds(
+                .{ x0, y0, x0 + tx.c.w[k], y0 + tx.c.h[k] },
+                @splat(0),
+                geometry.nodeWorld(t, n),
+                geometry.nodeClip(t, n),
+            );
+            const node: V4 = .{ bounds[0][n], bounds[1][n], bounds[2][n], bounds[3][n] };
+            const lo = @min(node, @as(V4, box));
+            const hi = @max(node, @as(V4, box));
+            const both: V4 = .{ lo[0], lo[1], hi[2], hi[3] };
+            // A union only of what has area: an empty side's corners are not a box.
+            const has_node: @Vector(4, bool) = @splat(geometry.hasArea(node));
+            const has_box: @Vector(4, bool) = @splat(geometry.hasArea(box));
+            const either = @select(f32, has_node, both, @as(V4, box));
+            const pick: [4]f32 = @select(f32, has_box, either, node);
+            inline for (0..4) |e| bounds[e][n] = pick[e];
+        }
     }
     for (0..cu.len) |k| {
         const draw = extern struct { data: u64, id: u32, _pad: u32 = 0 }{ .data = cu.c.data[k], .id = cu.c.id[k] };
@@ -329,6 +351,8 @@ const Scene = struct {
         ok_width: f32 = 40,
         open_fill: Color = .rgb(40, 40, 40),
         label: []const u8 = "hello",
+        /// The label run's measured width; past 40 its glyphs overflow the label's node.
+        label_w: f32 = 40,
         view_data: u64 = 7,
         panel_fill: Color = .rgb(20, 20, 20),
     };
@@ -350,9 +374,12 @@ const Scene = struct {
         ok_style.size[0] = .px(e.ok_width);
         _ = t.push(bar, Id.from("ok"), &ok_style);
         t.seal(bar);
-        const label = t.push(0, Id.from("label"), &.{ .pad = @splat(2) });
+        const label = t.push(0, Id.from("label"), &.{
+            .size = .{ .px(44), .px(14) },
+            .pad = @splat(2),
+        });
         t.c.text[label] = sc.tx.push(label, sc.s.add(e.label), &.{ .px = 10 });
-        sc.tx.c.w[0] = 40;
+        sc.tx.c.w[0] = e.label_w;
         sc.tx.c.h[0] = 10;
         const view = t.push(0, Id.from("view"), &.{ .size = .{ .px(100), .px(100) } });
         t.c.custom[view] = sc.cu.push(view, Id.from("view"), e.view_data);
@@ -672,6 +699,23 @@ test "damage: scattered changes stay within four rects that cover every changed 
     for (tr.dm.list[0..tr.dm.dirty_len]) |r| try testing.expect(covered(&tr.dm.region, sc.t.rect(r).array()));
     // Still less than the window.
     try testing.expect(tr.dm.region.pixels() < 400 * 300);
+}
+
+test "damage: a text run that overflows its node repaints where its glyphs were and are" {
+    var tr: Tracker = .{};
+    tr.init();
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    _ = tr.frame(&buf, .{ .label_w = 140 });
+    const sc = tr.frame(&buf, .{ .label = "hellO", .label_w = 140 });
+    // The run starts inside the node's padding and runs 100 px past the node's right edge:
+    // its parent (the window) clips it, not the node.
+    const node = sc.t.rect(5);
+    try testing.expect(covered(&tr.dm.region, .{
+        node.x0 + 2,
+        node.y0 + 2,
+        node.x0 + 142,
+        node.y0 + 12,
+    }));
 }
 
 test "damage: random edits over many frames, every changed node's old and new rect is covered" {

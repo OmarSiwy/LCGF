@@ -86,8 +86,8 @@
   },
   "p_damage_frame": {
     "back": 8,
-    "jcc": 15,
-    "short_fwd": 1
+    "jcc": 16,
+    "short_fwd": 0
   },
   "p_depth_order": {
     "back": 2,

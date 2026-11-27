@@ -109,9 +109,10 @@ pub const Update = struct {
 /// Text geometry is cached independently of quad colors, so hover/focus changes reuse glyphs.
 ///
 /// Not `Context.trackDamage`, which the shells use: that hashes nodes and repaints their
-/// bounds, and a text run is clipped by its parent, not its node, so Mono glyphs that overflow
-/// a text node's rect would stay stale; it also culls the list this host's underlay and custom
-/// hooks draw from. Both feed the same upload, `x11.Window.presentPixelsRegions`.
+/// bounds and their text runs' measured extent, but `Mono.quads` wraps a run at its node's
+/// width even when layout did not wrap it, and those lines below the extent would stay stale;
+/// it also culls the list this host's underlay and custom hooks draw from. Both feed the same
+/// upload, `x11.Window.presentPixelsRegions`.
 pub const Incremental = struct {
     quads: []Quad,
     runs: []TextRun,
