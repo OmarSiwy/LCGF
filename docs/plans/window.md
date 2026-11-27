@@ -11,17 +11,6 @@ agent's.
 3. Which back end draws the widgets (software or a GPU API) is not in application code. A
    build option chooses (`-Drender=`), and `LCGF_RENDER=sw` overrides at run time.
 
-Today the parts exist and nothing joins them:
-
-- `lcgf_render.gpu` is the WebGPU-shaped interface, on six GPU back ends
-  (`docs/guide/gpu.md`), and `-Drender=` picks one back end per build.
-- `lcgf_app.run` (`src/app/app.zig`) draws in software on Linux and Windows, skips custom
-  draws, uses the bitmap font and never turns damage on.
-- `src/example/host.zig` is a second, software-only application layer with its own hooks.
-  Schemify copied it.
-- No GPU back end keeps a picture: `vk.setup.Window.draw` clears and redraws everything, so
-  widgets and a custom draw always redraw together.
-
 ## The contract
 
 `lcgf_app` owns the shell, the device, the swapchain, the fonts and the pacing. An application
@@ -109,20 +98,12 @@ Every stage ends with `zig build test fmt lint`, `ci/run.sh census-src` and `ci/
 passing, and the job named in its row. `docs` compares `docs/api/API.md` with the index
 `zig build docs` generates, so a commit that changes a public declaration regenerates it.
 
-| # | Agent, branch | Work | Done when |
-|---|---|---|---|
-| 0 | `land`, `plan/land` | Rebase onto `main` and gate the commits that never landed: `saved/land-deletions` (23c98c03 HTML and CSS removed, ce372404 C ABI and C++/Rust removed, 2b2d1e69) and `saved/frame-data` (a1603851, 26cb5feb). Remove what `main` has since added that refers to removed things. | No removed path is referred to; the gates pass. |
-| 1 | `window-sw`, `plan/window-sw` | The software window is complete. Schemify's report of 2026-11-27: under `trackDamage`, `x11.Window.present` leaves a canvas node empty, cannot take the application's images (texture 1 panics), and its text texture defaults to white. Fix each at its root. The shells stop making glyphs and choosing images: the caller passes both to `present`. `lcgf_app` turns damage on and takes the application's images in a form with no back end in it. | On Xvfb (`x11`): a canvas under damage shows its new camera and only its rectangle is uploaded; an application image draws; an idle second presents nothing. |
-| 2 | `window-gpu`, `plan/window-gpu` | The Vulkan window keeps its picture: `begin` and `present` on `vk.setup.Window`, the pass scissored to damage, rows kept on the GPU, the region recorded without the cull. | `x11-gpu` on lavapipe: T1 below; a resize; an out-of-date swapchain. |
-| 3 | `window-gpu` | `lcgf_app` on the GPU: X11 with Vulkan on Linux, `Surface`, `draw`, the application's images, the fallback and `LCGF_RENDER`. A Wayland session uses X11 through XWayland when `DISPLAY` is set, until stage 8. `examples/surface`. A guide page. | T2, T3, T4 below, on lavapipe. |
-| 4 | `app-text`, `plan/app-text` | `lcgf_app` draws text with real fonts at the screen's scale: the application's font files (`Options.fonts`), else the system's default faces (`src/text/fallback/system.zig`), else the bundled bitmap font. `text_stack.Stack` measures and wraps, `raster` fills `raster_atlas` at physical pixels, and the atlas reaches the back end as dirty rects. | A golden paragraph at scales 1, 1.25 and 2: proportional, with `∞ … ·`, 0 bad pixels against a reference rasterization. |
-| 5 | `app-text` | Canvas text stays sharp under zoom. Measure a distance-field atlas (`src/text/raster/sdf.zig`) against rasterizing again at the settled size, and keep one. | A canvas label golden at camera scales 0.5, 1, 2, 4 and 8, on `sw` and on Vulkan, with an edge no wider at 8 than at 1. |
-| 6 | `scale-pace`, `plan/scale-pace` | The X11 software path paces to the display's refresh rate, read from RandR, not to 60 Hz. Goldens at scales 1 and 2. A test for scale detection on Wayland (integer and fractional) and on the web, where one is missing. | A recorded RandR reply for a 120 Hz mode gives 1/120 s. The golden jobs pass at both scales. |
-| 7 | later | Every example runs through `lcgf_app`. `src/example/host.zig`'s `Incremental` and `src/example/window.zig` are deleted. `docs/DESIGN.md` and the guides say what is true. | Nothing imports the deleted files. |
-| 8 | later | Win32 with Direct3D 12; the picture on Metal; the GPU on Wayland (the shell has no libwayland, so a Vulkan surface cannot be made over it: dmabuf buffers on the shell's own connection); GL ES; the web. | |
+Stages 0 to 6 are on `main` ("Landed", below). What is open:
 
-Stages 0, 1, 2, 4 and 6 start together. Stage 3 and the wiring of stage 4 start when stage 1
-is on `main`: until then only `window-sw` edits `src/app/app.zig` and the shells' `present`.
+| # | Work | Done when |
+|---|---|---|
+| 7 | Every example runs through `lcgf_app` with the default back end: the standalone projects (`buildDesktopExample` builds them with `-Drender=sw`, on `src/example/host.zig` and `src/example/window.zig`), and `dashboard`, `viewport` and `texture` drawing through `render_sw` types. `src/example/host.zig`'s `Incremental` and `src/example/window.zig` are deleted once Schemify confirms the `lcgf_app` path. An App hook that presents a draw list the application composed (a compiled page with runtime regions). Canvas labels in real fonts through `lcgf_app` (`text.labels`, which its window does not run yet). | Nothing imports the deleted files; no example names a back end. |
+| 8 | Win32 with Direct3D 12; the picture on Metal; the GPU on Wayland (the shell has no libwayland, so a Vulkan surface cannot be made over it: dmabuf buffers on the shell's own connection); GL ES; the web. | |
 
 ## Tests that show the contract
 
@@ -154,3 +135,35 @@ lavapipe and on the machine's GPU where its display can be reached.
 - Rebase onto `main` before you report. `main` moves while you work.
 - Report: the commits, each gate's last lines of output, measurements with their conditions,
   every place you left this plan and why, and what you did not do.
+
+## Landed (on `main`)
+
+| What | Commits |
+|---|---|
+| 0: the HTML and CSS front end, the C ABI and the C++ and Rust bindings removed; the comptime page and compose commits that waited with them | 3d34ccab, 93d852d5, d4c11b3a, 7660397f, 7ee7af5f |
+| 1: the software window. The shells' `presentWith(out, glyphs, images)`; a text run that overflows its node damages where its glyphs reach; `lcgf_app` turns damage on and takes `App.images`; a composed page carries the union of both sides' damage (`ComptimeUi.recordDamage`) | cf48077d, 642d05ca, e97e7648, 367ce9a4 |
+| 2: the Vulkan window keeps its picture. A Vulkan surface over an X window; `Context.trackDamageWhole`; `vk.setup.Window.begin` and `present`, rows kept on the GPU; a window that is not shown gives its frame up (`error.NotShown`); canvases cut to the damage rect | 596c14b9, 524a03b1, b6affe8e, c1edb04b, 01522df2 |
+| 3: `lcgf_app` on the GPU: X11 with Vulkan, `Surface`, `draw`, images, the fallback and `LCGF_RENDER`; `examples/surface`; docs/guide/surface.md | c1d2a006, 71cae28e |
+| 4: the text service (src/app/text.zig): the application's fonts, else system faces, else the bitmap font, at the window's scale, runs kept across frames; wired into `lcgf_app` | 758e1ca6, 1870469e, 8a089b59, fa7716b9, 2fa81980, c2b5bd89, 644d4791 |
+| 5: canvas labels over a distance atlas (src/app/labels.zig, `bit.distance`), chosen by bench/micro/canvastext.zig; golden `labels` at camera scales 0.5 to 8 | 9a067b4b, 40cf51f2, 3b22a4c4, 9d1c1fa0 |
+| 6: X11 pacing at RandR's refresh rate; scale tests on Wayland and the web; goldens at scale 2 (tools/golden/ref/draw-2x); also `Connection.overrideScale` and the screen's size from RandR | 612c4550, 9265b3e1, 79faee36, ea96b956, 69f50853, 5abf1b7f, 25f7ffc3, 9b062620 |
+
+Measured on main 71cae28e, ReleaseFast, calling-thread CPU time per frame, 300 frames a mode:
+
+- llvmpipe on Xvfb, `LCGF_APP_GPU_BENCH`, a 2560 x 1440 window of 32 x 24 bordered cells under
+  an 800 x 600 surface: a surface frame 53 µs (3.9 ms wall), 0 builds; a widget frame 192 µs
+  (2.9 ms wall), 0 draws; an idle second 0 frames, 33 µs.
+- NVIDIA GeForce RTX 5060 (driver 595), X11 through Xwayland on a 2560 x 1440 display at
+  59.91 Hz. Through `lcgf_app` (`zig build app-test` with `LCGF_APP_GPU_BENCH`, 768 bordered
+  cells under an 800 x 600 surface): a surface frame 255 µs, 0 builds; a widget frame (one cell
+  changes) 362 µs, 0 surface draws; an idle second 0 frames; 16.35 ms wall a frame, the
+  display's refresh (FIFO); 20 tests passed, 1 skipped. At the Vulkan window alone (`zig build
+  x11-gpu` with `LCGF_X11_GPU_BENCH`, 768 quads): the old whole redraw into the swapchain image
+  150 µs; a whole redraw into the picture 140 µs; no new list and nothing damaged 127 µs; no
+  new list with a 400 x 300 rect damaged 161 µs; one small damage rect with a new list 175 µs,
+  plus 122 µs for its build, layout and paint; 5 tests passed.
+
+On that driver a presented frame costs about 130 µs of submit and present whatever is drawn,
+so the kept picture does not lower the CPU time of a presented frame. What it saves is the
+build, layout and paint a surface frame no longer runs, and the `draw` a widget frame no longer
+calls. GPU time was not measured.
