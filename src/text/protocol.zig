@@ -46,6 +46,53 @@ pub const Mono = struct {
     /// Mono's glyph atlas: a 16 x 16 grid of cells indexed by byte.
     pub const atlas: Atlas = .{};
 
+    /// The characters of the cells 0x80 to 0x9f in the bundled bitmap fonts
+    /// (`render_sw_font`, the examples' atlas): Windows-1252's, with the infinity sign in 0x81.
+    /// 0 is a byte with no character. The cells from 0xa0 on are the code points of the same
+    /// number, and the ones below 0x80 are ASCII.
+    pub const high_cells = [32]u21{
+        0x20ac, 0x221e, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
+        0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0,      0x017d, 0,
+        0,      0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+        0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0,      0x017e, 0x0178,
+    };
+
+    /// UTF-8 `text` as the bytes that show it in the bundled bitmap fonts, one byte and one
+    /// cell per character: ASCII as it is, a control character as a space, a character with a
+    /// cell (`high_cells`, Latin-1) as that cell's byte, and any other character, or a byte
+    /// that is not UTF-8, as '?'. `Mono` is a byte to a cell, so text with characters past
+    /// ASCII goes through here before `Frame.text`; a shaper takes the UTF-8 itself. Returns
+    /// the part of `out` written, cut at `out.len`.
+    pub fn encode(text: []const u8, out: []u8) []u8 {
+        var n: usize = 0;
+        var i: usize = 0;
+        // Ends at the end of `text` or of `out`: a turn takes at least one byte of `text`.
+        while (i < text.len and n < out.len) : (n += 1) {
+            const len: usize = std.unicode.utf8ByteSequenceLength(text[i]) catch 0;
+            // Not the first byte of a character, or one cut short by the end of the text.
+            if (len == 0 or i + len > text.len) {
+                out[n] = '?';
+                i += 1;
+                continue;
+            }
+            const point: u21 = std.unicode.utf8Decode(text[i..][0..len]) catch 0xfffd;
+            i += len;
+            out[n] = cellOf(point);
+        }
+        return out[0..n];
+    }
+
+    /// The byte whose cell shows `point` in the bundled bitmap fonts, or '?'.
+    pub fn cellOf(point: u21) u8 {
+        if (point < ' ' or point == 0x7f) return ' ';
+        if (point < 0x7f) return @intCast(point);
+        if (point >= 0xa0 and point <= 0xff) return @intCast(point);
+        for (high_cells, 0x80..) |high, byte| {
+            if (high == point) return @intCast(byte);
+        }
+        return '?';
+    }
+
     /// SIMD. Single-line extent of every run. Reads `bytes`, `px`; writes `w`, `h`.
     /// Rows past `tx.len` up to the padding are written too; they are never read.
     pub fn measure(font: Mono, tx: *Texts) void {
@@ -553,8 +600,10 @@ const FullGrid = struct {
 
 /// Where each byte's glyph sits in a bitmap font atlas: `columns` x `rows` equal cells, each
 /// `cell` of the texture in UV, holding the bytes from `first` to `last` in order, row by row.
-/// Another byte shows `missing`'s cell. A host passes its font's descriptor to whatever maps
-/// bytes to cells (`canvas.Instances.glyphs`); the default is `Mono`'s full 16 x 16 grid.
+/// Another byte shows `missing`'s cell, or the space's when it is a control byte and the atlas
+/// has a space: a tab or a newline in a line of text is blank. A host passes its font's
+/// descriptor to whatever maps bytes to cells (`canvas.Instances.glyphs`); the default is
+/// `Mono`'s full 16 x 16 grid.
 pub const Atlas = struct {
     columns: u8 = 16,
     rows: u8 = 16,
@@ -570,7 +619,9 @@ pub const Atlas = struct {
 
     /// The UV rect (u0, v0, u1, v1) of `byte`'s cell.
     pub fn uv(a: Atlas, byte: u8) [4]f32 {
-        const shown = if (byte >= a.first and byte <= a.last) byte else a.missing;
+        const blank = byte < ' ' and a.first <= ' ' and a.last >= ' ';
+        const other: u8 = if (blank) ' ' else a.missing;
+        const shown = if (byte >= a.first and byte <= a.last) byte else other;
         const index: u32 = shown -% a.first;
         const x: f32 = @floatFromInt(index % a.columns);
         const y: f32 = @floatFromInt(index / a.columns);
@@ -735,6 +786,36 @@ test "the protocol is columns: a caller can measure by hand" {
     tx.c.avail[k] = 10;
     try testing.expectEqual(1, tx.c.wrap[k]);
     try testing.expectEqual(18, tx.c.w[k]);
+}
+
+test "Mono.encode: UTF-8 as the bundled fonts' cell bytes, one for each character" {
+    var buf: [32]u8 = undefined;
+    try testing.expectEqualStrings("\x81 Agent", Mono.encode("\u{221e} Agent", &buf));
+    try testing.expectEqualStrings("Working\x85", Mono.encode("Working\u{2026}", &buf));
+    const dotted = Mono.encode("1 file \u{b7} 1 edit", &buf);
+    try testing.expectEqualStrings("1 file \xb7 1 edit", dotted);
+    const quoted = Mono.encode("caf\u{e9} \u{201c}x\u{201d}", &buf);
+    try testing.expectEqualStrings("caf\xe9 \x93x\x94", quoted);
+    // A control character is a space; a character with no cell, a byte that is not UTF-8 and
+    // a character cut short are each one '?'.
+    try testing.expectEqualStrings("a b?c??", Mono.encode("a\nb\u{4e2d}c\xff\xe2", &buf));
+    // Cut at the room there is.
+    try testing.expectEqualStrings("ab", Mono.encode("abc", buf[0..2]));
+    // Every cell with a character comes back from its character.
+    for (Mono.high_cells, 0x80..) |point, byte| {
+        if (point != 0) try testing.expectEqual(@as(u8, @intCast(byte)), Mono.cellOf(point));
+    }
+}
+
+test "Atlas.uv: a control byte outside the atlas shows the space, another byte the missing cell" {
+    const wide: Atlas = .grid(16, 14, ' ', 255);
+    try testing.expectEqual(wide.uv(' '), wide.uv('\n'));
+    try testing.expectEqual(wide.uv(' '), wide.uv('\t'));
+    const ascii: Atlas = .grid(16, 6, ' ', '~');
+    try testing.expectEqual(ascii.uv('?'), ascii.uv(0x85));
+    // Mono's own grid has a cell for every byte.
+    const full: Atlas = .{};
+    try testing.expect(!std.meta.eql(full.uv(' '), full.uv('\n')));
 }
 
 test "Mono.measure: bytes * px * advance wide, px * line tall, for every run" {

@@ -1155,6 +1155,8 @@ Fields: `advance`, `line`
 
 - `atlas: Atlas = .{}`: Mono's glyph atlas: a 16 x 16 grid of cells indexed by byte.
 - `Glyphs = struct { first: []u32, count: []u32 }`: Where glyph quads for run k landed in the output of `quads`.
+- `fn encode(text: []const u8, out: []u8) []u8`: UTF-8 `text` as the bytes that show it in the bundled bitmap fonts, one byte and one cell per character: ASCII as it is, a control character as a space, a character with a cell (`high_cells`, Latin-1) as that cell's byte, and any other character, or a byte that is not UTF-8, as '?'.
+- `fn cellOf(point: u21) u8`: The byte whose cell shows `point` in the bundled bitmap fonts, or '?'.
 - `fn measure(font: Mono, tx: *Texts) void`: SIMD.
 - `fn wrap(font: Mono, tx: *Texts) void`: SIMD.
 - `fn quads(font: Mono, d: *const DrawList, out: []Quad, glyphs: Glyphs) u32`: Expands the draw list's text runs into glyph quads for a 16x16 byte-indexed atlas: byte b samples cell (b & 15, b >> 4).
