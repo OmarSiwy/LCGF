@@ -24,6 +24,9 @@ const mem = lcgf.mem;
 const DrawList = lcgf.draw_list.DrawList;
 const TextRun = lcgf.draw_list.TextRun;
 const atlas = @import("font.zig");
+/// The bundled font: its coverage `image`, and `cells`, where each byte's glyph sits (a canvas
+/// label's `atlas`).
+pub const font = atlas;
 pub const Events = lcgf.shell_iface.Events;
 pub const CustomDraw = lcgf.draw_list.CustomDraw;
 
@@ -61,7 +64,8 @@ fn renderPrepared(app: anytype, gfx: *const sw.Software, fb: *sw.Framebuffer, d:
         .quads => |batch| gfx.drawBatch(pass, batch),
         .text => |run| text.drawText(pass, run),
         .custom => |row| if (@hasDecl(App, "drawCustom")) app.drawCustom(fb, &d.customs[row]),
-        .canvas => |row| if (comptime @hasDecl(sw.Software, "drawCanvas")) gfx.drawCanvas(pass, row),
+        // Canvas glyphs sample the glyph texture, which is the font's here as for text.
+        .canvas => |row| if (comptime @hasDecl(sw.Software, "drawCanvas")) text.drawCanvas(pass, row),
     };
 }
 

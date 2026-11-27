@@ -9,4 +9,5 @@ test {
     _ = @import("viewport/app.zig");
     _ = @import("texture/app.zig");
     _ = @import("mcu/app.zig");
+    _ = @import("canvas_text.zig");
 }
