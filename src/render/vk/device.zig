@@ -176,6 +176,9 @@ pub const ImageDesc = struct {
     format: c.VkFormat = c.VK_FORMAT_R8G8B8A8_UNORM,
     usage: c.VkImageUsageFlags,
     samples: c.VkSampleCountFlagBits = c.VK_SAMPLE_COUNT_1_BIT,
+    /// What the view reads each channel from: an R8 coverage atlas reads as white with its
+    /// byte as alpha with `.{ .r = ONE, .g = ONE, .b = ONE, .a = R }`.
+    components: c.VkComponentMapping = .{},
 };
 
 pub const Image = struct {
@@ -320,6 +323,7 @@ pub const Device = struct {
             .image = img.handle,
             .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
             .format = desc.format,
+            .components = desc.components,
             .subresourceRange = .{ .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1 },
         }, null, &img.view));
         return img;

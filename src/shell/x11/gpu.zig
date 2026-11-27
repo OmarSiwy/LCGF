@@ -10,7 +10,7 @@
 //! on any connection), and the Vulkan implementation presents over the second.
 //!
 //!     var g: Gpu = undefined;
-//!     try g.open(display, window.id, window.width, window.height);
+//!     try g.open(display, window.id, window.width, window.height, .{});
 //!     // g.setup: the device and renderer; g.target: the window's swapchain and frames
 //!     g.close();
 //!
@@ -114,14 +114,23 @@ pub const Gpu = struct {
 
     /// Vulkan for X window `window` of `display`, `width` x `height` physical pixels. An error
     /// leaves nothing open: no libxcb (`NoXcb`), no Vulkan loader (`NoLoader`), no device that
-    /// can present to the window (`NoDevice`), or the implementation's own.
-    pub fn open(g: *Gpu, display: []const u8, window: u32, width: u32, height: u32) !void {
+    /// can present to the window (`NoDevice`), or the implementation's own. `canvas` sizes
+    /// the canvas pipeline (`vk.Setup.Canvas`; none by default).
+    pub fn open(
+        g: *Gpu,
+        display: []const u8,
+        window: u32,
+        width: u32,
+        height: u32,
+        canvas: vk.Setup.Canvas,
+    ) !void {
         std.debug.assert(width > 0);
         std.debug.assert(height > 0);
         g.xcb = try .open(display);
         errdefer g.xcb.close();
         const target: Target = .{ .connection = g.xcb.connection, .window = window };
-        const surface = try g.setup.init("lcgf", &instance_extensions, target, createSurface);
+        const extensions = &instance_extensions;
+        const surface = try g.setup.init("lcgf", extensions, target, createSurface, canvas);
         errdefer g.setup.deinit();
         errdefer vk.swapchain.destroySurface(&g.setup.instance, surface);
         g.target = try .init(&g.setup, surface, .{ .width = width, .height = height });
@@ -189,7 +198,7 @@ const Fixture = struct {
         _ = fx.conn.send(16, overrideRedirect, .{fx.w.id});
         _ = fx.conn.send(wire.window_size, wire.onWindow, .{ wire.op.map_window, fx.w.id });
         try fx.conn.sync();
-        try fx.g.open(display, fx.w.id, fx.w.width, fx.w.height);
+        try fx.g.open(display, fx.w.id, fx.w.width, fx.w.height, .{});
         fx.ctx = try .init(&ctx_buffer, limits);
         fx.in = .{ .viewport = .{ @floatFromInt(width), @floatFromInt(height) } };
     }

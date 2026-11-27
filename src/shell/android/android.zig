@@ -515,7 +515,7 @@ pub const Android = struct {
         const surface = if (s.gpu) |*g| try createSurface(&g.instance, window) else blk: {
             s.gpu = @as(Gpu, undefined);
             errdefer s.gpu = null;
-            break :blk try s.gpu.?.init("lcgf-android", &instance_extensions, window, createSurface);
+            break :blk try s.gpu.?.init("lcgf-android", &instance_extensions, window, createSurface, .{});
         };
         const g = &s.gpu.?;
         errdefer vk.swapchain.destroySurface(&g.instance, surface);

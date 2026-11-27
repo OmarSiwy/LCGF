@@ -272,11 +272,26 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
         /// Draws canvas command `k` of the last `prepare` into `pass`: one instanced draw per
         /// range, scissored to the node. Sets every piece of state it uses.
         pub fn draw(cv: *const C, pass: *gpu.RenderPass, list: *const draw_list.DrawList, k: u32) void {
+            const everything: desc.Rect = .{
+                .x = 0,
+                .y = 0,
+                .width = cv.size[0],
+                .height = cv.size[1],
+            };
+            cv.drawWithin(pass, list, k, everything);
+        }
+
+        /// `draw`, its scissor cut to `bound` (physical pixels): a host that draws only part of
+        /// its target again (a damage rect) keeps the canvas inside it.
+        // tidy: allow(line-too-long) the API index reads one-line signatures
+        pub fn drawWithin(cv: *const C, pass: *gpu.RenderPass, list: *const draw_list.DrawList, k: u32, bound: desc.Rect) void {
             const j = for (cv.draws[0..cv.draw_len], 0..) |d, i| {
                 if (d.k == k) break i;
             } else return;
             const node = list.customs[k];
-            const sc = desc.scissor(screenRect(node), node.clip, cv.scale, cv.size[0], cv.size[1]);
+            const size = cv.size;
+            const whole = desc.scissor(screenRect(node), node.clip, cv.scale, size[0], size[1]);
+            const sc = cut(whole, bound);
             if (sc.width == 0 or sc.height == 0) return;
             const s = &cv.slots[cv.slot];
             const batch = cv.batches[cv.draws[j].batch];
@@ -296,6 +311,15 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                 const first = @min(r.first, end);
                 if (end > first) pass.draw(4, end - first, 0, batch.row_base + first);
             }
+        }
+
+        /// `a` inside `b`; empty (zero extent) when they do not meet.
+        fn cut(a: desc.Rect, b: desc.Rect) desc.Rect {
+            const x0 = @max(a.x, b.x);
+            const y0 = @max(a.y, b.y);
+            const x1 = @max(x0, @min(a.x + a.width, b.x +| b.width));
+            const y1 = @max(y0, @min(a.y + a.height, b.y +| b.height));
+            return .{ .x = x0, .y = y0, .width = x1 - x0, .height = y1 - y0 };
         }
 
         /// The node's rect on screen, logical pixels: the bounds of its transformed corners.

@@ -9,7 +9,7 @@
 //! picture to the swapchain image (docs/plans/window.md, "How a frame is drawn").
 //!
 //!     var g: Setup = undefined;
-//!     const surface = try g.init("app", &extensions, window, createSurface);
+//!     const surface = try g.init("app", &extensions, window, createSurface, .{});
 //!     var w = try Window.init(&g, surface, extent);
 //!     // per frame, in one call:
 //!     try w.draw(&g, list, glyphs, viewport, scale, clear, extent);
@@ -44,16 +44,20 @@ pub const Setup = struct {
     once: host.Once,
     sampler: c.VkSampler,
     white: device_mod.Image,
-    gfx: renderer.Renderer,
+    gfx: renderer.CanvasRenderer,
     format: c.VkFormat,
     /// The renderer's ring slot the next new list is uploaded to: never the slot of the rows
     /// drawn last, which a frame still in flight may be reading (`Window.present`).
     rows_next: u32,
 
+    /// Canvas instance rows and polygon vertices the renderer keeps on the GPU
+    /// (`renderer.Desc.canvas_rows`, `canvas_verts`); none: canvases draw nothing.
+    pub const Canvas = struct { rows: u32 = 0, verts: u32 = 0 };
+
     /// Fills `g` in place (the renderer keeps a pointer to its device) and returns the first
     /// window's surface, made by `createSurface(&g.instance, window)`, which picks a device
     /// that can present to it. `extensions` are VK_KHR_surface and the platform's.
-    pub fn init(g: *Setup, app_name: [:0]const u8, extensions: []const [*:0]const u8, window: anytype, comptime createSurface: anytype) !c.VkSurfaceKHR {
+    pub fn init(g: *Setup, app_name: [:0]const u8, extensions: []const [*:0]const u8, window: anytype, comptime createSurface: anytype, canvas: Canvas) !c.VkSurfaceKHR {
         g.lib = try loader.Library.open();
         errdefer g.lib.close();
         g.instance = try loader.Instance.init(&g.lib, .{ .app_name = app_name, .extensions = extensions });
@@ -71,7 +75,13 @@ pub const Setup = struct {
         var probe = try swapchain.Swapchain.init(&g.instance, d, surface, .{ .width = 1, .height = 1 }, null);
         g.format = probe.format;
         probe.deinit(d);
-        g.gfx = try renderer.Renderer.init(d, .{ .format = g.format, .frames = 2 }, g.white.view, g.sampler);
+        const desc: renderer.Desc = .{
+            .format = g.format,
+            .frames = 2,
+            .canvas_rows = canvas.rows,
+            .canvas_verts = canvas.verts,
+        };
+        g.gfx = try .init(d, desc, g.white.view, g.sampler);
         g.rows_next = 0;
         return surface;
     }
@@ -356,7 +366,7 @@ const Headless = struct {
 
     fn init(h: *Headless, width: u32, height: u32) !void {
         const extensions = &swapchain.headless_extensions;
-        const surface = try h.g.init("test", extensions, {}, headlessSurface);
+        const surface = try h.g.init("test", extensions, {}, headlessSurface, .{});
         errdefer h.g.deinit();
         h.w = try .init(&h.g, surface, .{ .width = width, .height = height });
         h.ctx = try .init(&buffer, limits);

@@ -128,7 +128,8 @@ pub fn RendererOf(comptime canvases: bool) type {
         base: u64 = 0,
         /// Physical pixels: viewport * scale from the last `prepare`.
         extent: c.VkExtent2D = .{ .width = 0, .height = 0 },
-        /// The scissor every quad and text draw sets: the whole `extent` after `prepare`. A
+        /// The scissor every quad and text draw sets, and every canvas draw is cut to: the
+        /// whole `extent` after `prepare`. A
         /// host that draws only part of its target again (`setup.Window.present`, one damage
         /// rect at a time) narrows it between `prepare` and the draws.
         scissor: c.VkRect2D = std.mem.zeroes(c.VkRect2D),
@@ -145,7 +146,8 @@ pub fn RendererOf(comptime canvases: bool) type {
         canvas: if (canvases) ?Canvas else void = if (canvases) null else {},
         list: ?*const DrawList = null,
 
-        pub const max_textures = 64;
+        /// Room for 64 images of an application's, its atlases and its surfaces (`lcgf_app`).
+        pub const max_textures = 128;
 
         /// `prepare` takes the frame slot (0 to `desc.frames - 1`): the host's frame index, whose
         /// fence it waited on, so the GPU is done reading that slot.
@@ -355,7 +357,14 @@ pub fn RendererOf(comptime canvases: bool) type {
             if (canvases) {
                 const cv = if (r.canvas) |*cv| cv else return;
                 var pass = gpu.RenderPass.wrap(.wrap(r.dev), cmd, r.extent.width, r.extent.height);
-                cv.draw(&pass, r.list.?, k);
+                const s = r.scissor;
+                const bound: gpu.Rect = .{
+                    .x = @intCast(s.offset.x),
+                    .y = @intCast(s.offset.y),
+                    .width = s.extent.width,
+                    .height = s.extent.height,
+                };
+                cv.drawWithin(&pass, r.list.?, k, bound);
             }
         }
 

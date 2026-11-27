@@ -129,10 +129,13 @@ pub const Host = struct {
     }
 };
 
+/// Texels of an image `uploadRegion` writes.
+pub const Rect = struct { x: i32 = 0, y: i32 = 0, w: u32, h: u32 };
+
 /// Records a copy of `region` rows from `buffer` at `offset` into `image` (whole image in
 /// UNDEFINED before, SHADER_READ_ONLY_OPTIMAL after; prior contents are kept only when the
 /// image was already initialised, which is why `from` is the layout it is in now).
-pub fn uploadRegion(d: *const Device, cmd: c.VkCommandBuffer, image: c.VkImage, buffer: c.VkBuffer, offset: u64, from: c.VkImageLayout, region: struct { x: i32 = 0, y: i32 = 0, w: u32, h: u32 }) void {
+pub fn uploadRegion(d: *const Device, cmd: c.VkCommandBuffer, image: c.VkImage, buffer: c.VkBuffer, offset: u64, from: c.VkImageLayout, region: Rect) void {
     var b: c.VkImageMemoryBarrier2 = .{
         .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
         .srcStageMask = c.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
