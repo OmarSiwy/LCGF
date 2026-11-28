@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const lcgf = @import("lcgf");
+const lcgf_app = @import("lcgf_app");
 const presenter = @import("presenter.zig");
 const view = @import("view.zig");
 const Model = @import("model.zig").Model;
@@ -23,18 +24,23 @@ pub const App = struct {
     }
 };
 
+pub fn main(init: std.process.Init) !void {
+    var app: App = .{};
+    try lcgf_app.run(App, &app, init, .{ .title = "MVVP" });
+}
+
 const testing = std.testing;
-const host = @import("host");
+const replay = @import("lcgf_replay");
 
 test "mvvp: the presenter applies clicks to the model and the ViewModel's page" {
     var app: App = .{};
-    var s = try host.Smoke.run(&app, "frame\nviewport 800 600\n");
-    const advance = host.center(s.rect(view.id_advance));
-    const open = host.center(s.rect(view.id_open));
+    var s = try replay.run(&app, "frame\nviewport 800 600\n");
+    const advance = replay.center(s.rect(view.id_advance));
+    const open = replay.center(s.rect(view.id_open));
 
     app = .{};
     var rec: [512]u8 = undefined;
-    s = try host.Smoke.run(&app, try host.clicks(&rec, &.{ advance, open }));
+    s = try replay.run(&app, try replay.clicks(&rec, &.{ advance, open }));
     try testing.expectEqualSlices(bool, &.{ true, false, false, false }, &app.model.done);
     try testing.expectEqual(.open, app.view_model.page);
     try testing.expectEqual(@as(u32, 3), app.view_model.projection(&app.model).len);

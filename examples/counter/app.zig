@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const lcgf = @import("lcgf");
+const lcgf_app = @import("lcgf_app");
 const w = lcgf.widgets_base;
 const signals = lcgf.runtime_signals;
 const Frame = lcgf.frame.Frame;
@@ -55,18 +56,23 @@ pub const App = struct {
     }
 };
 
+pub fn main(init: std.process.Init) !void {
+    var app: App = .{};
+    try lcgf_app.run(App, &app, init, .{ .title = "Counter" });
+}
+
 const testing = std.testing;
-const host = @import("host");
+const replay = @import("lcgf_replay");
 
 test "counter: clicks move the count; the memo and the summary follow only its changes" {
     var app: App = .{};
-    var s = try host.Smoke.run(&app, "frame\nviewport 800 600\n");
-    const inc = host.center(s.rect(id_inc));
-    const dec = host.center(s.rect(id_dec));
+    var s = try replay.run(&app, "frame\nviewport 800 600\n");
+    const inc = replay.center(s.rect(id_inc));
+    const dec = replay.center(s.rect(id_dec));
 
     app = .{};
     var rec: [512]u8 = undefined;
-    s = try host.Smoke.run(&app, try host.clicks(&rec, &.{ inc, inc, inc, dec }));
+    s = try replay.run(&app, try replay.clicks(&rec, &.{ inc, inc, inc, dec }));
     try testing.expectEqual(@as(i32, 2), app.count.get());
     try testing.expectEqual(@as(i32, 4), app.doubled.get());
     // The first frame's compute and one per change: none on the other frames.

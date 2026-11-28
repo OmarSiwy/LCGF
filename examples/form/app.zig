@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const lcgf = @import("lcgf");
+const lcgf_app = @import("lcgf_app");
 const w = lcgf.widgets_base;
 const Editor = lcgf.text_edit.Editor;
 const Keyboard = lcgf.keyboard.Keyboard;
@@ -104,8 +105,13 @@ pub const App = struct {
     }
 };
 
+pub fn main(init: std.process.Init) !void {
+    var app: App = .{};
+    try lcgf_app.run(App, &app, init, .{ .title = "Form" });
+}
+
 const testing = std.testing;
-const host = @import("host");
+const replay = @import("lcgf_replay");
 
 test "check: what a name and an age must be" {
     try testing.expectEqualStrings("Name is required", checkName("  ").?);
@@ -118,10 +124,10 @@ test "check: what a name and an age must be" {
 
 test "form: an invalid Submit shows errors and saves nothing; fixed fields submit" {
     var app: App = .{};
-    var s = try host.Smoke.run(&app, "frame\nviewport 800 600\n");
-    const name = host.center(s.rect(id_name));
-    const age = host.center(s.rect(id_age));
-    const submit = host.center(s.rect(id_submit));
+    var s = try replay.run(&app, "frame\nviewport 800 600\n");
+    const name = replay.center(s.rect(id_name));
+    const age = replay.center(s.rect(id_age));
+    const submit = replay.center(s.rect(id_submit));
 
     var rec: [1024]u8 = undefined;
     var wr = std.Io.Writer.fixed(&rec);
@@ -132,7 +138,7 @@ test "form: an invalid Submit shows errors and saves nothing; fixed fields submi
     try wr.print(click ++ "frame\ntext abc\n", .{ age[0], age[1] });
     try wr.print(click, .{ submit[0], submit[1] });
     app = .{};
-    s = try host.Smoke.run(&app, wr.buffered());
+    s = try replay.run(&app, wr.buffered());
     try testing.expectEqual(@as(u32, 0), app.submitted);
     try testing.expectEqualStrings("A", app.name.ed.text());
     try testing.expectEqualStrings("abc", app.age.ed.text());
@@ -149,7 +155,7 @@ test "form: an invalid Submit shows errors and saves nothing; fixed fields submi
     try wr.print(click ++ "frame\ntext 36\n", .{ age[0], age[1] });
     try wr.print(click ++ "frame\n", .{ submit[0], submit[1] });
     app = .{};
-    s = try host.Smoke.run(&app, wr.buffered());
+    s = try replay.run(&app, wr.buffered());
     try testing.expectEqual(@as(u32, 1), app.submitted);
     try testing.expectEqualStrings("Ada", app.saved_name[0..app.saved_name_len]);
     try testing.expectEqual(@as(u8, 36), app.saved_age);

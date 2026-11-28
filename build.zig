@@ -178,6 +178,9 @@ pub fn build(b: *std.Build) void {
     // the test face of its tests.
     app_mod.addImport("font_system", appText(b, target, optimize, lcgf, app_libc).import_table.get("font_system").?);
     app_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
+    // An application's tests without a window (src/example/replay.zig): a recording played
+    // into its `App` through the headless shell. The examples' `zig build test` imports it.
+    _ = b.addModule("lcgf_replay", .{ .root_source_file = b.path("src/example/replay.zig"), .target = target, .optimize = optimize, .imports = lcgf_import });
     // A downstream application consumes the modules and library above. The
     // benchmarks, SDK probes, docs and examples belong to this repository.
     if (!b.isRoot()) return;
@@ -1358,7 +1361,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = desktop.host } },
     }) });
     examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
-    for ([_][]const u8{ "hello", "counter", "form", "list", "dashboard", "viewport", "texture" }) |name| {
+    for ([_][]const u8{ "dashboard", "viewport", "texture" }) |name| {
         const app = desktop.app(b.path(b.fmt("examples/{s}/app.zig", .{name})));
         const exe = desktop.executable(app, b.fmt("example-{s}", .{name}));
         examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
