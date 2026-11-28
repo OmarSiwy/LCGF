@@ -87,7 +87,7 @@ platform:
 
 | Build | Window |
 |---|---|
-| Linux, `vk` (the default there) | X11 with Vulkan, the picture kept and only damage redrawn; under Wayland through XWayland when `DISPLAY` is set. `Surface` and `draw` exist only here ([surface.md](surface.md)) |
+| Linux, `vk` (the default there) | Vulkan, the picture kept and only damage redrawn: a native Wayland window when the compositor takes dma-bufs, else X11 (through XWayland in a Wayland session). `Surface` and `draw` exist only here ([surface.md](surface.md)) |
 | Linux, `sw` or any other back end | the software window: Wayland when `WAYLAND_DISPLAY` names a compositor, else X11 |
 | Windows | the software window (Win32) |
 | macOS | AppKit with Metal, every frame drawn whole |

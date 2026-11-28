@@ -12,6 +12,7 @@ const vk = @import("vk");
 const x11 = @import("x11");
 const x11_gpu = @import("x11_gpu");
 const gpu_loop = @import("gpu.zig");
+const gpu_vk = @import("gpu_vk.zig");
 const text = @import("text.zig");
 const page = @import("page.zig");
 const app_mod = @import("app.zig");
@@ -30,17 +31,12 @@ const Channel = gpu_loop.Channel;
 pub const Loop = gpu_loop.Gpu(Window);
 
 /// Vulkan over an X window of the shell's: the device, the swapchain and the picture
-/// (`x11_gpu.Gpu`), the application's memory and staging, and the loop's mapped write buffers.
+/// (`x11_gpu.Gpu`), and the application's memory and the loop's images (`gpu_vk.Kit`).
 pub const Window = struct {
     x: x11_gpu.Gpu,
     /// The shell's window the GPU draws in: its events, size and background.
     w: *x11.Window,
-    arena: gpu.Arena,
-    staging_arena: gpu.Arena,
-    /// The application's staging, a frame slot each.
-    staging: [2]gpu.Staging,
-    /// Mapped buffers the loop's own texture writes go through, per channel and frame slot.
-    writes: [3][2]vk.device.Buffer,
+    vk: gpu_vk.Kit,
 
     pub const gpu = vk.gpu;
     pub const Image = vk.device.Image;
@@ -56,103 +52,38 @@ pub const Window = struct {
         try p.x.open(shell.display, w.id, w.width, w.height, canvas);
         errdefer p.x.close();
         p.w = w;
-        const g = &p.x.setup;
-        const d = &g.device;
-        const dev: gpu.Device = .wrap(d);
-        p.arena = try .init(dev, .{ .bytes = o.gpu_bytes });
-        errdefer p.arena.deinit();
-        const staging_bytes = 2 * o.staging_bytes + (1 << 16);
-        p.staging_arena = try .init(dev, .{ .bytes = staging_bytes, .memory = .host });
-        errdefer p.staging_arena.deinit();
-        for (&p.staging) |*s| s.* = try .init(dev, &p.staging_arena, o.staging_bytes);
-        while (g.gfx.texture_count < handles) _ = try g.gfx.addTexture(d, g.white.view, g.sampler);
-        p.writes = @splat(.{ .{ .size = 0 }, .{ .size = 0 } });
+        try p.vk.open(&p.x.setup, o, handles);
     }
 
     pub fn close(p: *Window) void {
-        const d = &p.x.setup.device;
-        for (&p.writes) |*ch| for (ch) |*b| if (b.handle != null) d.destroyBuffer(b);
-        for (p.staging) |s| s.deinit(.wrap(d));
-        p.staging_arena.deinit();
-        p.arena.deinit();
+        p.vk.close();
         p.x.close();
     }
 
     pub fn waitIdle(p: *Window) void {
-        const d = &p.x.setup.device;
-        _ = d.fns.vkDeviceWaitIdle.?(d.handle);
+        p.vk.waitIdle();
     }
 
     pub fn createImage(p: *Window, kind: ImageKind, size: [2]u32) !Image {
-        std.debug.assert(size[0] > 0);
-        std.debug.assert(size[1] > 0);
-        const d = &p.x.setup.device;
-        const sampled = c.VK_IMAGE_USAGE_SAMPLED_BIT;
-        return switch (kind) {
-            // Read as white with its byte as alpha, as `sw.Image.alpha8` is.
-            .coverage => d.createImage(.{
-                .width = size[0],
-                .height = size[1],
-                .format = c.VK_FORMAT_R8_UNORM,
-                .usage = sampled | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                .components = .{
-                    .r = c.VK_COMPONENT_SWIZZLE_ONE,
-                    .g = c.VK_COMPONENT_SWIZZLE_ONE,
-                    .b = c.VK_COMPONENT_SWIZZLE_ONE,
-                    .a = c.VK_COMPONENT_SWIZZLE_R,
-                },
-            }),
-            .rgba => d.createImage(.{
-                .width = size[0],
-                .height = size[1],
-                .usage = sampled | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            }),
-            .target => d.createImage(.{
-                .width = size[0],
-                .height = size[1],
-                .usage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | sampled,
-            }),
-        };
+        return p.vk.createImage(kind, size);
     }
 
     pub fn destroyImage(p: *Window, img: *Image) void {
-        p.x.setup.device.destroyImage(img);
+        p.vk.destroyImage(img);
     }
 
-    pub fn extent(img: *const Image) [2]u32 {
-        return .{ img.extent.width, img.extent.height };
-    }
+    pub const extent = gpu_vk.Kit.extent;
 
     pub fn bind(p: *Window, handle: u16, img: *const Image) void {
-        const g = &p.x.setup;
-        g.gfx.setTexture(&g.device, @fromBackingInt(handle), img.view, g.sampler);
+        p.vk.bind(handle, img);
     }
 
-    /// All of `img` from `bytes` in a submission of its own: for what `open` makes once.
     pub fn writeNow(p: *Window, img: *Image, bytes: []const u8) !void {
-        const g = &p.x.setup;
-        const d = &g.device;
-        std.debug.assert(bytes.len > 0);
-        var staging = try d.createBuffer(bytes.len, c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
-        defer d.destroyBuffer(&staging);
-        @memcpy(staging.mapped[0..bytes.len], bytes);
-        const cmd = try g.once.begin(d);
-        const region: vk.host.Rect = .{ .w = img.extent.width, .h = img.extent.height };
-        const from = c.VK_IMAGE_LAYOUT_UNDEFINED;
-        vk.host.uploadRegion(d, cmd, img.handle, staging.handle, 0, from, region);
-        try g.once.submit(d);
+        try p.vk.writeNow(img, bytes);
     }
 
     pub fn targetTexture(img: *const Image) gpu.Texture {
-        return .{
-            .image = img.handle,
-            .view = img.view,
-            .format = Loop.Surface.format,
-            .width = img.extent.width,
-            .height = img.extent.height,
-            .samples = 1,
-            .resting = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        };
+        return gpu_vk.Kit.targetTexture(img, Loop.Surface.format);
     }
 
     pub fn begin(p: *Window) !Frame {
@@ -160,17 +91,8 @@ pub const Window = struct {
         return p.x.target.begin(&p.x.setup, .{ .width = p.w.width, .height = p.w.height });
     }
 
-    /// Room for `bytes` in the frame slot's buffer of `ch`: made again larger when short (its
-    /// frame slot's last frame is done: `begin` waited for it).
     pub fn stage(p: *Window, f: *Frame, ch: Channel, bytes: u64) ![]u8 {
-        const b = &p.writes[@backingInt(ch)][f.acquired.slot];
-        if (b.size < bytes) {
-            const d = &p.x.setup.device;
-            if (b.handle != null) d.destroyBuffer(b);
-            const source = c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-            b.* = try d.createBuffer(@max(bytes, 1 << 20), source, true);
-        }
-        return b.mapped[0..@intCast(bytes)];
+        return p.vk.stage(f.acquired.slot, ch, bytes);
     }
 
     // tidy: allow(too-many-parameters) the contract's copy: frame, channel, offset, image, rect
@@ -183,25 +105,11 @@ pub const Window = struct {
         r: gpu_loop.Rect,
         fresh: bool,
     ) void {
-        const d = &p.x.setup.device;
-        const b = &p.writes[@backingInt(ch)][f.acquired.slot];
-        const sampled = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        const from: c.VkImageLayout = if (fresh) c.VK_IMAGE_LAYOUT_UNDEFINED else sampled;
-        const x: i32 = @intCast(r.x);
-        const y: i32 = @intCast(r.y);
-        const region: vk.host.Rect = .{ .x = x, .y = y, .w = r.w, .h = r.h };
-        vk.host.uploadRegion(d, f.cmd, img.handle, b.handle, at, from, region);
+        p.vk.copy(f.cmd, f.acquired.slot, ch, at, img, r, fresh);
     }
 
     pub fn gpuFrame(p: *Window, f: *Frame) gpu_loop.GpuParts(gpu) {
-        const d = &p.x.setup.device;
-        const slot = f.acquired.slot;
-        p.staging[slot].rewind();
-        return .{
-            .device = .wrap(d),
-            .arena = &p.arena,
-            .upload = .beginStaged(.wrap(d), f.cmd, &p.staging[slot]),
-        };
+        return p.vk.gpuFrame(f.cmd, f.acquired.slot);
     }
 
     pub fn present(p: *Window, f: *Frame, ui: gpu_loop.Ui) !void {
@@ -221,12 +129,11 @@ pub const Window = struct {
     }
 
     pub fn kept(p: *const Window) ?*const DrawList {
-        return p.x.setup.gfx.list;
+        return p.vk.kept();
     }
 
     pub fn canvasUploaded(p: *const Window) ?usize {
-        const cv = p.x.setup.gfx.canvas orelse return null;
-        return cv.uploaded;
+        return p.vk.canvasUploaded();
     }
 
     /// An Expose: the server lost the window's pixels, which the picture still has.
@@ -411,7 +318,7 @@ const Fixture = struct {
 };
 
 /// Stops after `seconds`, or once `done` says so.
-fn Clock(comptime Done: type) type {
+pub fn Clock(comptime Done: type) type {
     return struct {
         t0: std.Io.Timestamp,
         seconds: f32,
@@ -425,19 +332,19 @@ fn Clock(comptime Done: type) type {
     };
 }
 
-const Never = struct {
+pub const Never = struct {
     fn stop(_: Never) bool {
         return false;
     }
 };
 
-fn seconds(s: f32) Clock(Never) {
+pub fn seconds(s: f32) Clock(Never) {
     return .{ .t0 = .now(testing.io, .awake), .seconds = s, .done = .{} };
 }
 
 /// A button-like box beside a surface the application paints one colour at a time: `paints`
 /// more frames of it, each a new colour, while `hot` toggling makes widget frames.
-const SurfaceApp = struct {
+pub const SurfaceApp = struct {
     plot: Surface = .{},
     builds: u32 = 0,
     draws: u32 = 0,
@@ -447,8 +354,8 @@ const SurfaceApp = struct {
     hot: bool = false,
     shade: u8 = 0,
 
-    const ground: Color = .rgb(30, 30, 30);
-    const plot_rect: [4]f32 = .{ 100, 20, 180, 80 };
+    pub const ground: Color = .rgb(30, 30, 30);
+    pub const plot_rect: [4]f32 = .{ 100, 20, 180, 80 };
 
     pub fn build(a: *SurfaceApp, f: *lcgf.frame.Frame, _: *const Events) void {
         a.builds += 1;

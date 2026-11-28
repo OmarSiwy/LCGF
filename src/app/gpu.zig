@@ -173,6 +173,9 @@ pub const Want = struct {
     /// Where the platform has them (X11): the display, and the authority cookie file's bytes.
     display: []const u8 = "",
     auth: []const u8 = "",
+    /// Where the platform has them (Wayland): the compositor's socket and its directory.
+    wayland: []const u8 = "",
+    runtime_dir: []const u8 = "/tmp",
     ctx: *context.Context,
     tw: *text.Window,
     /// Rows for the frame's glyph quads in the bundled font.
@@ -190,16 +193,14 @@ pub const Polled = enum {
     exposed,
 };
 
-/// The GPU loop over platform window `P` (the module doc's contract).
-// tidy: allow-fn(function-too-long) the loop's types and steps, one namespace per platform
-pub fn Gpu(comptime P: type) type {
-    comptime std.debug.assert(handles <= P.max_textures);
-    const Image = P.Image;
-    return struct {
-        /// `lcgf_render.gpu` on this build's back end: what `draw` renders a surface with.
-        pub const gpu = P.gpu;
-        pub const Platform = P;
+/// What `Surface.redraw` wakes: the running GPU window's loop, whichever platform it is on.
+const Waker = struct { ptr: *anyopaque, wake: *const fn (*anyopaque) void };
 
+/// The surfaces of a build's GPU windows and what `draw` takes, by the GPU projection and the
+/// image type alone: every window of one back end (Vulkan over X11 or over Wayland) shares one
+/// `lcgf_app.Surface`.
+fn Shared(comptime gpu: type, comptime Image: type) type {
+    return struct {
         /// A rectangle of the window this program draws itself, through `gpu`: a texture of
         /// its own, shown as an ordinary quad at its node's place in paint order
         /// (`Style.texture`), so widgets over it cover it and its node's clip, radius and
@@ -266,7 +267,7 @@ pub fn Gpu(comptime P: type) type {
             /// `build` or `draw`, or between frames); another thread wakes the shell itself.
             pub fn redraw(s: *Surface) void {
                 s.requested = true;
-                if (registry.shell) |w| w.wake();
+                if (registry.shell) |w| w.wake(w.ptr);
             }
         };
 
@@ -292,6 +293,42 @@ pub fn Gpu(comptime P: type) type {
                 return g.finished.?;
             }
         };
+
+        /// The program's surfaces by slot, registered by `Surface.node`.
+        // ponytail: module state, as app.zig's buffers are: one window a program.
+        pub const registry = struct {
+            pub var list: [surfaces_max]?*Surface = @splat(null);
+            /// The window whose loop `Surface.redraw` wakes.
+            pub var shell: ?Waker = null;
+            /// The surface's node was in the last frame built.
+            pub var built: [surfaces_max]bool = @splat(false);
+
+            pub fn add(s: *Surface) u8 {
+                for (&list, 0..) |*l, k| if (l.* == null) {
+                    l.* = s;
+                    s.slot = @intCast(k);
+                    return @intCast(k);
+                };
+                @panic("lcgf_app: more than surfaces_max surfaces in one window");
+            }
+        };
+    };
+}
+
+/// The GPU loop over platform window `P` (the module doc's contract).
+// tidy: allow-fn(function-too-long) the loop's types and steps, one namespace per platform
+pub fn Gpu(comptime P: type) type {
+    comptime std.debug.assert(handles <= P.max_textures);
+    const Image = P.Image;
+    return struct {
+        /// `lcgf_render.gpu` on this build's back end: what `draw` renders a surface with.
+        pub const gpu = P.gpu;
+        pub const Platform = P;
+
+        const shared = Shared(P.gpu, P.Image);
+        pub const Surface = shared.Surface;
+        pub const GpuFrame = shared.GpuFrame;
+        const registry = shared.registry;
 
         /// What a window did, for tests and measurements.
         pub const Stats = struct {
@@ -321,25 +358,6 @@ pub fn Gpu(comptime P: type) type {
             quads: []Quad,
             first: []u32,
             count: []u32,
-        };
-
-        /// The program's surfaces by slot, registered by `Surface.node`.
-        // ponytail: module state, as app.zig's buffers are: one window a program.
-        const registry = struct {
-            var list: [surfaces_max]?*Surface = @splat(null);
-            /// The window whose loop `Surface.redraw` wakes.
-            var shell: ?*P = null;
-            /// The surface's node was in the last frame built.
-            var built: [surfaces_max]bool = @splat(false);
-
-            fn add(s: *Surface) u8 {
-                for (&list, 0..) |*l, k| if (l.* == null) {
-                    l.* = s;
-                    s.slot = @intCast(k);
-                    return @intCast(k);
-                };
-                @panic("lcgf_app: more than surfaces_max surfaces in one window");
-            }
         };
 
         /// A GPU window: the platform's (`p`), the textures the UI samples and the frame's
@@ -437,7 +455,7 @@ pub fn Gpu(comptime P: type) type {
             var ev: Events = .{};
             var waiting_since_not_shown = false;
             gw.ctx = ctx;
-            registry.shell = w;
+            registry.shell = .{ .ptr = w, .wake = wakeP };
             // tidy: allow(unbounded-loop) the event loop: it ends when the window closes or
             // `clock` says
             while (true) {
@@ -483,11 +501,16 @@ pub fn Gpu(comptime P: type) type {
         /// Wakes the GPU window's loop for a `Canvas.redraw`: false when none is running.
         pub fn wake() bool {
             const w = registry.shell orelse return false;
-            w.wake();
+            w.wake(w.ptr);
             return true;
         }
 
         // ---- private ----
+
+        fn wakeP(ptr: *anyopaque) void {
+            const w: *P = @ptrCast(@alignCast(ptr));
+            w.wake();
+        }
 
         /// One built frame: the application's `build`, layout and paint, the glyphs placed,
         /// the surfaces' rectangles from the layout, and the damage and rows owed.

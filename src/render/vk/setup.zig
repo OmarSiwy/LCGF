@@ -91,6 +91,49 @@ pub const Setup = struct {
         return surface;
     }
 
+    /// `init` with no surface: a device with every one of `device_extensions`, drawing in
+    /// `format`, for a window whose images go somewhere other than a swapchain (`Exported`).
+    /// error.NoDevice: no device has them all.
+    pub fn initOffscreen(
+        g: *Setup,
+        app_name: [:0]const u8,
+        device_extensions: []const [*:0]const u8,
+        format: c.VkFormat,
+        canvas: Canvas,
+    ) !void {
+        std.debug.assert(device_extensions.len > 0);
+        g.lib = try loader.Library.open();
+        errdefer g.lib.close();
+        g.instance = try loader.Instance.init(&g.lib, .{ .app_name = app_name });
+        errdefer g.instance.deinit();
+        const p = try device_mod.pickWith(&g.instance, null, device_extensions);
+        g.device = try device_mod.Device.initWith(&g.instance, p, false, device_extensions);
+        errdefer g.device.deinit();
+        const d = &g.device;
+        g.once = try host.Once.init(d);
+        errdefer g.once.deinit(d);
+        g.sampler = try host.nearestSampler(d);
+        errdefer d.fns.vkDestroySampler.?(d.handle, g.sampler, null);
+        var h: host.Host = .{
+            .lib = g.lib,
+            .instance = g.instance,
+            .device = g.device,
+            .once = g.once,
+        };
+        g.white = try h.sampled(1, 1, &.{ 0xff, 0xff, 0xff, 0xff });
+        errdefer d.destroyImage(&g.white);
+        g.format = format;
+        const desc: renderer.Desc = .{
+            .format = format,
+            .frames = 2,
+            .canvas_rows = canvas.rows,
+            .canvas_verts = canvas.verts,
+        };
+        g.gfx = try .init(d, desc, g.white.view, g.sampler);
+        g.rows_next = 0;
+        g.canvases_next = 0;
+    }
+
     pub fn deinit(g: *Setup) void {
         const d = &g.device;
         _ = d.fns.vkDeviceWaitIdle.?(d.handle);
@@ -265,7 +308,7 @@ pub const Window = struct {
         });
         drawDamage(g, cmd, if (w.lost) .everything else ui.damage, ui.clear, extent);
         pass.end(d, cmd, .{ .image = image, .layout = rest });
-        copyPicture(d, cmd, &w.picture, f.acquired.image);
+        copyPicture(d, cmd, &w.picture, f.acquired.image, c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         w.lost = false;
         const presented = w.frames.present(d, &w.chain, f.acquired) catch |e| switch (e) {
             error.OutOfDate => .suboptimal,
@@ -284,6 +327,279 @@ pub const Window = struct {
         w.picture = try makePicture(d, &w.chain);
         w.lost = true;
         w.stale = false;
+    }
+};
+
+/// A window whose frames go to images the host shares with a compositor (dma-bufs, for a
+/// Wayland shell that speaks the protocol itself and so cannot give Vulkan a surface) instead
+/// of a swapchain. As `Window`, it keeps its picture and draws only the damage into it; each
+/// frame then copies the picture whole into one of `count` exported images (`Shared`), which
+/// the host attaches when `present` returns. Needs a setup from `initOffscreen` with
+/// `device_extensions`, drawing in `format` (DRM_FORMAT_XRGB8888 to the compositor).
+pub const Exported = struct {
+    picture: device_mod.Image,
+    images: [count]Shared,
+    extent: c.VkExtent2D,
+    /// The picture holds nothing yet: the next `present` draws all of it.
+    lost: bool = true,
+    pools: [frames]c.VkCommandPool,
+    cmds: [frames]c.VkCommandBuffer,
+    fences: [frames]c.VkFence,
+    /// The frame slot the next `begin` uses.
+    next: u32 = 0,
+    fns: Fns,
+
+    /// Images shared, so the compositor may hold two while the next is drawn.
+    pub const count = 3;
+    const frames = 2;
+    pub const format = c.VK_FORMAT_B8G8R8A8_UNORM;
+    pub const device_extensions = [_][*:0]const u8{
+        "VK_KHR_external_memory_fd",
+        "VK_EXT_external_memory_dma_buf",
+        "VK_EXT_image_drm_format_modifier",
+    };
+    /// How long `begin` waits for its frame slot's last frame.
+    pub const wait_ns = Window.wait_ns;
+
+    /// One exported image: LINEAR (DRM modifier 0), its memory a dma-buf.
+    pub const Shared = struct {
+        image: c.VkImage = null,
+        memory: c.VkDeviceMemory = null,
+        /// The dma-buf: the host's to share and the image's to close (`deinit`, `resize`).
+        fd: i32 = -1,
+        offset: u64 = 0,
+        stride: u64 = 0,
+        size: u64 = 0,
+    };
+
+    const Fns = struct {
+        vkGetMemoryFdKHR: c.PFN_vkGetMemoryFdKHR,
+        vkGetImageSubresourceLayout: c.PFN_vkGetImageSubresourceLayout,
+    };
+
+    pub const Frame = struct {
+        cmd: c.VkCommandBuffer,
+        /// The frame's one upload phase, for the application's `lcgf_render.gpu` writes.
+        upload: gpu.Upload,
+        slot: u32,
+    };
+
+    pub fn init(g: *const Setup, extent: c.VkExtent2D) !Exported {
+        std.debug.assert(g.gfx.desc.frames == frames);
+        const d = &g.device;
+        const get = g.instance.fns.vkGetDeviceProcAddr.?;
+        var e: Exported = .{
+            .picture = undefined,
+            .images = @splat(.{}),
+            .extent = extent,
+            .pools = @splat(null),
+            .cmds = @splat(null),
+            .fences = @splat(null),
+            .fns = .{
+                .vkGetMemoryFdKHR = @ptrCast(get(d.handle, "vkGetMemoryFdKHR")),
+                .vkGetImageSubresourceLayout = @ptrCast(get(d.handle, "vkGetImageSubresourceLayout")),
+            },
+        };
+        if (e.fns.vkGetMemoryFdKHR == null or e.fns.vkGetImageSubresourceLayout == null)
+            return error.MissingExtension;
+        errdefer e.deinit(g);
+        for (0..frames) |i| {
+            try loader.check(d.fns.vkCreateCommandPool.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                .flags = c.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
+                .queueFamilyIndex = d.family,
+            }, null, &e.pools[i]));
+            try loader.check(d.fns.vkAllocateCommandBuffers.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = e.pools[i],
+                .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
+            }, &e.cmds[i]));
+            try loader.check(d.fns.vkCreateFence.?(d.handle, &.{
+                .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
+            }, null, &e.fences[i]));
+        }
+        e.picture.handle = null;
+        try e.make(g, extent);
+        return e;
+    }
+
+    pub fn deinit(e: *Exported, g: *const Setup) void {
+        const d = &g.device;
+        _ = d.fns.vkDeviceWaitIdle.?(d.handle);
+        e.drop(g);
+        for (0..frames) |i| {
+            if (e.fences[i] != null) d.fns.vkDestroyFence.?(d.handle, e.fences[i], null);
+            if (e.pools[i] != null) d.fns.vkDestroyCommandPool.?(d.handle, e.pools[i], null);
+        }
+    }
+
+    /// The picture and the images made again at `extent`; every old dma-buf closed, so the
+    /// host shares the new ones before attaching any.
+    pub fn resize(e: *Exported, g: *const Setup, extent: c.VkExtent2D) !void {
+        _ = g.device.fns.vkDeviceWaitIdle.?(g.device.handle);
+        e.drop(g);
+        try e.make(g, extent);
+    }
+
+    /// Waits until frame slot `next` is free and begins its command buffer. error.NotShown:
+    /// its last frame did not finish within `wait_ns`; nothing was touched.
+    pub fn begin(e: *Exported, g: *Setup) !Frame {
+        const d = &g.device;
+        const i = e.next;
+        const waited = d.fns.vkWaitForFences.?(d.handle, 1, &e.fences[i], c.VK_TRUE, wait_ns);
+        if (waited == c.VK_TIMEOUT) return error.NotShown;
+        try loader.check(waited);
+        try loader.check(d.fns.vkResetFences.?(d.handle, 1, &e.fences[i]));
+        try loader.check(d.fns.vkResetCommandPool.?(d.handle, e.pools[i], 0));
+        try loader.check(d.fns.vkBeginCommandBuffer.?(e.cmds[i], &.{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        }));
+        return .{ .cmd = e.cmds[i], .upload = .begin(.wrap(d), e.cmds[i]), .slot = i };
+    }
+
+    /// Draws the UI into the picture as `Window.present` does, copies the picture into image
+    /// `k`, submits, and waits for the GPU: a dma-buf carries no fence the compositor would
+    /// wait on, so the image is finished when this returns and may be attached.
+    pub fn present(e: *Exported, g: *Setup, f: *const Frame, ui: Window.Ui, k: u32) !void {
+        std.debug.assert(ui.rows != null or g.gfx.list != null);
+        std.debug.assert(k < count);
+        const d = &g.device;
+        const cmd = f.cmd;
+        if (ui.rows) |r| {
+            g.gfx.prepareRows(g.rows_next, r.list, r.glyphs, r.viewport, r.scale);
+            g.rows_next = (g.rows_next + 1) % g.gfx.desc.frames;
+        }
+        if (ui.rows != null or ui.canvases) {
+            g.gfx.prepareCanvases(g.canvases_next);
+            g.canvases_next = (g.canvases_next + 1) % g.gfx.desc.frames;
+        }
+        const image = e.picture.handle;
+        const attachment = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        const rest = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        const was: c.VkImageLayout = if (e.lost) c.VK_IMAGE_LAYOUT_UNDEFINED else rest;
+        pass.transition(d, cmd, image, was, attachment);
+        pass.begin(d, cmd, .{
+            .image = image,
+            .view = e.picture.view,
+            .extent = e.extent,
+            .clear = null,
+            .from = attachment,
+        });
+        drawDamage(g, cmd, if (e.lost) .everything else ui.damage, ui.clear, e.extent);
+        pass.end(d, cmd, .{ .image = image, .layout = rest });
+        copyPicture(d, cmd, &e.picture, e.images[k].image, c.VK_IMAGE_LAYOUT_GENERAL);
+        e.lost = false;
+        try loader.check(d.fns.vkEndCommandBuffer.?(cmd));
+        const info: c.VkCommandBufferSubmitInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+            .commandBuffer = cmd,
+        };
+        try loader.check(d.fns.vkQueueSubmit2.?(d.queue, 1, &.{
+            .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            .commandBufferInfoCount = 1,
+            .pCommandBufferInfos = &info,
+        }, e.fences[f.slot]));
+        e.next = (f.slot + 1) % frames;
+        // ponytail: the CPU waits for each frame; an explicit-sync fence (linux-drm-syncobj)
+        // would let the compositor wait instead.
+        const max = std.math.maxInt(u64);
+        try loader.check(d.fns.vkWaitForFences.?(d.handle, 1, &e.fences[f.slot], c.VK_TRUE, max));
+    }
+
+    fn make(e: *Exported, g: *const Setup, extent: c.VkExtent2D) !void {
+        const d = &g.device;
+        e.extent = extent;
+        e.picture = try d.createImage(.{
+            .width = extent.width,
+            .height = extent.height,
+            .format = format,
+            .usage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        });
+        e.lost = true;
+        for (&e.images) |*s| s.* = try e.share(d, extent);
+    }
+
+    fn drop(e: *Exported, g: *const Setup) void {
+        const d = &g.device;
+        if (e.picture.handle != null) d.destroyImage(&e.picture);
+        for (&e.images) |*s| {
+            if (s.fd >= 0) _ = std.os.linux.close(s.fd);
+            if (s.image != null) d.fns.vkDestroyImage.?(d.handle, s.image, null);
+            if (s.memory != null) d.fns.vkFreeMemory.?(d.handle, s.memory, null);
+            s.* = .{};
+        }
+    }
+
+    /// One LINEAR image of `extent` with dedicated, exportable memory, and its dma-buf.
+    fn share(e: *const Exported, d: *const device_mod.Device, extent: c.VkExtent2D) !Shared {
+        std.debug.assert(extent.width > 0);
+        const dma_buf = c.VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        const linear = [1]u64{0};
+        const modifiers: c.VkImageDrmFormatModifierListCreateInfoEXT = .{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
+            .drmFormatModifierCount = 1,
+            .pDrmFormatModifiers = &linear,
+        };
+        const external: c.VkExternalMemoryImageCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+            .pNext = &modifiers,
+            .handleTypes = dma_buf,
+        };
+        var s: Shared = .{};
+        errdefer {
+            if (s.image != null) d.fns.vkDestroyImage.?(d.handle, s.image, null);
+            if (s.memory != null) d.fns.vkFreeMemory.?(d.handle, s.memory, null);
+        }
+        try loader.check(d.fns.vkCreateImage.?(d.handle, &.{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = &external,
+            .imageType = c.VK_IMAGE_TYPE_2D,
+            .format = format,
+            .extent = .{ .width = extent.width, .height = extent.height, .depth = 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = c.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = c.VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+            .usage = c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        }, null, &s.image));
+        var req: c.VkMemoryRequirements = undefined;
+        d.fns.vkGetImageMemoryRequirements.?(d.handle, s.image, &req);
+        const index = d.memoryType(req.memoryTypeBits, 0) orelse return error.OutOfMemory;
+        const dedicated: c.VkMemoryDedicatedAllocateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+            .image = s.image,
+        };
+        const export_info: c.VkExportMemoryAllocateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO,
+            .pNext = &dedicated,
+            .handleTypes = dma_buf,
+        };
+        try loader.check(d.fns.vkAllocateMemory.?(d.handle, &.{
+            .sType = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = &export_info,
+            .allocationSize = req.size,
+            .memoryTypeIndex = index,
+        }, null, &s.memory));
+        try loader.check(d.fns.vkBindImageMemory.?(d.handle, s.image, s.memory, 0));
+        var layout: c.VkSubresourceLayout = undefined;
+        const plane: c.VkImageSubresource = .{ .aspectMask = c.VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT };
+        e.fns.vkGetImageSubresourceLayout.?(d.handle, s.image, &plane, &layout);
+        s.offset = layout.offset;
+        s.stride = layout.rowPitch;
+        s.size = req.size;
+        var fd: c_int = -1;
+        try loader.check(e.fns.vkGetMemoryFdKHR.?(d.handle, &.{
+            .sType = c.VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+            .memory = s.memory,
+            .handleType = dma_buf,
+        }, &fd));
+        s.fd = fd;
+        return s;
     }
 };
 
@@ -331,13 +647,14 @@ fn drawDamage(
     g.gfx.scissor = whole;
 }
 
-/// Copies `picture` (in TRANSFER_SRC_OPTIMAL) into swapchain image `image`, of its size, and
-/// leaves `image` ready to present.
+/// Copies `picture` (in TRANSFER_SRC_OPTIMAL) into `image`, of its size, and leaves `image`
+/// in layout `then` (ready to present, or to share).
 fn copyPicture(
     d: *const device_mod.Device,
     cmd: c.VkCommandBuffer,
     picture: *const device_mod.Image,
     image: c.VkImage,
+    then: c.VkImageLayout,
 ) void {
     std.debug.assert(picture.handle != null);
     std.debug.assert(image != null);
@@ -353,7 +670,7 @@ fn copyPicture(
         .dstSubresource = layers,
         .extent = .{ .width = picture.extent.width, .height = picture.extent.height, .depth = 1 },
     });
-    pass.transition(d, cmd, image, dst, c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    pass.transition(d, cmd, image, dst, then);
 }
 
 const testing = std.testing;
@@ -505,4 +822,62 @@ test "window: a resize makes the picture again and draws all of it, whatever the
     var px: [80 * 60 * 4]u8 = undefined;
     try h.read(&px);
     for (0..60) |y| for (0..80) |x| try testing.expectEqual(red, at(&px, 80, x, y));
+}
+
+/// The bytes of dma-buf `s`, mapped for reading, or null when it cannot be mapped.
+fn mapShared(s: *const Exported.Shared) ?[]const u8 {
+    const linux = std.os.linux;
+    const prot: linux.PROT = .{ .READ = true };
+    const addr = linux.mmap(null, @intCast(s.size), prot, .{ .TYPE = .SHARED }, s.fd, 0);
+    if (linux.errno(addr) != .SUCCESS) return null;
+    return @as([*]const u8, @ptrFromInt(addr))[0..@intCast(s.size)];
+}
+
+test "exported: a frame drawn into a shared image is in its dma-buf, damage and all" {
+    var g: Setup = undefined;
+    const exts = &Exported.device_extensions;
+    g.initOffscreen("test", exts, Exported.format, .{}) catch |e| switch (e) {
+        error.NoDevice => return error.SkipZigTest,
+        else => return e,
+    };
+    defer g.deinit();
+    var e = Exported.init(&g, .{ .width = 64, .height = 48 }) catch |err| switch (err) {
+        // No dma-buf export here (lavapipe without /dev/udmabuf).
+        error.InitializationFailed, error.OutOfMemory, error.Unknown => return error.SkipZigTest,
+        else => return err,
+    };
+    defer e.deinit(&g);
+    var ctx = try Context.init(&Headless.buffer, Headless.limits);
+    const in: lcgf.input.Input = .{ .viewport = .{ 64, 48 } };
+    const Fill = struct {
+        fn list(cx: *Context, i: *const lcgf.input.Input, color: Color) *DrawList {
+            var f = cx.begin(i);
+            _ = f.leaf(.none, .{ .size = .{ .fill, .fill }, .fill = color });
+            _ = f.end(.{});
+            return &cx.draw;
+        }
+    };
+    const clear: [4]f32 = .{ 0, 0, 0, 1 };
+    var f = try e.begin(&g);
+    const blue_list = Fill.list(&ctx, &in, .rgb(0, 0, 255));
+    const vp = in.viewport;
+    var rows: Window.Rows = .{ .list = blue_list, .glyphs = .{}, .viewport = vp, .scale = 1 };
+    try e.present(&g, &f, .{ .rows = rows, .damage = .everything, .clear = clear }, 0);
+    const red_list = Fill.list(&ctx, &in, .rgb(255, 0, 0));
+    var damage: Region = .empty;
+    damage.add(.{ 8, 8, 40, 40 });
+    rows.list = red_list;
+    f = try e.begin(&g);
+    try e.present(&g, &f, .{ .rows = rows, .damage = damage, .clear = clear }, 1);
+    const s = &e.images[1];
+    const bytes = mapShared(s) orelse return error.SkipZigTest;
+    defer _ = std.os.linux.munmap(bytes.ptr, bytes.len);
+    try testing.expect(s.stride >= 64 * 4);
+    for (0..48) |y| for (0..64) |x| {
+        const p = bytes[@intCast(s.offset + y * s.stride + x * 4)..][0..4];
+        const inside = x >= 8 and x < 40 and y >= 8 and y < 40;
+        // B, G, R, X: XRGB8888 as little-endian words.
+        const want: [3]u8 = if (inside) .{ 0, 0, 255 } else .{ 255, 0, 0 };
+        try testing.expectEqualSlices(u8, &want, p[0..3]);
+    };
 }

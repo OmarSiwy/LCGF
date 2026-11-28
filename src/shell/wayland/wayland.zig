@@ -85,10 +85,13 @@ pub const Kind = enum(u8) {
     text_input,
     decoration_manager,
     decoration,
+    /// zwp_linux_dmabuf_v1 and its buffer params (`shareDmabuf`).
+    dmabuf,
+    dmabuf_params,
 };
 
 /// Interfaces bound from the registry, with the highest version this client speaks.
-const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1, wl_data_device_manager, zwp_text_input_manager_v3, zxdg_decoration_manager_v1 };
+const Global = enum { wl_compositor, wl_shm, xdg_wm_base, wl_seat, wp_viewporter, wp_fractional_scale_manager_v1, wp_cursor_shape_manager_v1, wl_data_device_manager, zwp_text_input_manager_v3, zxdg_decoration_manager_v1, zwp_linux_dmabuf_v1 };
 const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wl_compositor = 6,
     .wl_shm = 1,
@@ -100,6 +103,8 @@ const global_versions = std.enums.EnumArray(Global, u32).init(.{
     .wl_data_device_manager = 3,
     .zwp_text_input_manager_v3 = 1,
     .zxdg_decoration_manager_v1 = 1,
+    // Version 3 lists its formats and modifiers as events; later ones as feedback objects.
+    .zwp_linux_dmabuf_v1 = 3,
 });
 const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wl_compositor = .compositor,
@@ -112,6 +117,7 @@ const global_kinds = std.enums.EnumArray(Global, Kind).init(.{
     .wl_data_device_manager = .data_manager,
     .zwp_text_input_manager_v3 = .text_input_manager,
     .zxdg_decoration_manager_v1 = .decoration_manager,
+    .zwp_linux_dmabuf_v1 = .dmabuf,
 });
 
 /// Cursor-shape-v1 enum values; `hidden` uses wl_pointer.set_cursor(null), not shape 0.
@@ -202,7 +208,14 @@ const op = struct {
     const seat_get_pointer = 0;
     const seat_get_keyboard = 1;
     const seat_get_touch = 2;
+    const dmabuf_create_params = 1;
+    const params_destroy = 0;
+    const params_add = 1;
+    const params_create_immed = 3;
 };
+
+/// DRM_FORMAT_XRGB8888 ('XR24'): the format of a shared GPU buffer (`shareDmabuf`).
+pub const drm_xrgb8888: u32 = 0x34325258;
 
 /// `wl_shm` format: 32-bit ARGB, premultiplied, as one little-endian word: `sw`'s `.bgra8`.
 const argb8888 = 0;
@@ -314,6 +327,10 @@ pub const Wayland = struct {
     presents: u32 = 0,
     /// Frames `present` could not show because the compositor still held both buffers.
     dropped: u32 = 0,
+    /// The compositor takes XRGB8888 dma-bufs of the LINEAR modifier (`shareDmabuf`).
+    dmabuf_linear: bool = false,
+    /// Shared buffers (`shareDmabuf`) the compositor holds: attached and not released.
+    held: [8]u32 = @splat(0),
 
     pub const Error = error{ Disconnected, Protocol, MissingGlobal, OutOfIds, OutOfMemory };
 
@@ -550,6 +567,94 @@ pub const Wayland = struct {
         w.presents += 1;
     }
 
+    /// A wl_buffer over plane `p` of a dma-buf of `size` pixels, XRGB8888 and LINEAR: the
+    /// compositor reads the GPU's image with no copy. `p.fd` stays the caller's (a duplicate
+    /// is sent). Needs `dmabuf_linear`; 0 when the connection failed.
+    pub fn shareDmabuf(w: *Wayland, p: Plane, size: [2]u32) u32 {
+        std.debug.assert(w.dmabuf_linear);
+        std.debug.assert(size[0] > 0);
+        std.debug.assert(size[1] > 0);
+        const dup = linux.dup(p.fd);
+        if (linux.errno(dup) != .SUCCESS) {
+            w.fail(error.OutOfMemory);
+            return 0;
+        }
+        const params = w.new(.dmabuf_params);
+        w.request(w.globals.get(.zwp_linux_dmabuf_v1), op.dmabuf_create_params, .{params});
+        const zero: u32 = 0;
+        const plane = wire.Fd{ .fd = @intCast(dup) };
+        w.request(params, op.params_add, .{ plane, zero, p.offset, p.stride, zero, zero });
+        const buffer = w.new(.buffer);
+        const width: i32 = @intCast(size[0]);
+        const height: i32 = @intCast(size[1]);
+        w.request(params, op.params_create_immed, .{ buffer, width, height, drm_xrgb8888, zero });
+        w.destroy(params, op.params_destroy);
+        w.flush();
+        return buffer;
+    }
+
+    /// One plane of a dma-buf: its descriptor, where the pixels start and a row's bytes.
+    pub const Plane = struct { fd: i32, offset: u32, stride: u32 };
+
+    /// Whether the compositor still holds shared buffer `buffer` (attached, not released).
+    pub fn holds(w: *const Wayland, buffer: u32) bool {
+        return std.mem.indexOfScalar(u32, &w.held, buffer) != null;
+    }
+
+    /// Destroys a shared buffer (`shareDmabuf`); the compositor keeps showing it until the
+    /// next commit.
+    pub fn dropBuffer(w: *Wayland, buffer: u32) void {
+        for (&w.held) |*h| h.* = if (h.* == buffer) 0 else h.*;
+        w.destroy(buffer, op.buffer_destroy);
+    }
+
+    /// Attaches shared buffer `buffer` of `px` pixels to window `k`, damages `rects` (buffer
+    /// pixels: x, y, width, height), asks for a frame callback and commits. Skipped before the
+    /// window's first configure, as `present` is.
+    pub fn commitBuffer(w: *Wayland, k: u32, buffer: u32, px: [2]u32, rects: []const [4]u32) void {
+        const win = &w.windows[k];
+        if (!win.configured or win.closed or w.closed) return;
+        std.debug.assert(px[0] > 0);
+        for (&w.held) |*h| if (h.* == 0) {
+            h.* = buffer;
+            break;
+        };
+        w.request(win.surface, op.surface_attach, .{ buffer, @as(i32, 0), @as(i32, 0) });
+        if (win.viewport != 0) {
+            const size: [2]i32 = .{ @intFromFloat(win.size[0]), @intFromFloat(win.size[1]) };
+            w.request(win.viewport, op.viewport_set_destination, .{ size[0], size[1] });
+        } else {
+            const scale: i32 = @intFromFloat(win.scale);
+            w.request(win.surface, op.surface_set_buffer_scale, .{scale});
+        }
+        for (rects) |r| {
+            const box: [4]i32 = .{ @intCast(r[0]), @intCast(r[1]), @intCast(r[2]), @intCast(r[3]) };
+            w.request(win.surface, op.surface_damage_buffer, .{ box[0], box[1], box[2], box[3] });
+        }
+        if (win.frame == 0) {
+            win.frame = w.new(.frame);
+            w.request(win.surface, op.surface_frame, .{win.frame});
+        }
+        w.request(win.surface, op.surface_commit, .{});
+        w.flush();
+        w.presents += 1;
+    }
+
+    /// Handles what the compositor sent, sleeping up to `ms` for it once: for a host that
+    /// waits on a frame callback or a release (`framePending`, `holds`) outside `wait`.
+    pub fn settle(w: *Wayland, ms: i32) void {
+        w.dispatch();
+        if (w.closed) return;
+        _ = w.sleep(ms);
+        w.dispatch();
+    }
+
+    /// Window `k`'s size in physical pixels: what a buffer for it must be.
+    pub fn pixels(w: *const Wayland, k: u32) [2]u32 {
+        const win = &w.windows[k];
+        return physical(win.size, win.scale);
+    }
+
     /// Opens another toplevel window; its slot, or null when all are taken. It is ready once
     /// `windows[k].configured`.
     pub fn openWindow(w: *Wayland, options: Options) ?u32 {
@@ -773,6 +878,16 @@ pub const Wayland = struct {
                 for (&w.windows) |*win| {
                     for (0..2) |b| win.shm.busy[b] = win.shm.busy[b] and win.shm.buffers[b] != m.id;
                 }
+                for (&w.held) |*h| h.* = if (h.* == m.id) 0 else h.*;
+            },
+            .dmabuf => switch (m.opcode) {
+                0 => w.dmabuf_linear = w.dmabuf_linear or a.uint() == drm_xrgb8888, // format
+                1 => { // modifier: format, modifier high and low words
+                    const format = a.uint();
+                    const linear = a.uint() == 0 and a.uint() == 0;
+                    w.dmabuf_linear = w.dmabuf_linear or (format == drm_xrgb8888 and linear);
+                },
+                else => {},
             },
             .seat => if (m.opcode == 0) { // capabilities: pointer 1, keyboard 2, touch 4
                 const caps = a.uint();

@@ -143,14 +143,17 @@ output), text runs, `canvas` batches (LCGF's own instanced primitives under a ca
   from the rows already on the GPU, with no build and no upload of rows. A window that is not
   shown gives its frame up and owes the whole window. Inline custom drawing (`Frame.custom`,
   `drawUntilCustom`) stays below the window layer, for a host that owns its loop and its pass.
-- **Where the window layer has a GPU.** Vulkan over X11 on Linux, the default there (a Wayland
-  session through XWayland when `DISPLAY` is set). Its tests run on Mesa lavapipe in CI and
+- **Where the window layer has a GPU.** Vulkan on Linux, the default there: on native
+  Wayland, its frames copied into dma-bufs the shell shares with the compositor
+  (zwp_linux_dmabuf_v1 on the shell's own connection, src/app/gpu_wayland.zig), else over X11
+  (through XWayland in a Wayland session). One loop drives every GPU window (src/app/gpu.zig's
+  window contract). Its tests run on Mesa lavapipe in CI and
   pass on an RTX 5060. On that GPU a presented frame costs about the same CPU time to submit and
   present whatever it draws, so what the kept picture saves is the build, layout and paint a
   surface frame skips and the `draw` a widget frame skips (docs/plans/window.md, "Landed").
   On macOS the window layer runs on Metal in an AppKit window (src/app/gpu_macos.zig), its
   text from the text service over Core Text's faces; it compiles and links here but has not
-  run on a Mac. Windows and native Wayland have no GPU window through `lcgf_app`.
+  run on a Mac. Windows has no GPU window through `lcgf_app` yet.
   `LCGF_RENDER=sw`, no display, an X server that cannot be reached or no Vulkan device falls
   back to the software window (on macOS, which has none, the shell's own Metal window). Every application runs there: `draw` is
   never called and a `Surface` is not live (`Surface.live`), so its node paints its fill and

@@ -32,6 +32,15 @@ fn kindRank(t: c.VkPhysicalDeviceType) u32 {
 
 /// The best device for drawing (and presenting to `surface`, when given), or error.NoDevice.
 pub fn pick(instance: *const loader.Instance, surface: c.VkSurfaceKHR) (Error || error{NoDevice})!Pick {
+    return pickWith(instance, surface, &.{});
+}
+
+/// `pick` among the devices that also have every one of `extensions`.
+pub fn pickWith(
+    instance: *const loader.Instance,
+    surface: c.VkSurfaceKHR,
+    extensions: []const [*:0]const u8,
+) (Error || error{NoDevice})!Pick {
     const f = &instance.fns;
     var devices: [16]c.VkPhysicalDevice = undefined;
     var n: u32 = devices.len;
@@ -47,6 +56,10 @@ pub fn pick(instance: *const loader.Instance, surface: c.VkSurfaceKHR) (Error ||
         f.vkGetPhysicalDeviceFeatures2.?(pd, &f2);
         if (f13.dynamicRendering == 0 or f13.synchronization2 == 0) continue;
         if (surface != null and !hasDeviceExtension(instance, pd, "VK_KHR_swapchain")) continue;
+        const all = for (extensions) |e| {
+            if (!hasDeviceExtension(instance, pd, std.mem.span(e))) break false;
+        } else true;
+        if (!all) continue;
         const family = graphicsFamily(instance, pd, surface) orelse continue;
         const rank = kindRank(props.deviceType);
         if (rank > best_rank) {
@@ -202,6 +215,17 @@ pub const Device = struct {
 
     /// One queue from `p.family`; VK_KHR_swapchain when `presents`.
     pub fn init(instance: *const loader.Instance, p: Pick, presents: bool) Error!Device {
+        const swapchain_ext = [_][*:0]const u8{"VK_KHR_swapchain"};
+        return initWith(instance, p, presents, if (presents) &swapchain_ext else &.{});
+    }
+
+    /// `init` with `extensions` enabled (VK_KHR_swapchain among them when `presents`).
+    pub fn initWith(
+        instance: *const loader.Instance,
+        p: Pick,
+        presents: bool,
+        extensions: []const [*:0]const u8,
+    ) Error!Device {
         const priority: f32 = 1;
         const queue_info: c.VkDeviceQueueCreateInfo = .{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -214,15 +238,14 @@ pub const Device = struct {
             .dynamicRendering = c.VK_TRUE,
             .synchronization2 = c.VK_TRUE,
         };
-        const extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
         var handle: c.VkDevice = null;
         try check(instance.fns.vkCreateDevice.?(p.physical, &.{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = &f13,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_info,
-            .enabledExtensionCount = @intFromBool(presents),
-            .ppEnabledExtensionNames = &extensions,
+            .enabledExtensionCount = @intCast(extensions.len),
+            .ppEnabledExtensionNames = extensions.ptr,
         }, null, &handle));
         return fromOwnedHandle(instance, p, presents, handle);
     }

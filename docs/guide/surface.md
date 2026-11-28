@@ -36,9 +36,10 @@ zig build surface-example && zig-out/bin/surface-example
 ```
 
 It needs a Vulkan build on Linux (`-Drender=vk`, the default there) or a Metal one on macOS
-(`-Drender=metal`, the default there). On Linux the window is X11, and a Wayland session runs
-it through XWayland when `DISPLAY` is set; on macOS it is an AppKit window. In any other build
-`gpu` is a
+(`-Drender=metal`, the default there). On Linux, under a Wayland compositor that takes
+dma-bufs the window is native Wayland (Vulkan draws into images the compositor reads with no
+copy); else it is X11, through XWayland in a Wayland session. On macOS it is an AppKit window.
+In any other build `gpu` is a
 compile error that says why; `Surface`, `GpuFrame` and `draw` compile, and a surface is never
 live there (below).
 

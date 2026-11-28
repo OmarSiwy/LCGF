@@ -5,10 +5,12 @@
 //! open there, gives the shell's own window, still drawn with Metal (macOS has no software
 //! window), where `draw` is never called. On Linux it reads the environment:
 //!
-//!   - A Vulkan build (the default) opens X11 with Vulkan whenever `DISPLAY` is set and
-//!     `LCGF_RENDER` is not `sw`, whatever `WAYLAND_DISPLAY` says. If the X server cannot be
-//!     reached or has no Vulkan device, it takes the software path below. With
-//!     `LCGF_RENDER=sw`, or `DISPLAY` unset or empty, it takes the software path at once.
+//!   - A Vulkan build (the default), unless `LCGF_RENDER` is `sw`, opens a native Wayland
+//!     window with Vulkan when `WAYLAND_DISPLAY` is set and not empty, then X11 with Vulkan
+//!     when `DISPLAY` is. Each falls through to the next when it cannot open (no compositor
+//!     or X server there, no dma-buf the compositor takes, no Vulkan device), and the last to
+//!     the software path below. With `LCGF_RENDER=sw`, or neither set, it takes the software
+//!     path at once.
 //!   - The software path (and every `-Drender=sw` build) opens Wayland when `WAYLAND_DISPLAY`
 //!     is set and not empty, and X11 on `DISPLAY` only when it is not, or when the compositor
 //!     cannot be reached and `DISPLAY` is set. Neither reachable: `run` returns the error.
@@ -92,6 +94,12 @@ const gpu_window = switch (builtin.os.tag) {
     .linux => if (render == .vk) @import("gpu_x11.zig") else struct {},
     .macos => if (render == .metal) @import("gpu_macos.zig") else struct {},
     else => struct {},
+};
+/// GPU windows tried before `gpu_window`, in order: native Wayland on a Vulkan build. They
+/// share its `Surface` and `GpuFrame` (one back end, src/app/gpu.zig `Shared`).
+const gpu_first = switch (builtin.os.tag) {
+    .linux => if (render == .vk) .{@import("gpu_wayland.zig")} else .{},
+    else => .{},
 };
 /// Whether this build draws the window with a GPU: Vulkan over X11 on Linux, Metal on macOS.
 pub const has_gpu = @hasDecl(gpu_window, "Loop");
@@ -437,8 +445,9 @@ fn runSoftwareLinux(
     return loop(App, app, &shell, ctx, clock, glyphs, tw);
 }
 
-/// The window on the GPU when the build has one (`gpu_window`) and `LCGF_RENDER` is not `sw`:
-/// on Linux X11 with Vulkan where `DISPLAY` is set (under Wayland, through XWayland).
+/// The window on the GPU when the build has one (`gpu_first`, then `gpu_window`) and
+/// `LCGF_RENDER` is not `sw`: on Linux native Wayland where `WAYLAND_DISPLAY` is set, then
+/// X11 with Vulkan where `DISPLAY` is (under Wayland, through XWayland).
 /// `.software` when it cannot (no display, no server there, no device, or forced), so `run`
 /// opens the software window instead, where `App.draw` is never called and `Surface.live` is
 /// false.
@@ -463,20 +472,25 @@ fn runGpu(
         .room = .{ .canvas_rows = c.rows, .canvas_verts = c.verts },
         .display = env.display,
         .auth = env.auth,
+        .wayland = env.wayland,
+        .runtime_dir = env.runtime_dir,
         .ctx = ctx,
         .tw = tw,
         .quads = &B.glyphs,
         .first = &B.first,
         .count = &B.count,
     };
+    inline for (gpu_first) |first| if (try first.runApp(App, app, want, clock)) return .done;
+    if (builtin.os.tag == .linux and env.display.len == 0) return .software;
     return if (try gpu_window.runApp(App, app, want, clock)) .done else .software;
 }
 
 /// Where a GPU build draws: on the GPU unless `LCGF_RENDER=sw` forces software or, on Linux,
-/// there is no X display (`DISPLAY` empty) to draw on.
+/// there is neither a compositor (`WAYLAND_DISPLAY`) nor an X display (`DISPLAY`) to draw on.
 fn pickGpu(env: Env) GpuRun {
     if (std.mem.eql(u8, env.render, "sw")) return .software;
-    if (builtin.os.tag == .linux and env.display.len == 0) return .software;
+    const none = env.display.len == 0 and env.wayland.len == 0;
+    if (builtin.os.tag == .linux and none) return .software;
     return .done;
 }
 
@@ -817,6 +831,7 @@ const Color = lcgf.types.Color;
 
 test {
     if (has_gpu) _ = gpu_window;
+    inline for (gpu_first) |first| _ = first;
 }
 
 /// An application with one image of its own, drawn on a node, and a line of text.

@@ -5,6 +5,7 @@
 ### New
 
 - Test an application without a window: the `lcgf_replay` module (`dep.module("lcgf_replay")`, src/example/replay.zig) plays a recording into an `App` through the headless shell and gives its tree, draw list and software-rendered pixels; an App's `images` are bound as the window binds them. Every example's `zig build test` uses it.
+- `lcgf_app` draws on the GPU on native Wayland: a Vulkan build under a compositor that takes LINEAR XRGB8888 dma-bufs (zwp_linux_dmabuf_v1) opens a Wayland window, Vulkan draws into images it exports, and the Wayland shell shares and attaches them on its own connection, paced by frame callbacks. XWayland is the fallback. One GPU loop drives every GPU window (src/app/gpu.zig's window contract). [Surfaces](docs/guide/surface.md)
 
 ### Changed
 

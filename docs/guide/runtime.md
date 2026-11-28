@@ -252,10 +252,11 @@ yourself through `Surface`, and 2D primitives through `Frame.canvas`.
 On Windows `run` opens a Win32 window and on macOS an AppKit one. On Linux it reads the
 environment:
 
-- **A Vulkan build** (the default) opens X11 with Vulkan whenever `DISPLAY` is set and
-  `LCGF_RENDER` is not `sw`, whatever `WAYLAND_DISPLAY` says. If the X server cannot be
-  reached or has no Vulkan device, `run` takes the software path below. With `LCGF_RENDER=sw`,
-  or `DISPLAY` unset or empty, it takes the software path at once.
+- **A Vulkan build** (the default), unless `LCGF_RENDER` is `sw`, opens a native Wayland
+  window with Vulkan when `WAYLAND_DISPLAY` is set and not empty, then X11 with Vulkan when
+  `DISPLAY` is. Each falls through to the next when it cannot open (no compositor or X server
+  there, no dma-buf the compositor takes, no Vulkan device), and the last to the software
+  path below. With `LCGF_RENDER=sw`, or neither set, it takes the software path at once.
 - **The software path** (and every `-Drender=sw` build) opens Wayland when `WAYLAND_DISPLAY`
   is set and not empty, and X11 on `DISPLAY` only when it is not, or when the compositor
   cannot be reached and `DISPLAY` is set. If neither can be reached, `run` returns the error.
