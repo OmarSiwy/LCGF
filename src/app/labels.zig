@@ -15,7 +15,7 @@
 //! made before is stale, and the caller makes them again. Shapes with the faces and fallback
 //! chains of a `text.Text`, which must outlive the labels' rows only while they are made.
 //!
-//! Outside the tiers (src/app/), next to the text service; every table is carved from the
+//! Tier 3, the window layer (src/app/), next to the text service; every table is carved from the
 //! caller's buffer (`requiredBytes`), nothing allocates.
 //!
 //! Contents

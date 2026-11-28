@@ -21,9 +21,10 @@
 //! generations and equal draw lists give equal glyph quads, which is what lets a host that
 //! keeps last frame's pixels skip the text that did not change.
 //!
-//! Outside the tiers (src/app/): it reads font files and asks the OS for faces. Every table is
-//! carved from the caller's buffer (`requiredBytes`); nothing allocates per frame. Loading a
-//! face file uses the caller's allocator, once per face. Cites docs/plans/window.md, stage 4.
+//! Tier 3, the window layer (src/app/): it reads font files and asks the OS for faces. Every
+//! table is carved from the caller's buffer (`requiredBytes`); nothing allocates per frame.
+//! Loading a face file uses the caller's allocator, once per face. Cites docs/plans/window.md,
+//! stage 4.
 //!
 //! Contents
 //!   pub const Options = struct

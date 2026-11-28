@@ -418,9 +418,10 @@ comptime {
     iface.check(Software);
 }
 
-/// What a shell that draws in software keeps, and its frame: clear the framebuffer and draw the
-/// whole list into it. Moved from the X11, Win32 and Wayland shells, which each repeated it;
-/// the shell owns the pixels and shows them (PutImage, SetDIBitsToDevice, a wl_shm buffer).
+/// What a shell that draws in software keeps, and its frame: inside each rect of the list's
+/// damage, clear the framebuffer and draw the list (`draw`). Moved from the X11, Win32 and
+/// Wayland shells, which each repeated it; the shell owns the pixels and shows them (PutImage,
+/// SetDIBitsToDevice, a wl_shm buffer).
 pub const Setup = struct {
     gfx: Software = .{},
     /// Threads to draw with, a band of rows each (`bands`), set by a host that has them; null

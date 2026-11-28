@@ -7175,7 +7175,7 @@ Software renderer for the features collected from a comptime UI.
 
 
 ### `Setup` (struct)
-What a shell that draws in software keeps, and its frame: clear the framebuffer and draw the whole list into it.
+What a shell that draws in software keeps, and its frame: inside each rect of the list's damage, clear the framebuffer and draw the list (`draw`).
 
 Fields: `gfx`, `pool`, `bins`
 
