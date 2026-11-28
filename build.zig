@@ -1361,11 +1361,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = desktop.host } },
     }) });
     examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
-    for ([_][]const u8{"viewport"}) |name| {
-        const app = desktop.app(b.path(b.fmt("examples/{s}/app.zig", .{name})));
-        const exe = desktop.executable(app, b.fmt("example-{s}", .{name}));
-        examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
-    }
     // The microcontroller demo (examples/mcu/app.zig) also links for a Cortex-M7 with no OS.
     const m7 = b.resolveTargetQuery(.{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } });
     const m7_lcgf = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = m7, .optimize = .ReleaseSmall });
