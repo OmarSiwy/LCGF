@@ -133,10 +133,10 @@ if any(l[0] == "canvas" for l in lines):
     for l in lines:
         if l[0] == "canvas":
             node = [float(v) for v in l[1:]] + [1, 0, 0, 1, 0, 0, 0, 0, 0, 0][len(l) - 10:]
-            cmds.append({"node": node, "ranges": [], "marks": []})
+            cmds.append({"node": node, "ranges": [], "overrides": []})
         elif l[0] == "camera": cmds[-1]["cam"] = l[1:]
         elif l[0] == "range": cmds[-1]["ranges"].append((int(l[1]), int(l[2])))
-        elif l[0] == "override": cmds[-1]["marks"].append((int(l[1]), int(l[2]), int(l[3])))
+        elif l[0] == "override": cmds[-1]["overrides"].append((int(l[1]), int(l[2]), int(l[3])))
     rows = (d / "canvas.bin").read_bytes()
     verts = (d / "verts.bin").read_bytes()
     n = len(rows) // 32
@@ -178,7 +178,7 @@ if any(l[0] == "canvas" for l in lines):
     device.queue.write_texture({"texture": at_tex}, apx, {"bytes_per_row": 4 * aw, "rows_per_image": ah}, (aw, ah, 1))
     cg1 = device.create_bind_group(layout=cbgl1, entries=[{"binding": 0, "resource": at_tex.create_view()}])
     for c in cmds:
-        node, cam, marks = c["node"], c["cam"], c["marks"]
+        node, cam, overrides = c["node"], c["cam"], c["overrides"]
         # canvas.zig `View.of` at scale S, then shaders/canvas.zig `fill` (`Uniforms`).
         origin = [int(cam[0]) & 0xffffffff, int(cam[1]) & 0xffffffff]
         scale, ox, oy = f32(float(cam[2])), float(cam[3]), float(cam[4])
@@ -190,13 +190,13 @@ if any(l[0] == "canvas" for l in lines):
         radii = node[15:19]
         clip = node[4:8]
         u = struct.pack("<2I2f3fI", origin[0], origin[1], f32(f32(node[0] + ox) * S), f32(f32(node[1] + oy) * S), f32(scale * S), S, 0, 0)
-        u += struct.pack("<4f4f2ff5I", *[f32(v * S) for v in node[0:4]], *[f32(v * S) for v in clip], W, H, node[8], 0, 0, len(verts) // 8, len(marks), len(layers))
+        u += struct.pack("<4f4f2ff5I", *[f32(v * S) for v in node[0:4]], *[f32(v * S) for v in clip], W, H, node[8], 0, 0, len(verts) // 8, len(overrides), len(layers))
         u += struct.pack("<4f2f2f4f4f4f2fII", *inv, *inv_t, f32(tx * S), f32(ty * S), a, b, cc, dd, *radii,
                          f32(f32(clip[0] + clip[2]) * 0.5), f32(f32(clip[1] + clip[3]) * 0.5), f32(f32(clip[2] - clip[0]) * 0.5), f32(f32(clip[3] - clip[1]) * 0.5),
                          S, f32(1 / S), int(any(r > 0 for r in radii)), 0)
         pal = b"".join(struct.pack("<IIfI", int(l[0]), int(l[1]), float(l[2]), int(l[3])) for l in layers)
         u += pal + bytes(16 * (256 - len(layers)))
-        u += b"".join(struct.pack("<4I", x, y, z, 0) for x, y, z in marks) + bytes(16 * (512 - len(marks)))
+        u += b"".join(struct.pack("<4I", x, y, z, 0) for x, y, z in overrides) + bytes(16 * (512 - len(overrides)))
         uni = buf(u, wgpu.BufferUsage.UNIFORM)
         cg0 = device.create_bind_group(layout=cbgl0, entries=[{"binding": 0, "resource": {"buffer": uni, "offset": 0, "size": len(u)}},
                                                               {"binding": 1, "resource": {"buffer": vert_buf, "offset": 0, "size": vert_buf.size}}])

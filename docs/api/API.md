@@ -2381,6 +2381,7 @@ Fields: `origin`, `base`, `scale`, `px`, `_pad`
 - `fn len(v: View, w: u32) f32`: A length (radius, distance) in world units, in pixels.
 
 ### `Instances` (struct)
+The rows, their polygon vertices and their dirty ranges, in caller-owned columns.
 
 Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `dirty_len`, `dirty_all`, `c`, `verts`, `colors`, `glyph_atlas`
 
@@ -3245,9 +3246,9 @@ The canvas shader (canvas.wgsl) and the uniforms it reads, for every GPU back en
 ### `Uniforms` (struct)
 canvas.wgsl's `Draw`.
 
-Fields: `view`, `rect`, `clip`, `size`, `opacity`, `row_base`, `vert_base`, `vert_len`, `overrides`, `layers`, `inv`, `inv_t`, `fwd_t`, `fwd`, `radii`, `clip_box`, `px_scale`, `inv_scale`, `rounded`, `_pad`, `palette`, `marks`
+Fields: `view`, `rect`, `clip`, `size`, `opacity`, `row_base`, `vert_base`, `vert_len`, `overrides`, `layers`, `inv`, `inv_t`, `fwd_t`, `fwd`, `radii`, `clip_box`, `px_scale`, `inv_scale`, `rounded`, `_pad`, `palette`, `override_rows`
 
-- `fn headBytes(layers: u32) usize`: Bytes of the head and the first `layers` palette rows: what `marks` does not cover.
+- `fn headBytes(layers: u32) usize`: Bytes of the head and the first `layers` palette rows: what `override_rows` does not cover.
 
 ## `lcgf.render_null` (src/render/null.zig)
 

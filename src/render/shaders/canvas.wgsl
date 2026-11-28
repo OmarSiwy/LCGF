@@ -52,7 +52,7 @@ struct Draw {
     // stroke, fill, width (f32 bits), flags.
     palette: array<vec4u, 256>,
     // first, count, colour, 0.
-    marks: array<vec4u, 512>,
+    override_rows: array<vec4u, 512>,
 }
 @group(0) @binding(0) var<uniform> u: Draw;
 @group(1) @binding(0) var atlas: texture_2d<f32>;
@@ -113,7 +113,7 @@ fn unorm16(v: u32) -> f32 {
 fn override_of(i: u32, colour: u32) -> u32 {
     var found = colour;
     for (var j = 0u; j < min(u.overrides, 512u); j++) {
-        let o = u.marks[j];
+        let o = u.override_rows[j];
         found = select(found, o.z, i - o.x < o.y);
     }
     return found;

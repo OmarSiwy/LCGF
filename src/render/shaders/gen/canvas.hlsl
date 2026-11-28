@@ -25,7 +25,7 @@ struct Draw {
     uint rounded;
     int _pad24_0;
     uint4 palette[256];
-    uint4 marks[512];
+    uint4 override_rows[512];
 };
 
 struct Row {
@@ -128,7 +128,7 @@ uint override_of(uint i, uint colour_1)
         }
         {
             uint _e14 = j;
-            uint4 o = u.marks[_e14];
+            uint4 o = u.override_rows[_e14];
             uint _e17 = found;
             found = (((i - o.x) < o.y) ? o.z : _e17);
         }

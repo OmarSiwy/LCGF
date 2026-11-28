@@ -29,7 +29,7 @@ struct Draw {
     float inv_scale;
     uint rounded;
     uvec4 palette[256];
-    uvec4 marks[512];
+    uvec4 override_rows[512];
 };
 struct Row {
     ivec4 pos;
@@ -106,7 +106,7 @@ uint override_of(uint i, uint colour_1) {
         }
         {
             uint _e14 = j;
-            uvec4 o = _group_0_binding_0_vs.marks[_e14];
+            uvec4 o = _group_0_binding_0_vs.override_rows[_e14];
             uint _e17 = found;
             found = (((i - o.x) < o.y) ? o.z : _e17);
         }

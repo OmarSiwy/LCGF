@@ -197,6 +197,9 @@ pub const View = extern struct {
     }
 };
 
+/// The rows, their polygon vertices and their dirty ranges, in caller-owned columns. A row's
+/// own colour (`colors`) is both its stroke and its fill: a filled and stroked shape in its own
+/// colour shows one colour.
 pub const Instances = struct {
     len: u32 = 0,
     cap: u32,

@@ -62,9 +62,9 @@ pub const Uniforms = extern struct {
     rounded: u32,
     _pad: u32 = 0,
     palette: [max_layers]canvas.Layer,
-    marks: [max_overrides][4]u32,
+    override_rows: [max_overrides][4]u32,
 
-    /// Bytes of the head and the first `layers` palette rows: what `marks` does not cover.
+    /// Bytes of the head and the first `layers` palette rows: what `override_rows` does not cover.
     pub fn headBytes(layers: u32) usize {
         return @offsetOf(Uniforms, "palette") + @as(usize, layers) * @sizeOf(canvas.Layer);
     }
@@ -77,8 +77,8 @@ comptime {
 /// Fills the head, palette and overrides of canvas command `k` of `list` at `scale` physical
 /// pixels per logical one, on a `target` of physical pixels; the batch starts at `row_base`
 /// and `vert_base` in the GPU buffers. Only `headBytes(u.layers)` and `u.overrides` rows of
-/// `marks` are written. False, and nothing to draw, for a node whose transform has no inverse
-/// (sw's `prep` draws nothing then either).
+/// `override_rows` are written. False, and nothing to draw, for a node whose transform has no
+/// inverse (sw's `prep` draws nothing then either).
 pub fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, target: [2]f32, row_base: u32, vert_base: u32) bool {
     const node = list.customs[k];
     // sw canvas.zig `prep`'s `Space`, in the same arithmetic.
@@ -97,7 +97,7 @@ pub fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, t
     const c = list.canvases[k];
     const s: @Vector(4, f32) = @splat(scale);
     const layers: u32 = @intCast(@min(c.palette.layers.len, max_layers));
-    const marks = c.overrides[0..@min(c.overrides.len, max_overrides)];
+    const table = c.overrides[0..@min(c.overrides.len, max_overrides)];
     u.view = canvas.View.of(c.camera, .{ node.rect[0], node.rect[1] }, scale);
     u.rect = @as(@Vector(4, f32), node.rect) * s;
     u.clip = @as(@Vector(4, f32), node.clip) * s;
@@ -106,9 +106,11 @@ pub fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, t
     u.row_base = row_base;
     u.vert_base = vert_base;
     u.vert_len = c.instances.vert_len;
-    u.overrides = @intCast(marks.len);
+    u.overrides = @intCast(table.len);
     u.layers = layers;
     @memcpy(u.palette[0..layers], c.palette.layers[0..layers]);
-    for (marks, u.marks[0..marks.len]) |o, *m| m.* = .{ o.range.first, o.range.count, o.color, 0 };
+    for (table, u.override_rows[0..table.len]) |o, *m| {
+        m.* = .{ o.range.first, o.range.count, o.color, 0 };
+    }
     return true;
 }

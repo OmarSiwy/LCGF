@@ -262,8 +262,9 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
                 const j = cv.draw_len;
                 if (!shader.fill(&uniforms, list, k, scale, .{ @floatFromInt(size[0]), @floatFromInt(size[1]) }, cv.batches[b].row_base, cv.batches[b].vert_base)) continue;
                 cv.write(up, s.uniforms[j], 0, std.mem.asBytes(&uniforms)[0..shader.Uniforms.headBytes(uniforms.layers)]);
-                const marks = @offsetOf(shader.Uniforms, "marks");
-                cv.write(up, s.uniforms[j], marks, std.mem.sliceAsBytes(uniforms.marks[0..uniforms.overrides]));
+                const table = @offsetOf(shader.Uniforms, "override_rows");
+                const rows = uniforms.override_rows[0..uniforms.overrides];
+                cv.write(up, s.uniforms[j], table, std.mem.sliceAsBytes(rows));
                 cv.draws[j] = .{ .k = k, .batch = b };
                 cv.draw_len += 1;
             }

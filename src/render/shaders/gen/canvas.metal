@@ -41,7 +41,7 @@ struct Draw {
     uint rounded;
     char _pad24[4];
     type_6 palette;
-    type_7 marks;
+    type_7 override_rows;
 };
 struct Row {
     metal::int4 pos;
@@ -126,7 +126,7 @@ uint override_of(
         }
         {
             uint _e14 = j;
-            metal::uint4 o = u.marks.inner[_e14];
+            metal::uint4 o = u.override_rows.inner[_e14];
             uint _e17 = found;
             found = ((i - o.x) < o.y) ? o.z : _e17;
         }
