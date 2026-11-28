@@ -387,6 +387,17 @@ pub const GraphicsCommandList = opaque {
     pub fn clearRenderTargetView(l: *L, rtv: c.D3D12_CPU_DESCRIPTOR_HANDLE, rgba: [4]f32) void {
         method(l, Slot.ClearRenderTargetView, fn (*L, c.D3D12_CPU_DESCRIPTOR_HANDLE, *const [4]f32, u32, ?*const c.D3D12_RECT) callconv(.c) void)(l, rtv, &rgba, 0, null);
     }
+    /// `clearRenderTargetView` inside `rect` only.
+    pub fn clearRenderTargetRect(
+        l: *L,
+        rtv: c.D3D12_CPU_DESCRIPTOR_HANDLE,
+        rgba: [4]f32,
+        rect: c.D3D12_RECT,
+    ) void {
+        const Rtv = c.D3D12_CPU_DESCRIPTOR_HANDLE;
+        const F = fn (*L, Rtv, *const [4]f32, u32, ?*const c.D3D12_RECT) callconv(.c) void;
+        method(l, Slot.ClearRenderTargetView, F)(l, rtv, &rgba, 1, &rect);
+    }
 };
 
 pub const SwapChain = opaque {

@@ -16,6 +16,9 @@ pub const renderer = @import("renderer.zig");
 pub const Renderer = renderer.Renderer;
 pub const CanvasRenderer = renderer.CanvasRenderer;
 pub const frame = @import("frame.zig");
+/// The device, renderer and a window's kept picture, for a host with no device of its own.
+pub const setup = @import("setup.zig");
+pub const Setup = setup.Setup;
 /// lcgf_render.gpu on Direct3D 12: WebGPU's object model projected onto this back end (gpu.zig).
 pub const gpu = @import("gpu.zig");
 pub const scenes = @import("scenes.zig");
@@ -28,6 +31,7 @@ test {
     std.testing.refAllDecls(pipeline);
     std.testing.refAllDecls(renderer);
     std.testing.refAllDecls(frame);
+    std.testing.refAllDecls(setup);
     std.testing.refAllDecls(gpu);
     std.testing.refAllDecls(scenes);
 }
