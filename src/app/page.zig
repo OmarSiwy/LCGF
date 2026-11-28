@@ -173,9 +173,9 @@ pub const TestApp = struct {
     rows: [2 * 64]CanvasDraw = undefined,
     shapes: lcgf.canvas.Instances = undefined,
     layers: [1]lcgf.canvas.Layer = .{.of(.{ .stroke = red, .fill = red })},
-    palette: lcgf.canvas.Palette = undefined,
     ranges: [1]lcgf.canvas.Range = undefined,
-    camera: lcgf.canvas.Camera = .{ .offset = .{ 10, 10 } },
+    /// The canvas's camera and palette, which a pan changes with no `build` on the GPU.
+    view: @import("app.zig").Canvas = .{ .camera = .{ .offset = .{ 10, 10 } } },
     icon: [16 * 16]u8 = @splat(255),
     icon_generation: u32 = 0,
     image: [1]AppImage = undefined,
@@ -218,11 +218,7 @@ pub const TestApp = struct {
         _ = f.open(.none, root);
         _ = f.textStyled("Wave office", .{ .px = 15, .color = .white }, .{});
         const plot: lcgf.types.Style = .{ .size = .{ .px(200), .px(60) }, .fill = canvas_fill };
-        _ = f.canvas(.from("plot"), plot, &a.shapes, .{
-            .camera = a.camera,
-            .palette = &a.palette,
-            .ranges = &a.ranges,
-        });
+        _ = a.view.node(f, .from("plot"), plot, &a.shapes, .{ .ranges = &a.ranges });
         f.close();
     }
 
@@ -276,7 +272,7 @@ pub const TestApp = struct {
         a.shapes = .init(&carver, 32, 0, 1, .{});
         _ = a.shapes.rect(.{ 0, 0 }, .{ 10, 10 }, .{});
         a.ranges = .{a.shapes.since(0)};
-        a.palette = .{ .layers = &a.layers };
+        a.view.palette = .{ .layers = &a.layers };
         a.ready = true;
     }
 };
@@ -294,9 +290,9 @@ pub fn expectCanvas(w: anytype, app: *const TestApp) !void {
     const atlas = &app.labels.labels.?.atlas;
     const look: text.labels.CanvasLook = .{
         .ground = TestApp.canvas_fill,
-        .palette = &app.palette,
+        .palette = &app.view.palette,
     };
-    text.labels.drawCanvas(&fb, &app.shapes, app.camera, atlas, look);
+    text.labels.drawCanvas(&fb, &app.shapes, app.view.camera, atlas, look);
     var bad: u32 = 0;
     var lit: u32 = 0;
     for (0..60) |y| for (0..200) |x| {

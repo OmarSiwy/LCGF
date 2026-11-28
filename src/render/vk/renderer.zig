@@ -326,8 +326,14 @@ pub fn RendererOf(comptime canvases: bool) type {
 
         /// Uploads the frame into ring slot `frame`: three memcpy into mapped memory. Quads past
         /// `max_quads` (glyphs past `max_glyphs`) are dropped, as the wgpu back end does. Call before
-        /// recording the frame's draws.
+        /// recording the frame's draws. `prepareRows` then `prepareCanvases`, both in `frame`.
         pub fn prepare(r: *Self, frame: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
+            r.prepareRows(frame, draw, glyphs, viewport, scale);
+            r.prepareCanvases(frame);
+        }
+
+        /// `prepare` without the canvases: the list's quads and glyphs into ring slot `frame`.
+        pub fn prepareRows(r: *Self, frame: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
             r.base = @as(u64, frame % r.desc.frames) * r.slot_bytes;
             const slot = r.ring.mapped[@intCast(r.base)..][0..@intCast(r.slot_bytes)];
             const g: Globals = .{ .viewport = viewport, .scale = scale };
@@ -343,9 +349,24 @@ pub fn RendererOf(comptime canvases: bool) type {
             r.extent = .{ .width = @intFromFloat(@round(viewport[0] * scale)), .height = @intFromFloat(@round(viewport[1] * scale)) };
             r.scissor = .{ .offset = .{ .x = 0, .y = 0 }, .extent = r.extent };
             r.list = draw;
+        }
+
+        /// The canvas commands of the last `prepareRows`' list into the canvas copy `frame`:
+        /// their cameras, palettes and overrides, and the rows their instances dirtied. A host
+        /// that changed only those (a pan) calls this alone, with the list's quads where they
+        /// are; its slots then count apart from the rows' (`setup.Window.present`).
+        pub fn prepareCanvases(r: *Self, frame: Queue) void {
+            const draw = r.list orelse return;
             if (canvases) if (r.canvas) |*cv| {
-                const atlas = @min(@backingInt(glyphs.canvasTexture()), r.texture_count - 1);
-                cv.prepare(.wrap(r.dev), null, draw, frame, scale, .{ r.extent.width, r.extent.height }, .{ .view = r.views[atlas], .image = null, .width = 0, .height = 0 }, atlas);
+                const atlas = @min(@backingInt(r.glyphs.canvasTexture()), r.texture_count - 1);
+                const view: gpu.TextureView = .{
+                    .view = r.views[atlas],
+                    .image = null,
+                    .width = 0,
+                    .height = 0,
+                };
+                const size: [2]u32 = .{ r.extent.width, r.extent.height };
+                cv.prepare(.wrap(r.dev), null, draw, frame, r.scale, size, view, atlas);
             };
         }
 

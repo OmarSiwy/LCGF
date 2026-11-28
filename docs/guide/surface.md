@@ -60,9 +60,16 @@ The window draws again only what changed:
 |---|---|---|---|
 | A widget (input, a signal, a timer) | yes | no | the frame's damage, from the new rows |
 | A surface (`plot.redraw()`, or its node's size) | no | yes | the surface's rectangle, from the rows already on the GPU |
+| A canvas's camera or palette (`view.redraw()` on an `lcgf_app.Canvas`) | no | no | the canvas node's rectangle, from the rows already on the GPU, with the new camera |
 | Nothing | no | no | nothing: no frame, the loop sleeps |
 
-So a widget that changes never calls `draw`, and an animation never builds. To animate, call
+So a widget that changes never calls `draw`, and an animation never builds. A canvas kept in
+an `lcgf_app.Canvas` (its `node` in `build`, its `camera` and `palette` yours) pans and
+recolours the same way: change them anywhere on the UI thread and call `redraw()`; the canvas
+uploads its camera and any rows you dirtied, nothing else. In the software window `redraw()`
+builds a frame instead, so the same code works there. A pan from a drag on the canvas comes
+with input, which builds a frame anyway; `redraw` is what spares the frame for a camera moved
+by the program (an animation, a follow, a zoom to fit). To animate, call
 `plot.redraw()` at the end of `draw`: it asks for the next frame, which the display's refresh
 (FIFO) paces. Calling it in `build`, for example when a button is clicked, asks for one frame.
 

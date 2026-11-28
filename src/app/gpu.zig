@@ -37,6 +37,7 @@ const x11 = @import("x11");
 const x11_gpu = @import("x11_gpu");
 const text = @import("text.zig");
 const page = @import("page.zig");
+const app_mod = @import("app.zig");
 const context = lcgf.context;
 const scheduler = lcgf.scheduler;
 const font = lcgf.render_sw_font;
@@ -169,6 +170,8 @@ pub const Stats = struct {
     not_shown: u32 = 0,
     /// Bytes of UI rows (quads and glyph quads) uploaded.
     row_bytes: u64 = 0,
+    /// Frames that drew a canvas again for its `lcgf_app.Canvas.redraw`, with no build.
+    canvas_redraws: u32 = 0,
     /// Bytes of the canvas label atlas uploaded.
     label_bytes: u64 = 0,
     /// Bytes of canvas rows, vertices and uniforms uploaded.
@@ -297,6 +300,7 @@ pub const Window = struct {
         gw.ctx = null;
         gw.refuse = 0;
         gw.paging = .{};
+        app_mod.canvases.forget();
     }
 
     /// Waits for the device, then lets go of everything `open` and the frames made, the
@@ -313,6 +317,7 @@ pub const Window = struct {
         };
         registry.built = @splat(false);
         registry.shell = null;
+        app_mod.canvases.forget();
         for (&gw.images) |*img| if (img.*) |*i| d.destroyImage(i);
         if (gw.text) |*t| d.destroyImage(t);
         if (gw.labels) |*t| d.destroyImage(t);
@@ -367,7 +372,8 @@ pub fn loop(comptime App: type, app: *App, gw: *Window, run: Run, clock: anytype
         if (comptime page.composes(App)) {
             if (gw.paging.wants(ctx, &ev.in)) buildPage(App, app, gw, run, &ev);
         } else if (ctx.needsFrame(&ev.in)) build(App, app, gw, run, &ev);
-        const due = gw.rows != null or anyDirty() or exposed or waiting_since_not_shown;
+        const owed = anyDirty() or app_mod.canvases.owed();
+        const due = gw.rows != null or owed or exposed or waiting_since_not_shown;
         if (due and (gw.x.setup.gfx.list != null or gw.rows != null)) {
             if (present(App, app, gw, w)) |_| {
                 waiting_since_not_shown = false;
@@ -384,7 +390,8 @@ pub fn loop(comptime App: type, app: *App, gw: *Window, run: Run, clock: anytype
         }
         const left = clock.left();
         if (!(left > 0)) break;
-        if (anyDirty() and !waiting_since_not_shown) continue; // FIFO paces the next frame
+        // FIFO paces the next frame.
+        if ((anyDirty() or app_mod.canvases.owed()) and !waiting_since_not_shown) continue;
         var s = @min(scheduler.wake(ctx, &ev.in), left);
         if (waiting_since_not_shown) s = @min(s, retry_seconds);
         // `.display` would add the shell's refresh timer: `begin` paces instead.
@@ -403,6 +410,7 @@ fn build(comptime App: type, app: *App, gw: *Window, run: Run, ev: *const Events
     const ctx = run.ctx;
     var f = ctx.begin(&ev.in);
     registry.built = @splat(false);
+    app_mod.canvases.forget();
     app.build(&f, ev);
     const out = run.tw.end(&f);
     run.w.apply(&out.platform);
@@ -420,6 +428,7 @@ fn buildPage(comptime App: type, app: *App, gw: *Window, run: Run, ev: *const Ev
     std.debug.assert(ev.in.scale > 0);
     const ctx = run.ctx;
     registry.built = @splat(false);
+    app_mod.canvases.forget();
     const b = page.build(App, app, &gw.paging, ctx, run.tw, ev);
     run.w.apply(&b.out.platform);
     gw.stats.builds += 1;
@@ -484,7 +493,7 @@ fn owe(
     in: *const lcgf.input.Input,
 ) void {
     std.debug.assert(in.scale > 0);
-    @import("app.zig").sayCustom(list);
+    app_mod.sayCustom(list);
     gw.rows = .{
         .list = list,
         .glyphs = glyphs,
@@ -570,14 +579,24 @@ fn present(comptime App: type, app: *App, gw: *Window, w: *x11.Window) !void {
     if (gw.rows) |r| {
         gw.stats.row_bytes += r.list.quadBytes().len + r.glyphs.quads.len * @sizeOf(Quad);
     }
+    // The canvases moved since their frame was built: in the list the window draws from.
+    const kept = if (gw.rows) |r| r.list else g.gfx.list;
+    const moved = if (kept) |l| moveCanvases(&gw.owed, l) else false;
+    gw.stats.canvas_redraws += @intFromBool(moved and gw.rows == null);
     const bg = w.background;
     const clear: [4]f32 = .{ unit(bg.r), unit(bg.g), unit(bg.b), 1 };
-    try win.present(g, &f, .{ .rows = gw.rows, .damage = gw.owed, .clear = clear });
-    // `prepare` ran with the rows: what it wrote is this frame's, and the rows it uploaded
-    // are clean (the canvas's contract: the host clears them after `prepare`).
-    if (gw.rows) |r| if (g.gfx.canvas) |*cv| {
+    const ui: vk.setup.Window.Ui = .{
+        .rows = gw.rows,
+        .damage = gw.owed,
+        .clear = clear,
+        .canvases = moved,
+    };
+    try win.present(g, &f, ui);
+    // `prepareCanvases` ran (new rows, or a canvas moved): what it wrote is this frame's, and
+    // the rows it uploaded are clean (the canvas's contract: the host clears them after it).
+    if (gw.rows != null or moved) if (g.gfx.canvas) |*cv| {
         gw.stats.canvas_bytes += cv.uploaded;
-        clearCanvases(r.list);
+        if (kept) |l| clearCanvases(l);
     };
     gw.stats.presents += 1;
     gw.stats.damage = gw.owed;
@@ -589,6 +608,42 @@ fn present(comptime App: type, app: *App, gw: *Window, w: *x11.Window) !void {
 
 fn unit(v: u8) f32 {
     return @as(f32, @floatFromInt(v)) / 255;
+}
+
+/// Writes each `lcgf_app.Canvas` that asked for a redraw into `list`'s canvas row of its node
+/// (the row whose palette is the canvas's own), and owes that node's rectangle: the list stays
+/// the one the renderer draws, its rows on the GPU, with the new camera. Whether one moved.
+fn moveCanvases(owed: *Region, list: *const DrawList) bool {
+    std.debug.assert(list.cmd_len <= list.cmd.kind.len);
+    var moved = false;
+    for (app_mod.canvases.list) |l| if (l) |v| if (v.requested) {
+        v.requested = false;
+        for (0..list.cmd_len) |i| {
+            const k = switch (list.command(@intCast(i))) {
+                .canvas => |k| k,
+                else => continue,
+            };
+            const row = &list.canvases[k];
+            if (row.palette != &v.palette) continue;
+            row.camera = v.camera;
+            const node = list.customs[k];
+            owed.add(.{
+                @max(node.rect[0], node.clip[0]),
+                @max(node.rect[1], node.clip[1]),
+                @min(node.rect[2], node.clip[2]),
+                @min(node.rect[3], node.clip[3]),
+            });
+            moved = true;
+        }
+    };
+    return moved;
+}
+
+/// Wakes the GPU window's loop for a `Canvas.redraw`: false when no GPU window is running.
+pub fn wake() bool {
+    const w = registry.shell orelse return false;
+    w.wake();
+    return true;
 }
 
 fn anyDirty() bool {
@@ -1260,7 +1315,7 @@ test "gpu page: a composed page draws both sides; a pan scissors the canvas; idl
 
     // A pan: one frame built, its pass scissored to the canvas node's rect; no `draw` (none).
     const builds = fx.gw.stats.builds;
-    app.camera.offset = .{ 50, 30 };
+    app.view.camera.offset = .{ 50, 30 };
     fx.ctx.waker.post();
     try fx.run(&app, seconds(0.3));
     try testing.expectEqual(plot, fx.gw.stats.damage.bounds());
@@ -1305,6 +1360,13 @@ test "gpu page: a canvas label in a composed page's region draws as the referenc
     _ = try shown(&fx.w, 258, 16, page.TestApp.tint);
     try page.expectCanvas(&fx.w, &app);
     try page.expectPageText(&fx.w, &app, &fx.tw.text.?);
+    // A pan by `redraw`: no frame built, the label and the square where the reference puts them.
+    const builds = fx.gw.stats.builds;
+    app.view.camera.offset = .{ 30, 20 };
+    app.view.redraw();
+    try runPanned(&fx, &app);
+    try testing.expectEqual(builds, fx.gw.stats.builds);
+    try page.expectCanvas(&fx.w, &app);
 }
 
 test "gpu canvas: bitmap canvas glyphs sample the bundled font beside the service's text" {
@@ -1513,6 +1575,175 @@ test "gpu canvas: a canvas beside a damaged rect is not drawn again over itself"
     try testing.expectEqual(line, try x11.pixel(&fx.w, 50, 50));
 }
 
+/// A canvas (an `lcgf_app.Canvas`) holding a red square at the world's origin, and a box
+/// beside it that `lit` turns white.
+const PanApp = struct {
+    const ground: Color = .rgb(30, 30, 30);
+    const fill: Color = .rgb(10, 20, 30);
+    const red: Color = .rgb(220, 0, 0);
+    const rect: [4]f32 = .{ 10, 10, 90, 90 };
+    shapes: *const lcgf.canvas.Instances,
+    view: app_mod.Canvas = .{ .camera = .{ .offset = .{ 10, 10 } } },
+    ranges: [1]lcgf.canvas.Range,
+    lit: bool = false,
+    builds: u32 = 0,
+
+    pub fn build(a: *PanApp, f: *lcgf.frame.Frame, _: *const Events) void {
+        a.builds += 1;
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ground });
+        const side: [2]lcgf.types.Size = .{ .px(80), .px(80) };
+        const at: [2]f32 = .{ rect[0], rect[1] };
+        const style: lcgf.types.Style = .{
+            .float = true,
+            .offset = at,
+            .size = side,
+            .fill = fill,
+        };
+        _ = a.view.node(f, .from("canvas"), style, a.shapes, .{ .ranges = &a.ranges });
+        const box: Color = if (a.lit) .white else .rgb(0, 0, 200);
+        const square: [2]lcgf.types.Size = .{ .px(30), .px(30) };
+        _ = f.leaf(.none, .{ .float = true, .offset = .{ 120, 10 }, .size = square, .fill = box });
+        f.close();
+    }
+};
+
+/// Runs `app` until no `Canvas` asks for a redraw and the frame built, if any, is presented.
+fn runPanned(fx: *Fixture, app: anytype) !void {
+    const Drawn = struct {
+        gw: *const Window,
+        fn stop(d: @This()) bool {
+            return !app_mod.canvases.owed() and d.gw.rows == null;
+        }
+    };
+    const t0: std.Io.Timestamp = .now(testing.io, .awake);
+    const clock: Clock(Drawn) = .{ .t0 = t0, .seconds = 3, .done = .{ .gw = &fx.gw } };
+    try fx.run(app, clock);
+    try testing.expect(clock.done.stop());
+}
+
+/// The window's pixels outside `box` (x0, y0, x1, y1) of a `w` x `h` window, into `out`.
+fn readAround(win: *x11.Window, w: i16, h: i16, box: [4]i16, out: []Color) !usize {
+    var k: usize = 0;
+    var y: i16 = 0;
+    while (y < h) : (y += 1) {
+        var x: i16 = 0;
+        while (x < w) : (x += 1) {
+            if (x >= box[0] and x < box[2] and y >= box[1] and y < box[3]) continue;
+            out[k] = try x11.pixel(win, x, y);
+            k += 1;
+        }
+    }
+    return k;
+}
+
+/// A red filled square 10 world units wide at the origin, and the palette it is drawn in.
+const PanShapes = struct {
+    const Shapes = lcgf.canvas.Instances;
+    var bytes: [Shapes.requiredBytes(4, 0, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
+    var shapes: Shapes = undefined;
+    const layers = [_]lcgf.canvas.Layer{.of(.{ .stroke = PanApp.red, .fill = PanApp.red })};
+
+    fn app() PanApp {
+        var carver: lcgf.mem.Carver = .{ .buf = &bytes };
+        shapes = .init(&carver, 4, 0, 1, .{});
+        _ = shapes.rect(.{ 0, 0 }, .{ 10, 10 }, .{ .fill = true });
+        var a: PanApp = .{ .shapes = &shapes, .ranges = .{shapes.since(0)} };
+        a.view.palette = .{ .layers = &layers };
+        return a;
+    }
+};
+
+test "gpu canvas: 100 pans under an idle UI build nothing, upload no rows, redraw the canvas" {
+    var fx: Fixture = undefined;
+    try fx.open(try displayOrSkip(), 200, 100);
+    defer fx.close();
+    var app = PanShapes.app();
+    try fx.run(&app, seconds(0.3));
+    try testing.expectEqual(PanApp.red, try shown(&fx.w, 25, 25, PanApp.red));
+    const box: [4]i16 = .{ 10, 10, 90, 90 };
+    var before: [200 * 100]Color = undefined;
+    const n = try readAround(&fx.w, 200, 100, box, &before);
+    const builds = fx.gw.stats.builds;
+    const rows = fx.gw.stats.row_bytes;
+    const redraws = fx.gw.stats.canvas_redraws;
+    const canvas_bytes = fx.gw.stats.canvas_bytes;
+    for (1..101) |k| {
+        const step: f32 = @floatFromInt(k);
+        app.view.camera.offset = .{ 10 + 0.4 * step, 10 + 0.3 * step };
+        app.view.redraw();
+        try runPanned(&fx, &app);
+    }
+    try testing.expectEqual(builds, fx.gw.stats.builds);
+    try testing.expectEqual(rows, fx.gw.stats.row_bytes);
+    try testing.expectEqual(redraws + 100, fx.gw.stats.canvas_redraws);
+    // Each pan wrote the canvas's uniforms, no instance row: well under a row a pan.
+    try testing.expect(fx.gw.stats.canvas_bytes - canvas_bytes > 0);
+    // The pass was scissored to the canvas node, and only it.
+    try testing.expectEqual(PanApp.rect, fx.gw.stats.damage.bounds());
+    try testing.expectEqual(@as(u32, 1), fx.gw.stats.damage.count());
+    // Inside: the square at the new camera, the node's fill where it was. Outside: the same.
+    try testing.expectEqual(PanApp.red, try shown(&fx.w, 10 + 50 + 5, 10 + 40 + 5, PanApp.red));
+    try testing.expectEqual(PanApp.fill, try x11.pixel(&fx.w, 25, 25));
+    var after: [200 * 100]Color = undefined;
+    _ = try readAround(&fx.w, 200, 100, box, &after);
+    try testing.expectEqualSlices(Color, before[0..n], after[0..n]);
+}
+
+test "gpu canvas: a pan and a widget in the same frame draw both" {
+    var fx: Fixture = undefined;
+    try fx.open(try displayOrSkip(), 200, 100);
+    defer fx.close();
+    var app = PanShapes.app();
+    try fx.run(&app, seconds(0.3));
+    const builds = app.builds;
+    app.lit = true;
+    fx.ctx.waker.post();
+    app.view.camera.offset = .{ 50, 40 };
+    app.view.redraw();
+    try runPanned(&fx, &app);
+    try testing.expect(app.builds > builds);
+    try testing.expectEqual(Color.white, try shown(&fx.w, 130, 20, .white));
+    try testing.expectEqual(PanApp.red, try shown(&fx.w, 65, 55, PanApp.red));
+    try testing.expectEqual(PanApp.fill, try x11.pixel(&fx.w, 25, 25));
+    // Then a pan alone, back: no build.
+    const built = app.builds;
+    app.view.camera.offset = .{ 10, 10 };
+    app.view.redraw();
+    try runPanned(&fx, &app);
+    try testing.expectEqual(built, app.builds);
+    try testing.expectEqual(PanApp.red, try shown(&fx.w, 25, 25, PanApp.red));
+    try testing.expectEqual(PanApp.fill, try x11.pixel(&fx.w, 65, 55));
+    try testing.expectEqual(Color.white, try x11.pixel(&fx.w, 130, 20));
+}
+
+test "gpu page: 100 pans of the region's canvas build nothing and redraw only the canvas" {
+    var fx: Fixture = undefined;
+    try fx.openWith(try displayOrSkip(), 300, 200, &Fixture.face);
+    defer fx.close();
+    const T = page.TestApp;
+    var app: T = .{};
+    try fx.run(&app, seconds(0.3));
+    const plot = app.canvas_rect;
+    try testing.expectEqual(T.red, try page.pixelIn(&fx.w, plot, 15, 15));
+    const builds = fx.gw.stats.builds;
+    const rows = fx.gw.stats.row_bytes;
+    const header = try x11.pixel(&fx.w, 200, 4);
+    for (1..101) |k| {
+        const step: f32 = @floatFromInt(k);
+        app.view.camera.offset = .{ 10 + 0.4 * step, 10 + 0.2 * step };
+        app.view.redraw();
+        try runPanned(&fx, &app);
+    }
+    try testing.expectEqual(builds, fx.gw.stats.builds);
+    try testing.expectEqual(rows, fx.gw.stats.row_bytes);
+    try testing.expectEqual(plot, fx.gw.stats.damage.bounds());
+    try testing.expectEqual(@as(u32, 1), fx.gw.stats.damage.count());
+    try testing.expectEqual(T.red, try page.pixelIn(&fx.w, plot, 55, 35));
+    try testing.expectEqual(T.canvas_fill, try page.pixelIn(&fx.w, plot, 15, 15));
+    try testing.expectEqual(header, try x11.pixel(&fx.w, 200, 4));
+    try testing.expectEqual(T.region_fill, try x11.pixel(&fx.w, 290, 190));
+}
+
 /// 32 x 24 bordered cells over a 2560 x 1440 window, the plot surface over the middle of
 /// them: `toggles` widget frames (cell 0 changes colour), `paints` surface frames.
 const GridApp = struct {
@@ -1564,6 +1795,117 @@ const GridApp = struct {
         if (a.paints > 0) a.plot.redraw();
     }
 };
+
+/// 32 x 24 bordered cells over a 2560 x 1440 window and an 800 x 600 canvas of
+/// `PanGrid.rows` segments over the middle of them, through an `lcgf_app.Canvas`.
+const PanGridApp = struct {
+    view: app_mod.Canvas = .{},
+    shapes: *const lcgf.canvas.Instances,
+    ranges: [1]lcgf.canvas.Range,
+    builds: u32 = 0,
+
+    pub fn build(a: *PanGridApp, f: *lcgf.frame.Frame, _: *const Events) void {
+        std.debug.assert(f.ctx.limits.nodes >= 32 * 24 + 26);
+        a.builds += 1;
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = .rgb(30, 30, 30) });
+        for (0..24) |_| {
+            _ = f.open(.none, .{ .dir = .x, .size = .{ .fill, .px(60) } });
+            for (0..32) |_| _ = f.leaf(.none, .{
+                .size = .{ .px(76), .px(56) },
+                .radius = 6,
+                .border = 1,
+                .border_color = .white,
+                .fill = .rgb(60, 60, 70),
+            });
+            f.close();
+        }
+        const plot: [2]lcgf.types.Size = .{ .px(800), .px(600) };
+        const style: lcgf.types.Style = .{ .float = true, .offset = .{ 880, 420 }, .size = plot };
+        _ = a.view.node(f, .from("plot"), style, a.shapes, .{ .ranges = &a.ranges });
+        f.close();
+    }
+};
+
+/// The pan mode's canvas rows: 2-pixel squares, 400 to a line, made once.
+const PanGrid = struct {
+    const rows = RowsApp.n; // as many as the 100,000-row mode, in `rows_room`
+    const Shapes = lcgf.canvas.Instances;
+    var bytes: [Shapes.requiredBytes(rows, 0, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
+    var shapes: Shapes = undefined;
+
+    fn app() PanGridApp {
+        var carver: lcgf.mem.Carver = .{ .buf = &bytes };
+        shapes = .init(&carver, rows, 0, 1, .{});
+        for (0..rows) |k| {
+            const p: [2]i32 = .{ @intCast((k % 400) * 2), @intCast((k / 400) * 2) };
+            const look: Shapes.Box = .{ .color = .rgb(64, 64, 64), .stroke = false };
+            _ = shapes.rect(p, .{ p[0] + 2, p[1] + 2 }, look);
+        }
+        return .{ .shapes = &shapes, .ranges = .{shapes.since(0)} };
+    }
+};
+
+/// A clock that pans: each time the loop asks it, the canvas moves a pixel and asks for a
+/// redraw, until `pans` are made. The loop asks once a frame, so it drives one pan a frame
+/// with no `fx.run` between them.
+const Panner = struct {
+    app: *PanGridApp,
+    pans: u32,
+    t0: std.Io.Timestamp,
+
+    pub fn left(p: *Panner) f32 {
+        std.debug.assert(p.pans <= 1 << 20);
+        if (p.pans == 0) return 0;
+        const ns = p.t0.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toNanoseconds();
+        if (ns > 120 * std.time.ns_per_s) return 0;
+        p.pans -= 1;
+        p.app.view.camera.offset[0] += 1;
+        p.app.view.redraw();
+        return 1;
+    }
+};
+
+// What a canvas pan costs through `lcgf_app`'s loop at 2560 x 1440, under the grid of the
+// frame cost benchmark: per pan, wall and calling-thread CPU, bytes written to the GPU (UI rows
+// and the canvas's), frames built; appended to the file LCGF_APP_GPU_BENCH names. Its own
+// mode beside the 100,000-row one, whose camera moves in `build`: here `Canvas.redraw` moves it.
+test "gpu canvas pan cost at 2560 x 1440 (LCGF_APP_GPU_BENCH)" {
+    const display = try displayOrSkip();
+    const path = testing.environ.getPosix("LCGF_APP_GPU_BENCH") orelse return error.SkipZigTest;
+    const flags: std.os.linux.O = .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true };
+    const opened = std.os.linux.open(path, flags, 0o644);
+    if (std.os.linux.errno(opened) != .SUCCESS) return error.BenchFile;
+    const fd: i32 = @intCast(opened);
+    defer _ = std.os.linux.close(fd);
+    var fx: Fixture = undefined;
+    try fx.openRoom(display, .{ 2560, 1440 }, &.{}, rows_room);
+    defer fx.close();
+    var app = PanGrid.app();
+    try fx.run(&app, seconds(0.5));
+    try fx.run(&app, seconds(0.3)); // until the first frames, and their uploads, are done
+    const pans = 300;
+    const builds = app.builds;
+    const refused = fx.gw.stats.not_shown;
+    const redraws = fx.gw.stats.canvas_redraws;
+    const bytes = fx.gw.stats.row_bytes + fx.gw.stats.canvas_bytes;
+    var panner: Panner = .{ .app = &app, .pans = pans, .t0 = .now(testing.io, .awake) };
+    const t = Spent.start();
+    try fx.run(&app, &panner);
+    const made = fx.gw.stats.canvas_redraws - redraws;
+    const us = t.per(made);
+    const sent = fx.gw.stats.row_bytes + fx.gw.stats.canvas_bytes - bytes;
+    const line = "canvas pan (800 x 600, {d} rows): wall {d:.1} us, thread cpu {d:.1} us, " ++
+        "{d} bytes; builds {d}; unfinished {d}, not shown {d}\n";
+    note(fd, line, .{
+        PanGrid.rows,
+        us[0],
+        us[1],
+        sent / @max(made, 1),
+        app.builds - builds,
+        pans - made,
+        fx.gw.stats.not_shown - refused,
+    });
+}
 
 /// Wall and calling-thread CPU time of what runs between `start` and `stop`.
 const Spent = struct {

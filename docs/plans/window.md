@@ -20,6 +20,7 @@ gives it `build`, and `draw` if it has surfaces.
 |---|---|---|
 | A widget (`needsFrame`) | `build`, layout, paint; the window's picture is drawn again inside `DrawList.damage` | the application's `draw` |
 | A surface (`Surface.redraw`, or its size) | the application's `draw`; the picture is drawn again inside that surface's rectangle | `build`, layout, paint, any upload of UI rows |
+| A canvas's camera or palette (`lcgf_app.Canvas.redraw`) | the canvas's uniforms and dirtied rows written; the picture drawn again inside the canvas node's rectangle from the kept list | `build`, layout, paint, any upload of UI rows, the application's `draw` |
 | Nothing | nothing: no frame, no wakeup | |
 
 A surface is a texture the application owns, as a `<canvas>` is in WebGPU. The application
@@ -92,6 +93,8 @@ the shell the application's images and glyphs.
 **Inline drawing stays below the window layer.** `Frame.custom` with `drawUntilCustom`
 (`docs/guide/custom.md`) draws straight into the UI's pass with no copy, for a host that owns
 its loop. `Frame.canvas` is unchanged: LCGF's own batch, drawn inline, damaged by its node.
+`lcgf_app.Canvas` wraps it for the window: its camera and palette change with no `build` on the
+GPU window (a software window builds a frame for them).
 
 ## Stages
 

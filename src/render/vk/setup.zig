@@ -49,6 +49,9 @@ pub const Setup = struct {
     /// The renderer's ring slot the next new list is uploaded to: never the slot of the rows
     /// drawn last, which a frame still in flight may be reading (`Window.present`).
     rows_next: u32,
+    /// The same for the canvases' copy: counted apart, as a frame may write the canvases
+    /// alone (`Ui.canvases`) and leave the rows where they are.
+    canvases_next: u32,
 
     /// Canvas instance rows and polygon vertices the renderer keeps on the GPU
     /// (`renderer.Desc.canvas_rows`, `canvas_verts`); none: canvases draw nothing.
@@ -57,6 +60,7 @@ pub const Setup = struct {
     /// Fills `g` in place (the renderer keeps a pointer to its device) and returns the first
     /// window's surface, made by `createSurface(&g.instance, window)`, which picks a device
     /// that can present to it. `extensions` are VK_KHR_surface and the platform's.
+    // tidy: allow-fn(large-generic-function) one instance per platform's window type
     pub fn init(g: *Setup, app_name: [:0]const u8, extensions: []const [*:0]const u8, window: anytype, comptime createSurface: anytype, canvas: Canvas) !c.VkSurfaceKHR {
         g.lib = try loader.Library.open();
         errdefer g.lib.close();
@@ -83,6 +87,7 @@ pub const Setup = struct {
         };
         g.gfx = try .init(d, desc, g.white.view, g.sampler);
         g.rows_next = 0;
+        g.canvases_next = 0;
         return surface;
     }
 
@@ -144,6 +149,10 @@ pub const Window = struct {
         damage: Region,
         /// Straight RGBA, 0 to 1: each damage rect is cleared to it before the list draws.
         clear: [4]f32,
+        /// With no new `rows`: the kept list's canvas rows changed (a camera, a palette, an
+        /// instance's rows), so their uniforms and dirty rows are written again, the list's
+        /// quads not. Implied by `rows`.
+        canvases: bool = false,
     };
 
     pub const Rows = struct {
@@ -233,8 +242,12 @@ pub const Window = struct {
         const d = &g.device;
         const cmd = f.cmd;
         if (ui.rows) |r| {
-            g.gfx.prepare(g.rows_next, r.list, r.glyphs, r.viewport, r.scale);
+            g.gfx.prepareRows(g.rows_next, r.list, r.glyphs, r.viewport, r.scale);
             g.rows_next = (g.rows_next + 1) % g.gfx.desc.frames;
+        }
+        if (ui.rows != null or ui.canvases) {
+            g.gfx.prepareCanvases(g.canvases_next);
+            g.canvases_next = (g.canvases_next + 1) % g.gfx.desc.frames;
         }
         const image = w.picture.handle;
         const attachment = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;

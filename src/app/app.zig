@@ -114,6 +114,92 @@ const NoSurface = struct {
 
 /// What `App.draw` would take in a build with no GPU path, where it is never called.
 const NoGpuFrame = opaque {};
+
+/// A canvas (`Frame.canvas`) whose camera and palette the application changes without a
+/// `build`: kept in the application's state, as a `Surface` is.
+///
+///     view: lcgf_app.Canvas = .{ .camera = .{ .scale = 2 } },
+///     // in build:
+///     _ = app.view.node(f, .from("plot"), style, &app.shapes, .{ .ranges = &app.ranges });
+///     // anywhere on the UI thread, then:
+///     app.view.camera.origin[0] += 10;
+///     app.view.redraw();
+///
+/// On the GPU window `redraw` draws the canvas node's rectangle again from the rows already
+/// on the GPU, with the new camera and palette: no `build`, no UI rows uploaded, only the rows
+/// the instances dirtied. On a software window it builds a frame, which carries them. A change
+/// to anything else about the node (its ranges, overrides or style) needs a `build`.
+pub const Canvas = struct {
+    camera: lcgf.canvas.Camera = .{},
+    palette: lcgf.canvas.Palette = .none,
+    /// `redraw` was called since the camera and palette last went into a frame.
+    requested: bool = false,
+
+    /// What `node` passes to `Frame.canvas` besides the camera and palette.
+    pub const Draw = struct {
+        ranges: []const lcgf.canvas.Range,
+        overrides: []const lcgf.canvas.Override = &.{},
+    };
+
+    /// The canvas node: `Frame.canvas` with this camera and palette. Panics past
+    /// `canvases_max` canvases in a program.
+    pub fn node(
+        v: *Canvas,
+        f: *lcgf.frame.Frame,
+        id: lcgf.types.Id,
+        style: lcgf.types.Style,
+        shapes: *const lcgf.canvas.Instances,
+        o: Draw,
+    ) lcgf.types.Node {
+        canvases.add(v);
+        v.requested = false;
+        return f.canvas(id, style, shapes, .{
+            .camera = v.camera,
+            .palette = &v.palette,
+            .ranges = o.ranges,
+            .overrides = o.overrides,
+        });
+    }
+
+    /// Asks for a frame that shows the canvas with its camera and palette as they are now:
+    /// on the UI thread (in `build`, in `draw` or between frames).
+    pub fn redraw(v: *Canvas) void {
+        v.requested = true;
+        if (has_gpu) if (gpu_app.wake()) return;
+        if (canvases.ctx) |ctx| ctx.waker.post();
+    }
+};
+
+/// Canvases one program redraws (`Canvas.redraw`).
+pub const canvases_max = 16;
+
+/// The program's `Canvas`es, and the context a software window's `Canvas.redraw` wakes.
+// ponytail: module state, as the buffers are: one window a program.
+pub const canvases = struct {
+    pub var list: [canvases_max]?*Canvas = @splat(null);
+    var ctx: ?*context.Context = null;
+
+    fn add(v: *Canvas) void {
+        for (list) |l| if (l == v) return;
+        for (&list) |*l| if (l.* == null) {
+            l.* = v;
+            return;
+        };
+        @panic("lcgf_app: more than canvases_max canvases");
+    }
+
+    /// None registered: a frame is being built (its `node` calls register what it shows), or
+    /// the window closed. A canvas not in the last frame built is not drawn again.
+    pub fn forget() void {
+        list = @splat(null);
+    }
+
+    /// Some canvas asked to be drawn again.
+    pub fn owed() bool {
+        for (list) |l| if (l) |v| if (v.requested) return true;
+        return false;
+    }
+};
 const page = @import("page.zig");
 /// What `App.page` lays its page out with (src/app/page.zig).
 pub const PageText = page.PageText;
@@ -644,6 +730,7 @@ fn loop(
     };
     const textures = &Kept.textures;
     const paging = &Kept.paging;
+    canvases.ctx = ctx;
     var ev: Events = .{};
     while (shell.poll(&ev)) {
         if (follows and !std.meta.eql(styled, ev.in.appearance)) {
@@ -654,11 +741,13 @@ fn loop(
         if (comptime page.composes(App)) {
             if (paging.wants(ctx, &ev.in)) {
                 if (@hasDecl(@TypeOf(shell.*), "beforeFrame")) try shell.beforeFrame();
+                canvases.forget();
                 composedFrame(App, app, shell, ctx, paging, textures, glyphs, tw, &ev);
             }
         } else if (ctx.needsFrame(&ev.in)) {
             if (@hasDecl(@TypeOf(shell.*), "beforeFrame")) try shell.beforeFrame();
             var f = ctx.begin(&ev.in);
+            canvases.forget();
             app.build(&f, &ev);
             const out = tw.end(&f);
             shell.apply(&out.platform);
@@ -1348,11 +1437,12 @@ test "app on X11: a composed page draws both sides; a pan, a widget, idle each s
     try testing.expectEqual(T.canvas_fill, try page.pixelIn(&w, c, 50, 40));
     try page.expectPageText(&w, &app, &tw.text.?);
 
-    // A pan: the canvas node's rect is the frame's damage, and nothing outside it is sent.
+    // A pan, as on the GPU (`Canvas.redraw`), which a software window builds a frame for: the
+    // canvas node's rect is the frame's damage, and nothing outside it is sent.
     const probe: [2]u32 = .{ 290, 190 };
     w.fb.fill(.{ probe[0], probe[1], probe[0] + 1, probe[1] + 1 }, .white);
-    app.camera.offset = .{ 50, 30 };
-    ctx.waker.post();
+    app.view.camera.offset = .{ 50, 30 };
+    app.view.redraw();
     try loop(page.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
     try testing.expectEqual(c, app.list.damage.bounds());
     try testing.expectEqual(T.red, try page.pixelIn(&w, c, 55, 35));
