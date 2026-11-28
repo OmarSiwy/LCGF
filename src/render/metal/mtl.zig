@@ -6,6 +6,7 @@ const objc = @import("objc.zig");
 const U = objc.NSUInteger;
 
 pub const PixelFormat = enum(U) {
+    r8_unorm = 10,
     rgba8_unorm = 70,
     bgra8_unorm = 80,
     _,
@@ -94,3 +95,9 @@ pub const ClearColor = extern struct { r: f64, g: f64, b: f64, a: f64 };
 /// MTLStorageMode.managed: a CPU copy kept in sync by a blit `synchronizeResource:`; readable
 /// render targets on every Mac (shared textures are Apple silicon only).
 pub const storage_mode_managed: U = 1;
+/// MTLStorageMode.private: the GPU's alone, written by blits and passes.
+pub const storage_mode_private: U = 2;
+/// MTLTextureSwizzle and MTLTextureSwizzleChannels (macOS 10.15): where each sampled channel
+/// comes from.
+pub const Swizzle = enum(u8) { zero = 0, one = 1, red = 2, green = 3, blue = 4, alpha = 5 };
+pub const SwizzleChannels = extern struct { r: Swizzle, g: Swizzle, b: Swizzle, a: Swizzle };
