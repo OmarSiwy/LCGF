@@ -89,15 +89,19 @@ pub fn drawableTexture(drawable: Id) Id {
     return msg(Id, drawable, "texture", .{});
 }
 
-/// Opens a render pass on `cmd` that clears `target` to `clear` and stores it, and returns
-/// its encoder, the renderer's `Pass` (autoreleased).
-pub fn beginPass(cmd: Id, target: Id, clear: [4]f64) mtl.RenderEncoder {
+/// Opens a render pass on `cmd` that clears `target` to `clear`, or keeps what it holds when
+/// null, and stores it, and returns its encoder, the renderer's `Pass` (autoreleased).
+pub fn beginPass(cmd: Id, target: Id, clear: ?[4]f64) mtl.RenderEncoder {
     const rp = msg(Id, objc.class("MTLRenderPassDescriptor"), "renderPassDescriptor", .{});
     const color = msg(Id, msg(Id, rp, "colorAttachments", .{}), "objectAtIndexedSubscript:", .{@as(U, 0)});
     msg(void, color, "setTexture:", .{target});
-    msg(void, color, "setLoadAction:", .{mtl.LoadAction.clear});
+    const load: mtl.LoadAction = if (clear == null) .load else .clear;
+    msg(void, color, "setLoadAction:", .{load});
     msg(void, color, "setStoreAction:", .{mtl.StoreAction.store});
-    msg(void, color, "setClearColor:", .{mtl.ClearColor{ .r = clear[0], .g = clear[1], .b = clear[2], .a = clear[3] }});
+    if (clear) |c| {
+        const value: mtl.ClearColor = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+        msg(void, color, "setClearColor:", .{value});
+    }
     return .{ .id = msg(Id, cmd, "renderCommandEncoderWithDescriptor:", .{rp}) };
 }
 

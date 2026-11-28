@@ -18,6 +18,8 @@ pub const Desc = struct {
     /// Format of the targets the pipeline draws into (the layer's, or an offscreen texture's).
     format: mtl.PixelFormat,
     sample_count: U = 1,
+    /// Premultiplied over; off, the fragment's output replaces the target's (a clear).
+    blend: bool = true,
 };
 
 /// A render pipeline state for one quad material: `source` is a quad.wgsl variant in MSL with
@@ -29,6 +31,7 @@ pub fn quad(device: Id, source: [:0]const u8, desc: Desc) Error!Id {
     defer objc.release(pd);
     msg(void, pd, "setVertexDescriptor:", .{instanceLayout()});
     const color = msg(Id, msg(Id, pd, "colorAttachments", .{}), "objectAtIndexedSubscript:", .{@as(U, 0)});
+    if (!desc.blend) return create(device, pd);
     // Premultiplied over: one, one minus source alpha, for colour and alpha.
     msg(void, color, "setBlendingEnabled:", .{@as(objc.BOOL, true)});
     msg(void, color, "setSourceRGBBlendFactor:", .{mtl.BlendFactor.one});

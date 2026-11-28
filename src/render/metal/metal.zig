@@ -31,6 +31,7 @@ test {
     std.testing.refAllDecls(present);
     std.testing.refAllDecls(present.Frames);
     std.testing.refAllDecls(present.DisplayLink);
+    std.testing.refAllDecls(setup.Window);
     std.testing.refAllDecls(gpu);
     std.testing.refAllDecls(renderer);
     std.testing.refAllDecls(Renderer);
