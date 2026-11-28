@@ -14,9 +14,11 @@
 //! the command buffer runs, so it holds `frames_in_flight` frames and each `prepare` writes the
 //! next one. The host keeps at most that many frames in flight: `present.Frames` with the same
 //! count waits for a slot's previous frame before it is reused (call `prepare` once per frame,
-//! after `Frames.begin`). A draw that starts at quad `first` points
-//! the vertex buffer `first * stride` bytes in, so no base instance is needed; the globals go in
-//! with setVertexBytes / setFragmentBytes on every draw.
+//! after `Frames.begin`). A host that keeps its list skips `prepareRows` and draws the slot
+//! written last again: the slot the next one writes was then last read by a frame at least
+//! `frames_in_flight` frames back, which `Frames.begin` has waited for. A draw that starts at
+//! quad `first` points the vertex buffer `first * stride` bytes in, so no base instance is
+//! needed; the globals go in with setVertexBytes / setFragmentBytes on every draw.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -97,8 +99,15 @@ pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
         /// Byte offset of the frame the last `prepare` wrote, and the slot the next one writes.
         base: usize = 0,
         next: u32 = 0,
+        /// The canvas copy the next `prepareCanvases` writes: counted apart from `next`, as a
+        /// frame may write the canvases alone and leave the rows where they are.
+        canvas_next: u32 = 0,
         /// Physical pixels: viewport * scale from the last `prepare`.
         extent: [2]u32 = .{ 0, 0 },
+        /// The scissor every quad and text draw sets, and every canvas draw is cut to: the
+        /// whole `extent` after `prepareRows`. A host that draws only part of its target again
+        /// (`setup.Window.present`, one damage rect at a time) narrows it before the draws.
+        scissor: mtl.ScissorRect = .{ .x = 0, .y = 0, .width = 0, .height = 0 },
         scale: f32 = 1,
         globals: Globals = .{ .viewport = .{ 0, 0 }, .scale = 1 },
         glyphs: Glyphs = .{},
@@ -178,11 +187,19 @@ pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
             r.textures[@min(@backingInt(handle), r.texture_count - 1)] = tex;
         }
 
-        /// Uploads the frame: both instance arrays into the shared buffer, and the globals the
-        /// draws will pass. Quads past `max_quads` (glyphs past `max_glyphs`) are dropped, as
-        /// the other back ends do.
-        pub fn prepare(r: *Self, _: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
-            const slot = r.next;
+        /// Uploads the frame: `prepareRows` then `prepareCanvases`.
+        // tidy: allow(line-too-long) the API index reads one-line signatures
+        pub fn prepare(r: *Self, q: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
+            r.prepareRows(q, draw, glyphs, viewport, scale);
+            r.prepareCanvases();
+        }
+
+        /// `prepare` without the canvases: both instance arrays into the next frame slot of the
+        /// shared buffer, and the globals the draws will pass. Quads past `max_quads` (glyphs
+        /// past `max_glyphs`) are dropped, as the other back ends do. Draws read this slot until
+        /// the next call, so a host that keeps the list calls it only for a new one.
+        // tidy: allow(line-too-long) the API index reads one-line signatures
+        pub fn prepareRows(r: *Self, _: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
             r.base = r.next * r.frameBytes();
             r.next = (r.next + 1) % r.desc.frames_in_flight;
             const quad_bytes = draw.quadBytes();
@@ -197,10 +214,21 @@ pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
             // The layer's own rounding (device.zig `Layer.resize`), so viewport and scissor match
             // the drawable after a resize or a scale change.
             r.extent = dev_mod.drawableSize(viewport, scale);
+            r.scissor = .{ .x = 0, .y = 0, .width = r.extent[0], .height = r.extent[1] };
             r.list = draw;
+        }
+
+        /// The canvas commands of the last `prepareRows`' list into the next canvas copy: their
+        /// cameras, palettes and overrides, and the rows their instances dirtied. A host that
+        /// changed only those (a pan) calls this alone, with the list's quads where they are.
+        pub fn prepareCanvases(r: *Self) void {
+            const draw = r.list orelse return;
+            const slot = r.canvas_next;
+            r.canvas_next = (r.canvas_next + 1) % r.desc.frames_in_flight;
             if (canvases) if (r.canvas) |*cv| {
-                const atlas = @min(@backingInt(glyphs.canvasTexture()), r.texture_count - 1);
-                cv.prepare(.wrap(r.device), null, draw, slot, scale, r.extent, .{ .texture = r.textures[atlas], .width = 0, .height = 0 }, atlas);
+                const atlas = @min(@backingInt(r.glyphs.canvasTexture()), r.texture_count - 1);
+                const view: gpu.TextureView = .{ .texture = r.textures[atlas], .width = 0, .height = 0 };
+                cv.prepare(.wrap(r.device), null, draw, slot, r.scale, r.extent, view, atlas);
             };
         }
 
@@ -211,7 +239,14 @@ pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
             if (!canvases) return;
             const cv = if (r.canvas) |*cv| cv else return;
             var p = gpu.RenderPass.wrap(.wrap(r.device), pass.id, r.extent[0], r.extent[1]);
-            cv.draw(&p, r.list.?, k);
+            const s = r.scissor;
+            const bound: gpu.Rect = .{
+                .x = @intCast(s.x),
+                .y = @intCast(s.y),
+                .width = @intCast(s.width),
+                .height = @intCast(s.height),
+            };
+            cv.drawWithin(&p, r.list.?, k, bound);
         }
 
         fn frameBytes(r: *const Self) usize {
@@ -237,7 +272,7 @@ pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
             const w: f64 = @floatFromInt(r.extent[0]);
             const h: f64 = @floatFromInt(r.extent[1]);
             pass.setViewport(.{ .x = 0, .y = 0, .width = w, .height = h });
-            pass.setScissor(.{ .x = 0, .y = 0, .width = r.extent[0], .height = r.extent[1] });
+            pass.setScissor(r.scissor);
             pass.setRaster();
         }
 
@@ -294,6 +329,8 @@ pub const Recorder = struct {
     set: u16 = all,
     first: u32 = 0,
     partial: bool = false,
+    /// The scissor of the last `setScissor`.
+    scissor: ?mtl.ScissorRect = null,
 
     const all: u16 = 0x1ff;
     const pipeline_base = 0x100;
@@ -338,7 +375,8 @@ pub const Recorder = struct {
     pub fn setViewport(rec: *Recorder, _: mtl.Viewport) void {
         rec.set |= 64;
     }
-    pub fn setScissor(rec: *Recorder, _: mtl.ScissorRect) void {
+    pub fn setScissor(rec: *Recorder, s: mtl.ScissorRect) void {
+        rec.scissor = s;
         rec.set |= 128;
     }
     pub fn setRaster(rec: *Recorder) void {
@@ -499,6 +537,53 @@ test "renderer: each prepare writes the next frame slot, and draws read the slot
         };
         try testing.expectEqual(3, n);
     }
+}
+
+test "renderer: draws set the host's narrowed scissor, and new rows widen it to the target" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[0]);
+    const n = conformance.max_quads + conformance.max_glyphs;
+    var memory: [n * quad_shader.stride]u8 = undefined;
+    const desc: Desc = .{
+        .max_quads = conformance.max_quads,
+        .max_glyphs = conformance.max_glyphs,
+        .frames_in_flight = 1,
+    };
+    var r = recording(&memory, desc);
+    r.prepareRows({}, &st.draw, .{}, .{ 160, 120 }, 2);
+    const double: mtl.ScissorRect = .{ .x = 0, .y = 0, .width = 320, .height = 240 };
+    try testing.expectEqual(double, r.scissor);
+    const narrow: mtl.ScissorRect = .{ .x = 16, .y = 8, .width = 32, .height = 24 };
+    r.scissor = narrow;
+    var calls: [64]null_backend.Call = undefined;
+    var log: null_backend.Log = .{ .calls = &calls };
+    var rec: Recorder = .{ .log = &log, .base = r.base, .glyphs_at = r.glyphsAt() };
+    r.render(&rec, &st.draw);
+    try testing.expectEqual(narrow, rec.scissor.?);
+    r.prepareRows({}, &st.draw, .{}, .{ 160, 120 }, 1);
+    const single: mtl.ScissorRect = .{ .x = 0, .y = 0, .width = 160, .height = 120 };
+    try testing.expectEqual(single, r.scissor);
+}
+
+test "renderer: canvases alone move their own copy, not the rows' slot" {
+    var st: conformance.Storage = .{};
+    st.load(&conformance.scenes[0]);
+    const desc: Desc = .{
+        .max_quads = conformance.max_quads,
+        .max_glyphs = conformance.max_glyphs,
+        .frames_in_flight = 3,
+    };
+    const n = conformance.max_quads + conformance.max_glyphs;
+    var memory: [3 * n * quad_shader.stride]u8 = undefined;
+    var r = recording(&memory, desc);
+    r.prepareCanvases(); // no list yet: nothing
+    try testing.expectEqual(0, r.canvas_next);
+    r.prepare({}, &st.draw, .{}, .{ 160, 120 }, 1);
+    r.prepareCanvases();
+    r.prepareCanvases();
+    try testing.expectEqual(0, r.base);
+    try testing.expectEqual(1, r.next);
+    try testing.expectEqual(0, r.canvas_next);
 }
 
 test "renderer: quad pipelines compile from the committed MSL on a real device" {
