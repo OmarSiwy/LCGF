@@ -18,7 +18,7 @@ nix develop -c ci/run.sh cross
 | `lanes-2`, `lanes-16` | the root package's tests at a lane count no x86-64 CPU query gives, forced with `-Dlanes=N` |
 | `cross` | `zig build test-build` for aarch64-linux, aarch64-macos, x86_64-windows, wasm32-wasi and riscv64-linux |
 | `windows`, `macos` | what only that OS can show, on a GitHub runner of it (header `# runner: windows` or `# runner: macos`; outside `all`) |
-| `app` | `lcgf_app`'s tests on Xvfb (the GPU window on lavapipe); examples/app for a second on Xvfb and on a headless Weston; examples/surface on Vulkan over Xvfb, failing when no ring was drawn; a `-Drender=sw` build that must not link libc; examples/app compiled for x86_64-windows and aarch64-macos. Golden shell, outside `all` |
+| `app` | `lcgf_app`'s tests on Xvfb (the GPU window on lavapipe); examples/app for a second on Xvfb and on a headless Weston; examples/surface on Vulkan over Xvfb, failing when no ring was drawn; a `-Drender=sw` build that must not link libc, must stay within 1,211,034 bytes (ReleaseSmall, x86_64_v3: no text service in a program that cannot use it) and passes `lcgf_app`'s tests; examples/app compiled for x86_64-windows and aarch64-macos. Golden shell, outside `all`. examples/app runs with `DISPLAY` on the Xvfb, `WAYLAND_DISPLAY` empty (so a software window does not open on a compositor) and `LCGF_APP_SECONDS=1`; docs/guide/runtime.md says which window `run` picks |
 | `x11-gpu` | Vulkan over an X window (`src/shell/x11/gpu.zig`) on Xvfb and lavapipe: a whole frame, a frame damaged in one rect, a resize and an out-of-date swapchain, read back from the server. Golden shell, outside `all` |
 
 A job's header lines choose how it runs: `# shell: <name>` the Nix dev shell (`golden` has
