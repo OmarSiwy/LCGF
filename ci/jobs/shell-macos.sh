@@ -4,5 +4,5 @@
 # translation (translate.zig) is tested by `zig build test` on every host, here included.
 for t in aarch64-macos x86_64-macos; do
     echo "-- $t"
-    zig build macos-build macos-example -Dtarget="$t"
+    zig build macos-build macos-example app-macos-build -Dtarget="$t"
 done

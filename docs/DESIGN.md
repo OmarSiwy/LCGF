@@ -148,9 +148,11 @@ output), text runs, `canvas` batches (LCGF's own instanced primitives under a ca
   pass on an RTX 5060. On that GPU a presented frame costs about the same CPU time to submit and
   present whatever it draws, so what the kept picture saves is the build, layout and paint a
   surface frame skips and the `draw` a widget frame skips (docs/plans/window.md, "Landed").
-  Windows, macOS and native Wayland have no GPU window through `lcgf_app`, and macOS text stays
-  on the bitmap font. `LCGF_RENDER=sw`, no display, an X server that cannot be reached or no
-  Vulkan device falls back to the software window. Every application runs there: `draw` is
+  On macOS the window layer runs on Metal in an AppKit window (src/app/gpu_macos.zig), its
+  text from the text service over Core Text's faces; it compiles and links here but has not
+  run on a Mac. Windows and native Wayland have no GPU window through `lcgf_app`.
+  `LCGF_RENDER=sw`, no display, an X server that cannot be reached or no Vulkan device falls
+  back to the software window (on macOS, which has none, the shell's own Metal window). Every application runs there: `draw` is
   never called and a `Surface` is not live (`Surface.live`), so its node paints its fill and
   `build` can show something else. A GPU build links libc on Linux (the loader is opened at
   run time); `-Drender=sw` does not. docs/plans/window.md is the plan; docs/guide/surface.md

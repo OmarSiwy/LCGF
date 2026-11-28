@@ -19,7 +19,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const lcgf = @import("lcgf");
-const metal = @import("metal");
+/// The Metal back end the window draws with, for a host that drives `Macos.gpu` itself.
+pub const metal = @import("metal");
 const objc = metal.objc;
 const translate = lcgf.shell_macos_translate;
 const iface = lcgf.shell_iface;

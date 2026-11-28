@@ -1444,6 +1444,11 @@ pub fn build(b: *std.Build) void {
     const app_tests = b.addRunArtifact(b.addTest(.{ .root_module = app_mod }));
     app_tests.has_side_effects = true; // the result depends on the X server
     b.step("app-test", "Test lcgf_app (on a server when LCGF_X11_TEST_DISPLAY is set; ci/run.sh app)").dependOn(&app_tests.step);
+    // The GPU window on macOS (src/app/gpu_macos.zig): its real-window tests, on a Mac. Only
+    // they compile there (the filter): app.zig's own tests open X11 windows.
+    const app_macos_tests = b.addTest(.{ .name = "app-macos-test", .root_module = app_mod, .filters = &.{"metal "} });
+    b.step("app-macos", "Test lcgf_app's Metal window on macOS").dependOn(&b.addRunArtifact(app_macos_tests).step);
+    b.step("app-macos-build", "Compile lcgf_app's Metal window tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(app_macos_tests, .{}).step);
     if (target.result.os.tag == .linux) test_step.dependOn(&app_tests.step);
 
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt

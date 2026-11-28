@@ -35,8 +35,10 @@ ring was drawn.
 zig build surface-example && zig-out/bin/surface-example
 ```
 
-It needs a Vulkan build on Linux (`-Drender=vk`, the default there). The window is X11, and a
-Wayland session runs it through XWayland when `DISPLAY` is set. In any other build `gpu` is a
+It needs a Vulkan build on Linux (`-Drender=vk`, the default there) or a Metal one on macOS
+(`-Drender=metal`, the default there). On Linux the window is X11, and a Wayland session runs
+it through XWayland when `DISPLAY` is set; on macOS it is an AppKit window. In any other build
+`gpu` is a
 compile error that says why; `Surface`, `GpuFrame` and `draw` compile, and a surface is never
 live there (below).
 
@@ -84,7 +86,8 @@ runs only if a surface asked for it.
 ## Without a GPU
 
 `LCGF_RENDER=sw` forces the software window, and a machine without a display or a Vulkan
-device falls back to it. Every application runs there. Its `draw` is never called, and a
+device falls back to it. macOS has no software window: there `LCGF_RENDER=sw` opens the
+shell's own window, drawn with Metal, where surfaces are not live either. Every application runs there. Its `draw` is never called, and a
 surface's node paints its style's fill. `plot.live()` says which window it is in, so `build`
 can put something else in the surface's place: a message, or a CPU-drawn `lcgf_app.Image`.
 It is false in every frame of a software window, and true in every frame of a GPU one.

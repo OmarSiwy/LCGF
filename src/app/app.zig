@@ -1,7 +1,9 @@
 //! app: an application in a window on the desktop, in one call. It picks the platform's shell,
 //! opens a window and runs `shell_iface.run`'s loop, built frame by frame from your `build`,
-//! until the window closes. On Windows a Win32 window, on macOS an AppKit one with Metal. On
-//! Linux it reads the environment:
+//! until the window closes. On Windows a Win32 window. On macOS an AppKit one with Metal, on
+//! the GPU window (`Surface`, `draw`) unless `LCGF_RENDER` is `sw`; that, or Metal failing to
+//! open there, gives the shell's own window, still drawn with Metal (macOS has no software
+//! window), where `draw` is never called. On Linux it reads the environment:
 //!
 //!   - A Vulkan build (the default) opens X11 with Vulkan whenever `DISPLAY` is set and
 //!     `LCGF_RENDER` is not `sw`, whatever `WAYLAND_DISPLAY` says. If the X server cannot be
@@ -88,16 +90,18 @@ const render = @import("render_options").render;
 /// `runApp`, which opens its shell window and runs the loop in it.
 const gpu_window = switch (builtin.os.tag) {
     .linux => if (render == .vk) @import("gpu_x11.zig") else struct {},
+    .macos => if (render == .metal) @import("gpu_macos.zig") else struct {},
     else => struct {},
 };
-/// Whether this build draws the window with a GPU: Vulkan over X11 on Linux.
+/// Whether this build draws the window with a GPU: Vulkan over X11 on Linux, Metal on macOS.
 pub const has_gpu = @hasDecl(gpu_window, "Loop");
 const gpu_app = if (has_gpu) gpu_window.Loop else struct {};
 /// What a GPU window's `runApp` opens and runs with (src/app/gpu.zig).
 pub const GpuWant = @import("gpu.zig").Want;
 const no_gpu = std.fmt.comptimePrint(
     "lcgf_app: this build (-Drender={t}, {t}) has no GPU path; " ++
-        "`gpu` needs -Drender=vk on Linux (a `Surface` here is never live)",
+        "`gpu` needs -Drender=vk on Linux or -Drender=metal on macOS " ++
+        "(a `Surface` here is never live)",
     .{ render, builtin.os.tag },
 );
 /// `lcgf_render.gpu` on the build's back end: what `App.draw` renders a `Surface` with.
@@ -298,23 +302,24 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     const seconds: f32 = if (init.environ_map.get("LCGF_APP_SECONDS")) |s| std.fmt.parseFloat(f32, s) catch lcgf.types.inf else lcgf.types.inf;
     const clock: Clock = .{ .io = init.io, .t0 = std.Io.Timestamp.now(init.io, .awake), .seconds = seconds };
     var ctx = try context.Context.init(&B.ctx, limitsOf(options));
-    // The software shells keep the last frame's pixels; Metal draws every frame whole. A list
-    // the application composes, or one that may show an image whose pixels changed, is kept
-    // whole and culled once, after the compose or with the images' quads.
-    const composing = comptime page.composes(App) or @hasDecl(App, "images");
-    if (builtin.os.tag != .macos) {
-        if (composing) ctx.trackDamageWhole() else ctx.trackDamage();
-    }
-    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
-    // The macOS shell draws its own text with the bitmap font, on Metal: no service there yet.
+    // The windows keep the last frame's pixels. A list the application composes, or one that
+    // may show an image whose pixels changed, is kept whole and culled once, after the compose
+    // or with the images' quads. The macOS shell's Metal window draws all of its picture again
+    // after a frame it did not show, so its list stays whole too.
     const mac = builtin.os.tag == .macos;
-    const fonts: []const text.File = if (mac) &.{} else options.fonts;
+    const composing = comptime page.composes(App) or @hasDecl(App, "images") or mac;
+    if (composing) ctx.trackDamageWhole() else ctx.trackDamage();
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const env = envOf(init);
+    // The macOS shell's own window draws its text in the bitmap font: under LCGF_RENDER=sw no
+    // service there, so text is laid out in the font it is drawn in.
+    const soft = mac and std.mem.eql(u8, env.render, "sw");
+    const fonts: []const text.File = if (soft) &.{} else options.fonts;
     const TextWindow = text.WindowOf(serves(options));
-    var tw = try TextWindow.open(&B.service, textOptions(options), fonts, !mac, init.gpa, init.io);
+    var tw = try TextWindow.open(&B.service, textOptions(options), fonts, !soft, init.gpa, init.io);
     defer tw.close();
     ctx.enableCanvas(&B.canvas_rows);
     openLabels(App, app, options, &tw);
-    const env = envOf(init);
     if (has_gpu) switch (try runGpu(App, app, env, options, clock, &ctx, &tw)) {
         .done => return,
         .software => if (composing) ctx.trackDamageWhole() else ctx.trackDamage(),
@@ -516,14 +521,14 @@ const X11 = if (builtin.os.tag == .linux) struct {
 /// `options.limits` with room to track damage where the shell keeps its pixels.
 fn limitsOf(comptime options: Options) context.Limits {
     var limits = options.limits;
-    limits.damage = builtin.os.tag != .macos;
+    limits.damage = true;
     return limits;
 }
 
 /// Whether the text service can ever draw a window of `options`: it has font files, or the
 /// build can ask the system for faces. Else the program carries none of its code.
 fn serves(comptime options: Options) bool {
-    return builtin.os.tag != .macos and (options.fonts.len > 0 or text.can_discover);
+    return options.fonts.len > 0 or text.can_discover;
 }
 
 /// An App with a field `labels: Labels` gets the window's text service and a label atlas sized
