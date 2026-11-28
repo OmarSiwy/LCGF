@@ -35,13 +35,14 @@ ring was drawn.
 zig build surface-example && zig-out/bin/surface-example
 ```
 
-It needs a Vulkan build on Linux (`-Drender=vk`, the default there) or a Metal one on macOS
-(`-Drender=metal`, the default there). On Linux, under a Wayland compositor that takes
-dma-bufs the window is native Wayland (Vulkan draws into images the compositor reads with no
-copy); else it is X11, through XWayland in a Wayland session. On macOS it is an AppKit window.
-In any other build `gpu` is a
-compile error that says why; `Surface`, `GpuFrame` and `draw` compile, and a surface is never
-live there (below).
+It needs a Vulkan build on Linux (`-Drender=vk`, the default there), a Metal one on macOS
+(`-Drender=metal`) or a Direct3D 12 one on Windows (`-Drender=d3d12`), each the default
+there. On Linux, under a Wayland compositor that takes dma-bufs the window is native Wayland
+(Vulkan draws into images the compositor reads with no copy); else it is X11, through
+XWayland in a Wayland session. On macOS it is an AppKit window, on Windows a Win32 window
+with a flip-model swapchain (examples/surface itself has only Vulkan's shader so far). In
+any other build `gpu` is a compile error that says why; `Surface`, `GpuFrame` and `draw`
+compile, and a surface is never live there (below).
 
 ## The two functions
 

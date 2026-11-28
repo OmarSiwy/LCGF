@@ -17,6 +17,14 @@ quiet() { grep -v -e '^libEGL' -e '^pci id' -e '^MESA' -e '^$' || true; }
 # Direct3D 12 over a shown Win32 shell window (src/shell/win32/gpu.zig): its pictures are read
 # back from the GPU, not from the screen.
 "${WINE:-wine}" zig-out/bin/win32-gpu-test.exe 2>&1 | quiet
+# lcgf_app's GPU window on Windows (src/app/gpu_win32.zig): T2, T3, T4, not shown, images and
+# text, read back from the picture.
+zig build app-win32-test-build -Dtarget=x86_64-windows --summary none
+"${WINE:-wine}" zig-out/bin/app-win32-test.exe 2>&1 | quiet
+# examples/app through `lcgf_app.run` for a second, on Direct3D 12 and forced to software.
+zig build app-example -Dtarget=x86_64-windows -p zig-out/win --summary none
+LCGF_APP_SECONDS=1 "${WINE:-wine}" zig-out/win/bin/app-example.exe 2>&1 | quiet
+LCGF_APP_SECONDS=1 LCGF_RENDER=sw "${WINE:-wine}" zig-out/win/bin/app-example.exe 2>&1 | quiet
 for mode in offscreen present; do
     out=zig-out/d3d12/$mode; rm -rf "$out"
     "${WINE:-wine}" zig-out/bin/d3d12-play.exe "$out" "$mode" 2>&1 | quiet

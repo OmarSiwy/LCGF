@@ -96,6 +96,7 @@ const render = @import("render_options").render;
 const gpu_window = switch (builtin.os.tag) {
     .linux => if (render == .vk) @import("gpu_x11.zig") else struct {},
     .macos => if (render == .metal) @import("gpu_macos.zig") else struct {},
+    .windows => if (render == .d3d12) @import("gpu_win32.zig") else struct {},
     else => struct {},
 };
 /// GPU windows tried before `gpu_window`, in order: native Wayland on a Vulkan build. They
@@ -104,15 +105,16 @@ const gpu_first = switch (builtin.os.tag) {
     .linux => if (render == .vk) .{@import("gpu_wayland.zig")} else .{},
     else => .{},
 };
-/// Whether this build draws the window with a GPU: Vulkan over X11 on Linux, Metal on macOS.
+/// Whether this build draws the window with a GPU: Vulkan over X11 or Wayland on Linux, Metal
+/// on macOS, Direct3D 12 on Windows.
 pub const has_gpu = @hasDecl(gpu_window, "Loop");
 const gpu_app = if (has_gpu) gpu_window.Loop else struct {};
 /// What a GPU window's `runApp` opens and runs with (src/app/gpu.zig).
 pub const GpuWant = @import("gpu.zig").Want;
 const no_gpu = std.fmt.comptimePrint(
     "lcgf_app: this build (-Drender={t}, {t}) has no GPU path; " ++
-        "`gpu` needs -Drender=vk on Linux or -Drender=metal on macOS " ++
-        "(a `Surface` here is never live)",
+        "`gpu` needs -Drender=vk on Linux, -Drender=metal on macOS or -Drender=d3d12 on " ++
+        "Windows (a `Surface` here is never live)",
     .{ render, builtin.os.tag },
 );
 /// `lcgf_render.gpu` on the build's back end: what `App.draw` renders a `Surface` with.
@@ -451,10 +453,10 @@ fn runSoftwareLinux(
 
 /// The window on the GPU when the build has one (`gpu_first`, then `gpu_window`) and
 /// `LCGF_RENDER` is not `sw`: on Linux native Wayland where `WAYLAND_DISPLAY` is set, then
-/// X11 with Vulkan where `DISPLAY` is (under Wayland, through XWayland).
-/// `.software` when it cannot (no display, no server there, no device, or forced), so `run`
-/// opens the software window instead, where `App.draw` is never called and `Surface.live` is
-/// false.
+/// X11 with Vulkan where `DISPLAY` is (under Wayland, through XWayland); on macOS Metal; on
+/// Windows Direct3D 12. `.software` when it cannot (no display, no server there, no device, or
+/// forced), so `run` opens the software window instead, where `App.draw` is never called and
+/// `Surface.live` is false.
 // tidy: allow-fn(large-generic-function) one instance per App
 // tidy: allow(too-many-parameters) `run`'s own inputs, passed through
 fn runGpu(

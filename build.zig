@@ -157,10 +157,12 @@ pub fn build(b: *std.Build) void {
         },
         else => lcgf_import,
     };
-    // libc on macOS, and on Linux exactly when the back end is a GPU one (its loader is opened
-    // with dlopen): `-Drender=sw` stays without.
+    // libc on macOS, on Linux exactly when the back end is a GPU one (its loader is opened
+    // with dlopen), and on Windows with Direct3D 12 (its module links MinGW's): `-Drender=sw`
+    // stays without.
     const linux = target.result.os.tag == .linux;
-    const app_libc = target.result.os.tag == .macos or (linux and render != .sw);
+    const windows_gpu = target.result.os.tag == .windows and render == .d3d12;
+    const app_libc = target.result.os.tag == .macos or (linux and render != .sw) or windows_gpu;
     const app_mod = b.addModule("lcgf_app", .{ .root_source_file = b.path("src/app/app.zig"), .target = target, .optimize = optimize, .link_libc = app_libc, .imports = app_imports });
     app_mod.addOptions("render_options", render_options);
     // The GPU window (src/app/gpu.zig's loop, src/app/gpu_x11.zig): Vulkan over the X11 shell's window.
@@ -172,6 +174,17 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
             .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk", .module = app_vk }, .{ .name = "x11", .module = app_imports[1].module } },
+        }));
+    };
+    // The GPU window on Windows (src/app/gpu_win32.zig): Direct3D 12 over the Win32 shell's window.
+    if (windows_gpu) if (renderBackend(b, .d3d12, target, optimize, lcgf, wgpu_native_mod)) |app_d3d12| {
+        app_mod.addImport("d3d12", app_d3d12);
+        app_mod.addImport("win32_gpu", b.createModule(.{
+            .root_source_file = b.path("src/shell/win32/gpu.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "d3d12", .module = app_d3d12 }, .{ .name = "win32", .module = app_imports[1].module } },
         }));
     };
     // The text service's font discovery (src/app/text.zig), linking what lcgf_app links, and
@@ -1446,6 +1459,10 @@ pub fn build(b: *std.Build) void {
     const app_macos_tests = b.addTest(.{ .name = "app-macos-test", .root_module = app_mod, .filters = &.{"metal "} });
     b.step("app-macos", "Test lcgf_app's Metal window on macOS").dependOn(&b.addRunArtifact(app_macos_tests).step);
     b.step("app-macos-build", "Compile lcgf_app's Metal window tests for -Dtarget without running them").dependOn(&b.addInstallArtifact(app_macos_tests, .{}).step);
+    // The GPU window on Windows (src/app/gpu_win32.zig): its tests, run under Wine by ci/run.sh
+    // d3d12. Only they compile (the filter): app.zig's own tests open X11 windows.
+    const app_win32_tests = b.addTest(.{ .name = "app-win32-test", .root_module = app_mod, .filters = &.{"win32 "} });
+    b.step("app-win32-test-build", "Compile lcgf_app's Direct3D 12 window tests for -Dtarget (x86_64-windows) without running them").dependOn(&b.addInstallArtifact(app_win32_tests, .{}).step);
     if (target.result.os.tag == .linux) test_step.dependOn(&app_tests.step);
 
     // Two compile-error cases of docs/guide/errors/ are syntax errors on purpose, which zig fmt
