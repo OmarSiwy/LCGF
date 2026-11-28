@@ -34,8 +34,9 @@ sources and headless tests. Use the repository's pinned Zig
 | [mcu](mcu/) | A thermostat replay and Cortex-M7 image |
 | [embedded](embedded/) | A simulated SPI counter board and two firmware targets |
 
-From a project directory, `zig build` installs the application, `zig build run`
-opens its window and `zig build test` runs its headless checks. The desktop
+From a project directory, `zig build` installs the application (and, for the
+desktop projects, the licence of the bundled font a window without font files draws
+with, under `share/licenses/`), `zig build run` opens its window and `zig build test` runs its headless checks. The desktop
 projects' build.zig is examples/app's: LCGF as a dependency with the default back
 end, `lcgf.addApp`, and a test of the same module with `lcgf_replay`, which plays
 recordings into the `App` through the headless shell and checks what it built and

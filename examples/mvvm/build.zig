@@ -15,6 +15,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     b.installArtifact(exe);
+    // The bundled bitmap font's licence: a window with no font files draws with it.
+    const licence = b.addInstallFile(dep.path("src/example/font/LICENSE.txt"), "share/licenses/mvvm/DejaVu.txt");
+    b.getInstallStep().dependOn(&licence.step);
     b.step("run", "Open the window").dependOn(&b.addRunArtifact(exe).step);
     exe.root_module.addImport("lcgf_replay", dep.module("lcgf_replay"));
     const tests = b.addTest(.{ .root_module = exe.root_module });
