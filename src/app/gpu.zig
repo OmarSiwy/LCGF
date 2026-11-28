@@ -35,12 +35,14 @@ const vk = @import("vk");
 const x11 = @import("x11");
 const x11_gpu = @import("x11_gpu");
 const text = @import("text.zig");
+const page = @import("page.zig");
 const context = lcgf.context;
 const scheduler = lcgf.scheduler;
 const font = lcgf.render_sw_font;
 const Region = lcgf.damage.Region;
 const Events = lcgf.shell_iface.Events;
 const Glyphs = lcgf.render_iface.Glyphs;
+const DrawList = lcgf.draw_list.DrawList;
 const Texture = lcgf.types.Texture;
 const Quad = lcgf.draw_list.Quad;
 const Frame = lcgf.frame.Frame;
@@ -223,6 +225,8 @@ pub const Window = struct {
     /// Frames to give up on as error.NotShown before acquiring: what a hidden window does, for
     /// a test on a server that shows every window.
     refuse: u32,
+    /// A composing application's region and the input its last frame was built from.
+    paging: page.Paging,
 
     pub const Open = struct {
         /// Device-local bytes `draw` places its resources in, and staging bytes per frame.
@@ -269,6 +273,7 @@ pub const Window = struct {
         gw.stats = .{};
         gw.ctx = null;
         gw.refuse = 0;
+        gw.paging = .{};
     }
 
     /// Waits for the device, then lets go of everything `open` and the frames made, the
@@ -334,7 +339,9 @@ pub fn loop(comptime App: type, app: *App, gw: *Window, run: Run, clock: anytype
             app.theme = lcgf.theme.widgets(&lcgf.theme.forAppearance(ev.in.appearance));
             w.background = app.theme.panel;
         }
-        if (ctx.needsFrame(&ev.in)) build(App, app, gw, run, &ev);
+        if (comptime page.composes(App)) {
+            if (gw.paging.wants(ctx, &ev.in)) buildPage(App, app, gw, run, &ev);
+        } else if (ctx.needsFrame(&ev.in)) build(App, app, gw, run, &ev);
         const due = gw.rows != null or anyDirty() or exposed or waiting_since_not_shown;
         if (due and (gw.x.setup.gfx.list != null or gw.rows != null)) {
             if (present(App, app, gw, w)) |_| {
@@ -374,36 +381,75 @@ fn build(comptime App: type, app: *App, gw: *Window, run: Run, ev: *const Events
     const out = run.tw.end(&f);
     run.w.apply(&out.platform);
     gw.stats.builds += 1;
-    var glyphs: Glyphs = undefined;
-    if (run.tw.on()) {
-        const placed = run.tw.glyphs(ctx, &out, ev.in.scale);
-        glyphs = placed.glyphs;
+    const placed: ?text.Frame = if (run.tw.on()) run.tw.glyphs(ctx, &out, ev.in.scale) else null;
+    owe(gw, run, &out, out.draw, textGlyphs(gw, run, out.draw, placed), .{ 0, 0 }, &ev.in);
+}
+
+/// `build` for an App that composes its frames into a page (src/app/page.zig): the frame is
+/// built in the page's region, and the window draws the application's list.
+// tidy: allow-fn(large-generic-function) one instance per App
+// tidy: allow(too-many-parameters) the loop's state, passed through
+fn buildPage(comptime App: type, app: *App, gw: *Window, run: Run, ev: *const Events) void {
+    std.debug.assert(ev.in.scale > 0);
+    const ctx = run.ctx;
+    registry.built = @splat(false);
+    const b = page.build(App, app, &gw.paging, ctx, run.tw, ev);
+    run.w.apply(&b.out.platform);
+    gw.stats.builds += 1;
+    const list = b.composed.draw;
+    const scale = ev.in.scale;
+    const sides = b.composed.texts;
+    const placed: ?text.Frame = if (run.tw.on()) run.tw.glyphsOf(ctx, list, sides, scale) else null;
+    owe(gw, run, &b.out, list, textGlyphs(gw, run, list, placed), b.origin, &ev.in);
+}
+
+/// The glyphs of `list` with the handles they sample: the service's `placed`, its atlas owed an
+/// upload, or the bundled font's.
+fn textGlyphs(gw: *Window, run: Run, list: *const DrawList, placed: ?text.Frame) Glyphs {
+    if (placed) |p| {
+        var glyphs = p.glyphs;
         glyphs.texture = @fromBackingInt(handle_text);
         glyphs.canvas = @fromBackingInt(handle_font);
-        gw.text_dirty = placed;
-    } else {
-        glyphs = font.glyphs(out.draw, run.quads, run.first, run.count);
-        glyphs.texture = @fromBackingInt(handle_font);
+        gw.text_dirty = p;
+        return glyphs;
     }
+    var glyphs = font.glyphs(list, run.quads, run.first, run.count);
+    glyphs.texture = @fromBackingInt(handle_font);
+    return glyphs;
+}
+
+/// The rows of `list` to draw, its damage owed, and the surfaces of frame `out` placed: their
+/// nodes' rects moved by `origin`, the frame's (0, 0) in the window.
+// tidy: allow(too-many-parameters) one frame's parts, from either build
+fn owe(
+    gw: *Window,
+    run: Run,
+    out: *const context.Output,
+    list: *const lcgf.draw_list.DrawList,
+    glyphs: Glyphs,
+    origin: [2]f32,
+    in: *const lcgf.input.Input,
+) void {
+    std.debug.assert(in.scale > 0);
     gw.rows = .{
-        .list = out.draw,
+        .list = list,
         .glyphs = glyphs,
-        .viewport = ev.in.viewport,
-        .scale = ev.in.scale,
+        .viewport = in.viewport,
+        .scale = in.scale,
     };
-    unite(&gw.owed, &out.draw.damage);
+    unite(&gw.owed, &list.damage);
     for (registry.list, registry.built) |l, built| if (l) |s| if (built) {
         const r = out.tree.rect(s.node_ix);
-        s.rect = .{ r.x0, r.y0, r.x1, r.y1 };
+        s.rect = .{ r.x0 + origin[0], r.y0 + origin[1], r.x1 + origin[0], r.y1 + origin[1] };
         const size: [2]u32 = .{
-            @intFromFloat(@round(@max(r.x1 - r.x0, 0) * ev.in.scale)),
-            @intFromFloat(@round(@max(r.y1 - r.y0, 0) * ev.in.scale)),
+            @intFromFloat(@round(@max(r.x1 - r.x0, 0) * in.scale)),
+            @intFromFloat(@round(@max(r.y1 - r.y0, 0) * in.scale)),
         };
         if (std.mem.eql(u32, &size, &s.size)) continue;
         s.size = size;
         s.dirty = true;
         // The node's `uv` came from the old size: one more frame shows the new one.
-        ctx.waker.post();
+        run.ctx.waker.post();
     };
 }
 
@@ -1030,6 +1076,48 @@ test "gpu images and text: an image and the service's glyphs draw; a new generat
     try fx.run(&app, seconds(0.3));
     try testing.expectEqual(Color.rgb(0, 0, 220), try shown(&fx.w, 20, 20, .rgb(0, 0, 220)));
     try testing.expect(fx.gw.stats.whole > whole);
+}
+
+test "gpu page: a composed page draws both sides; a pan scissors the canvas; idle presents none" {
+    var fx: Fixture = undefined;
+    try fx.openWith(try displayOrSkip(), 300, 200, &Fixture.face);
+    defer fx.close();
+    try testing.expect(fx.tw.on());
+    const T = page.TestApp;
+    var app: T = .{};
+    try fx.run(&app, seconds(0.3));
+    const plot = app.canvas_rect;
+    try testing.expectEqual(T.tint, try shown(&fx.w, 258, 16, T.tint));
+    try testing.expectEqual(T.page_fill, try x11.pixel(&fx.w, 200, 4));
+    try testing.expectEqual(T.region_fill, try x11.pixel(&fx.w, 290, 190));
+    try testing.expectEqual(T.red, try page.pixelIn(&fx.w, plot, 15, 15));
+    try page.expectPageText(&fx.w, &app, &fx.tw.text.?);
+
+    // A pan: one frame built, its pass scissored to the canvas node's rect; no `draw` (none).
+    const builds = fx.gw.stats.builds;
+    app.camera.offset = .{ 50, 30 };
+    fx.ctx.waker.post();
+    try fx.run(&app, seconds(0.3));
+    try testing.expectEqual(plot, fx.gw.stats.damage.bounds());
+    try testing.expectEqual(@as(u32, 1), fx.gw.stats.damage.count());
+    try testing.expectEqual(T.red, try page.pixelIn(&fx.w, plot, 55, 35));
+    try testing.expectEqual(T.canvas_fill, try page.pixelIn(&fx.w, plot, 15, 15));
+    try testing.expect(fx.gw.stats.builds > builds);
+    try testing.expectEqual(@as(u32, 0), fx.gw.stats.draws);
+
+    // The compiled checkbox: within its rect.
+    const widget = app.widgetRect();
+    app.ui.signals.state.grid = false;
+    fx.ctx.waker.post();
+    try fx.run(&app, seconds(0.3));
+    const d = fx.gw.stats.damage.bounds();
+    try testing.expect(d[0] >= widget[0] and d[1] >= widget[1]);
+    try testing.expect(d[2] <= widget[2] and d[3] <= widget[3]);
+
+    // Idle: nothing presented.
+    const presents = fx.gw.stats.presents;
+    try fx.run(&app, seconds(1));
+    try testing.expectEqual(presents, fx.gw.stats.presents);
 }
 
 /// A canvas with a half-transparent line, and a box beside it that `lit` turns white.

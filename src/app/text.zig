@@ -29,11 +29,13 @@
 //!   pub const Options = struct
 //!   pub const File = struct
 //!   pub const Frame = struct
+//!   pub const Side = struct
 //!   pub const Text = struct
 //!     pub fn requiredBytes(o: Options) usize
 //!     pub fn init(buf: []align(64) u8, o: Options, files: []const File) InitError!Text
 //!     pub fn addFace(t: *Text, file: File) InitError!void
 //!     pub fn glyphs(t: *Text, d: *const DrawList, tx: *const Texts, scale: f32) Frame
+//!     pub fn glyphsOf(t: *Text, d: *const DrawList, sides: []const Side, scale: f32) Frame
 //!     pub fn addSystemDefaults(t: *Text, gpa: Allocator, io: Io, d: *Discovery) !void
 //!     pub fn cover(t: *Text, gpa: Allocator, io: Io, d: *Discovery, text: []const u8) !u32
 //!     pub fn deinit(t: *Text, gpa: Allocator) void
@@ -111,6 +113,12 @@ pub const Frame = struct {
     /// valid. The same generation and the same draw list give the same quads.
     generation: u32,
 };
+
+/// The rows behind a run of a draw list: of one front end's frame, or of one side of a list
+/// `ct_interop.compose` joined. `tx` is the `Texts` the side's runs were measured in (row k is
+/// the draw list's run `first_run + k`) and `strings` the bytes its rows index: the side's own
+/// list's `strings`, before the compose moved them.
+pub const Side = struct { tx: *const Texts, strings: []const u8, first_run: u32 = 0 };
 
 pub const InitError = opentype.Error || error{TooManyFaces};
 
@@ -235,14 +243,24 @@ pub const Text = struct {
     /// Rasterises the images no earlier frame left in the atlas. Asserts `scale` is positive
     /// and finite and `d` has no more runs than `Options.texts`.
     pub fn glyphs(t: *Text, d: *const DrawList, tx: *const Texts, scale: f32) Frame {
+        return t.glyphsOf(d, &.{.{ .tx = tx, .strings = d.strings }}, scale);
+    }
+
+    /// `glyphs` of a list whose runs come from several frames (`ct_interop.compose`): run k is
+    /// row `k - first_run` of the last side whose `first_run` is at most k. Each side was
+    /// measured through `stack`; the glyphs are placed at the list's runs, where the compose
+    /// moved them. Asserts the sides are in order, the first at run 0.
+    pub fn glyphsOf(t: *Text, d: *const DrawList, sides: []const Side, scale: f32) Frame {
         std.debug.assert(scale > 0);
         std.debug.assert(std.math.isFinite(scale));
         std.debug.assert(d.run_len <= t.first.len);
+        std.debug.assert(sides.len > 0);
+        std.debug.assert(sides[0].first_run == 0);
         if (scale != t.scale) t.reset(scale);
-        const n = t.placeRuns(d, tx, .reset) catch blk: {
+        const n = t.placeRuns(d, sides, .reset) catch blk: {
             t.reset(scale);
             // tidy: allow(swallowed-error) a pass that drops what does not fit never fails
-            break :blk t.placeRuns(d, tx, .drop) catch unreachable;
+            break :blk t.placeRuns(d, sides, .drop) catch unreachable;
         };
         std.debug.assert(n <= t.quads.len);
         const runs = d.run_len;
@@ -362,21 +380,28 @@ pub const Text = struct {
         t.generation +%= 1;
     }
 
-    fn placeRuns(t: *Text, d: *const DrawList, tx: *const Texts, full: WhenFull) error{Full}!u32 {
+    fn placeRuns(
+        t: *Text,
+        d: *const DrawList,
+        sides: []const Side,
+        full: WhenFull,
+    ) error{Full}!u32 {
         @memset(t.first[0..d.run_len], 0);
         @memset(t.count[0..d.run_len], 0);
         @memset(t.run_keys, 0);
-        // The runs' bytes are the draw list's strings, which Stack reads as a frame's Strings.
-        const strings: Strings = .{ .buf = @constCast(d.strings), .len = @intCast(d.strings.len) };
         var n: u32 = 0;
         for (0..d.cmd_len) |i| {
             const k = switch (d.command(@intCast(i))) {
                 .text => |k| k,
                 else => continue,
             };
+            const side = sideOf(sides, k);
+            const tx = side.tx;
+            const row = k - side.first_run;
+            std.debug.assert(row < tx.len);
             // A run drawn by two commands is placed once.
-            if (t.count[k] != 0 or !t.stack.serves(tx, k)) continue;
-            const key = t.runKey(d, tx, k);
+            if (t.count[k] != 0 or !t.stack.serves(tx, row)) continue;
+            const key = t.runKey(d, tx, k, row);
             if (find(t.kept_keys, key)) |at| {
                 // Unchanged since last frame: its quads, copied.
                 const span = t.kept_at[at];
@@ -391,7 +416,9 @@ pub const Text = struct {
                 n += span[1];
                 continue;
             }
-            t.stack.paragraph(tx, &strings, k) catch {
+            // The row's bytes are its side's strings, which Stack reads as a frame's Strings.
+            const strings = stringsOf(side);
+            t.stack.paragraph(tx, &strings, row) catch {
                 t.overflow = true;
                 continue;
             };
@@ -413,16 +440,24 @@ pub const Text = struct {
         return n;
     }
 
+    /// The side run `k` of the list belongs to: the last that starts at or before it.
+    fn sideOf(sides: []const Side, k: u32) Side {
+        var at: usize = 0;
+        for (sides, 0..) |side, i| at = if (side.first_run <= k) i else at;
+        std.debug.assert(sides[at].first_run <= k);
+        return sides[at];
+    }
+
     /// What run `k`'s quads depend on: its bytes, its draw-list row (rect, clip, size, colour,
     /// font, transform), the width layout gave it, the scale, the atlas generation and the
     /// faces. Its place in `strings` is not part of it.
-    fn runKey(t: *const Text, d: *const DrawList, tx: *const Texts, k: u32) u64 {
+    fn runKey(t: *const Text, d: *const DrawList, tx: *const Texts, k: u32, row: u32) u64 {
         var run = d.runs[k];
         const bytes = d.strings[run.start..][0..run.bytes];
         run.start = 0;
         const scale: u32 = @bitCast(t.scale);
-        const avail: u32 = @bitCast(tx.c.avail[k]);
-        const wrap: u32 = @bitCast(tx.c.wrap[k]);
+        const avail: u32 = @bitCast(tx.c.avail[row]);
+        const wrap: u32 = @bitCast(tx.c.wrap[row]);
         const words = [3]u64{ t.generation, t.extents.generation, (@as(u64, scale) << 32) | avail };
         var hash: std.hash.Wyhash = .init(wrap);
         hash.update(std.mem.asBytes(&words));
@@ -595,6 +630,11 @@ pub const Bitmap = struct {
     pub fn glyphs(_: *Bitmap, _: *Context, _: *const lcgf.context.Output, _: f32) Frame {
         unreachable;
     }
+
+    /// Never called: `on` is false.
+    pub fn glyphsOf(_: *Bitmap, _: *Context, _: *const DrawList, _: []const Side, _: f32) Frame {
+        unreachable;
+    }
 };
 
 /// The text of a window `lcgf_app` runs: the service over the application's font files, else
@@ -661,13 +701,25 @@ pub const Window = struct {
     /// frame no face had brought a new face (`cover`), `ctx` redraws the whole window in a
     /// frame of its own, at once. Asserts `on`.
     pub fn glyphs(w: *Window, ctx: *Context, out: *const lcgf.context.Output, scale: f32) Frame {
+        const sides = [_]Side{.{ .tx = out.texts, .strings = out.draw.strings }};
+        return w.glyphsOf(ctx, out.draw, &sides, scale);
+    }
+
+    /// `glyphs` of a list joined from `sides` (`Text.glyphsOf`).
+    pub fn glyphsOf(
+        w: *Window,
+        ctx: *Context,
+        d: *const DrawList,
+        sides: []const Side,
+        scale: f32,
+    ) Frame {
         std.debug.assert(w.on());
         const t = &w.text.?;
-        const frame = t.glyphs(out.draw, out.texts, scale);
+        const frame = t.glyphsOf(d, sides, scale);
         var again = if (w.generation) |g| g != frame.generation else false;
         w.generation = frame.generation;
-        if (can_discover) if (w.discovery) |*d| {
-            again = again or (t.cover(w.gpa, w.io, d, out.draw.strings) catch 0) > 0;
+        if (can_discover) if (w.discovery) |*found| {
+            again = again or (t.cover(w.gpa, w.io, found, d.strings) catch 0) > 0;
         };
         if (again) {
             ctx.redrawAll();
@@ -908,15 +960,34 @@ test "a paragraph through the service and the software back end matches direct r
 /// wide), rasterised by src/text/raster/ at the physical pen the service rounds to; returns
 /// how many came from a fallback face.
 pub fn drawReference(t: *Text, out: lcgf.context.Output, scale: f32, img: []u8, w: u32) !u32 {
+    const sides = [_]Side{.{ .tx = out.texts, .strings = out.draw.strings }};
+    return drawReferenceOf(t, out.draw, &sides, scale, img, w);
+}
+
+/// `side`'s bytes as the `Strings` its rows index, which `Stack` reads.
+fn stringsOf(side: Side) Strings {
+    return .{ .buf = @constCast(side.strings), .len = @intCast(side.strings.len) };
+}
+
+/// `drawReference` of a list joined from `sides` (`Text.glyphsOf`).
+// tidy: allow(too-many-parameters) `drawReference`'s, with the list's sides
+pub fn drawReferenceOf(
+    t: *Text,
+    d: *const DrawList,
+    sides: []const Side,
+    scale: f32,
+    img: []u8,
+    w: u32,
+) !u32 {
     std.debug.assert(img.len % w == 0);
-    const d = out.draw;
-    const strings: Strings = .{ .buf = @constCast(d.strings), .len = @intCast(d.strings.len) };
     var cols: raster.TestOutline = .{};
     var acc: [96 * 96]f32 = undefined;
     var cov: [96 * 96]u8 = undefined;
     var fallbacks: u32 = 0;
     for (d.runs[0..d.run_len], 0..) |run, k| {
-        try t.stack.paragraph(out.texts, &strings, k);
+        const side = Text.sideOf(sides, @intCast(k));
+        const strings = stringsOf(side);
+        try t.stack.paragraph(side.tx, &strings, k - side.first_run);
         const g = &t.stack.g;
         const l = &t.stack.l;
         for (0..l.len) |li| for (l.first[li]..l.ink[li]) |i| {

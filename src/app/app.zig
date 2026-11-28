@@ -61,6 +61,11 @@ pub const gpu = if (has_gpu) gpu_app.gpu else @compileError(no_gpu);
 pub const Surface = if (has_gpu) gpu_app.Surface else @compileError(no_gpu);
 /// What `App.draw` draws with (src/app/gpu.zig).
 pub const GpuFrame = if (has_gpu) gpu_app.GpuFrame else @compileError(no_gpu);
+const page = @import("page.zig");
+/// What `App.page` lays its page out with (src/app/page.zig).
+pub const PageText = page.PageText;
+/// What `App.compose` returns (src/app/page.zig).
+pub const Composed = page.Composed;
 
 /// An application's image, which the UI draws through `Style.texture` (texture k + 1 is image
 /// k of `App.images`): `size[0]` by `size[1]` texels, row by row, both sides positive, the
@@ -101,6 +106,35 @@ pub const Options = struct {
 /// `App` has `pub fn build(*App, *lcgf.frame.Frame, *const lcgf.shell_iface.Events) void`,
 /// and may have `pub fn images(*App) []const Image` (at most `images_max`; the software shells
 /// and the GPU draw them, the macOS shell, on Metal, not yet).
+///
+/// An `App` whose window is a page of its own (a `ComptimeUi`) with the frame in a region of
+/// it has both of:
+///
+///     /// Lays the page out over the window's input; the region the frame is built in.
+///     pub fn page(app: *App, in: *const Input, text: lcgf_app.PageText) [4]f32 {
+///         const top = if (text) |t| app.ui.frameText(in, t) else app.ui.frame(in);
+///         app.ui.recordDamage(&app.dm);
+///         app.top = top.draw;
+///         return rect4(top.tree.rect(top.tree.find(region_id)));
+///     }
+///     /// The page's list with the frame's in its region.
+///     pub fn compose(app: *App, out: *const lcgf.context.Output) lcgf_app.Composed {
+///         ct_interop.compose(&app.list, app.top, out.draw, region, &app.strings) catch
+///             unreachable; // the list has room for both, and the page has the region
+///         app.texts = .{
+///             .{ .tx = &app.ui.tables.tx, .strings = app.top.strings },
+///             .{ .tx = out.texts, .strings = out.draw.strings, .first_run = app.top.run_len },
+///         };
+///         return .{ .draw = &app.list, .texts = &app.texts };
+///     }
+///
+/// The frame is then begun with `ct_interop.regionInput(in, rect)`: the region's size is its
+/// viewport and the pointer is moved by the region's corner, so `build` lays out and is hit
+/// at (0, 0) as in a window of its own; `Events.in` is that input too. The context records its
+/// damage and keeps its list whole (`trackDamageWhole`); the page records its own
+/// (`ComptimeUi.recordDamage`), and the window draws, culls and uploads only their union. A
+/// frame is built when the context asks or the window's input changed at all. A `Surface` of
+/// the frame is placed at its node moved by the region's corner.
 pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime options: Options) !void {
     if (!@hasDecl(App, "build")) @compileError(@typeName(App) ++ " needs `pub fn build(*App, *lcgf.frame.Frame, *const lcgf.shell_iface.Events) void`");
     if (@hasDecl(App, "draw") and !has_gpu) @compileError(no_gpu);
@@ -108,8 +142,12 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     const seconds: f32 = if (init.environ_map.get("LCGF_APP_SECONDS")) |s| std.fmt.parseFloat(f32, s) catch lcgf.types.inf else lcgf.types.inf;
     const clock: Clock = .{ .io = init.io, .t0 = std.Io.Timestamp.now(init.io, .awake), .seconds = seconds };
     var ctx = try context.Context.init(&B.ctx, limitsOf(options));
-    // The software shells keep the last frame's pixels; Metal draws every frame whole.
-    if (builtin.os.tag != .macos) ctx.trackDamage();
+    // The software shells keep the last frame's pixels; Metal draws every frame whole. A list
+    // the application composes is culled once, after the compose.
+    const composing = comptime page.composes(App);
+    if (builtin.os.tag != .macos) {
+        if (composing) ctx.trackDamageWhole() else ctx.trackDamage();
+    }
     const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
     // The macOS shell draws its own text with the bitmap font, on Metal: no service there yet.
     const mac = builtin.os.tag == .macos;
@@ -119,7 +157,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     defer tw.close();
     if (has_gpu) switch (try runGpu(App, app, gpuEnv(init), options, clock, &ctx, &tw)) {
         .done => return,
-        .software => ctx.trackDamage(),
+        .software => if (composing) ctx.trackDamageWhole() else ctx.trackDamage(),
     };
     switch (builtin.os.tag) {
         .linux => {
@@ -468,6 +506,7 @@ fn loop(
     const follows = @hasField(App, "theme") and @FieldType(App, "theme") == lcgf.widgets_base.Theme;
     var styled: ?lcgf.input.Input.Appearance = null;
     var textures: Textures = .{};
+    var paging: page.Paging = .{};
     var ev: Events = .{};
     while (shell.poll(&ev)) {
         if (follows and !std.meta.eql(styled, ev.in.appearance)) {
@@ -475,7 +514,12 @@ fn loop(
             app.theme = lcgf.theme.widgets(&lcgf.theme.forAppearance(ev.in.appearance));
             if (@hasField(@TypeOf(shell.*), "background")) shell.background = app.theme.panel;
         }
-        if (ctx.needsFrame(&ev.in)) {
+        if (comptime page.composes(App)) {
+            if (paging.wants(ctx, &ev.in)) {
+                if (@hasDecl(@TypeOf(shell.*), "beforeFrame")) try shell.beforeFrame();
+                composedFrame(App, app, shell, ctx, &paging, &textures, glyphs, tw, &ev);
+            }
+        } else if (ctx.needsFrame(&ev.in)) {
             if (@hasDecl(@TypeOf(shell.*), "beforeFrame")) try shell.beforeFrame();
             var f = ctx.begin(&ev.in);
             app.build(&f, &ev);
@@ -494,6 +538,36 @@ fn loop(
         if (!(left > 0)) break;
         shell.wait(@min(scheduler.wake(ctx, &ev.in), left), scheduler.pace(ctx));
     }
+}
+
+/// One frame of a composing App (`page.build`) on a software shell: the composed list culled
+/// to its damage, its text from `tw` (each side's rows) or the bundled font, and presented.
+// tidy: allow-fn(large-generic-function) one instance per shell a program can open
+// tidy: allow(too-many-parameters) the loop's state, passed through
+fn composedFrame(
+    comptime App: type,
+    app: *App,
+    shell: anytype,
+    ctx: *context.Context,
+    paging: *page.Paging,
+    textures: *Textures,
+    glyphs: Glyphs,
+    tw: anytype,
+    ev: *const Events,
+) void {
+    const b = page.build(App, app, paging, ctx, tw, ev);
+    shell.apply(&b.out.platform);
+    const d = b.composed.draw;
+    var shown = b.out;
+    shown.draw = d;
+    if (!@hasDecl(@TypeOf(shell.*), "presentWith")) return shell.present(&shown);
+    lcgf.damage.cull(d, &d.damage);
+    const images = if (@hasDecl(App, "images")) app.images() else &.{};
+    const g = if (tw.on())
+        textures.service(ctx, images, tw.glyphsOf(ctx, d, b.composed.texts, ev.in.scale))
+    else
+        textures.frame(ctx, images, d, glyphs);
+    shell.presentWith(&shown, g, textures.shown(tw.on()));
 }
 
 const testing = std.testing;
@@ -820,4 +894,131 @@ fn expectText(w: anytype, app: *FontApp, s: f32) !void {
     errdefer std.debug.print("scale {d}, window {d} x {d}: {d} bad pixels of {d} inked\n", at);
     try testing.expectEqual(0, bad);
     try testing.expect(ink > 200);
+}
+
+const page_options: Options = .{
+    .fonts = &font_files,
+    .limits = .{ .nodes = 32, .texts = 8, .customs = 8 },
+    .text = font_options.text,
+};
+
+test "app on X11: a composed page draws both sides; a pan, a widget, idle each send their own" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const B = Buffers(page_options);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    conn.overrideScale(1);
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(testing.allocator);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, 300, 200, "lcgf app page", bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+    var ctx = try context.Context.init(&B.ctx, limitsOf(page_options));
+    ctx.trackDamageWhole();
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const gpa = testing.allocator;
+    const o = textOptions(page_options);
+    var tw = try text.Window.open(&B.service, o, &font_files, false, gpa, testing.io);
+    defer tw.close();
+    var app: page.TestApp = .{};
+
+    // Both sides: the page's header, its tinted icon, the region's ground and its canvas.
+    try loop(page.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    const T = page.TestApp;
+    const c = app.canvas_rect;
+    try testing.expectEqual(T.page_fill, try x11.pixel(&w, 200, 4));
+    try testing.expectEqual(T.tint, try x11.pixel(&w, 258, 16));
+    try testing.expectEqual(T.region_fill, try x11.pixel(&w, 290, 190));
+    try testing.expectEqual(T.red, try page.pixelIn(&w, c, 15, 15));
+    try testing.expectEqual(T.canvas_fill, try page.pixelIn(&w, c, 50, 40));
+    try page.expectPageText(&w, &app, &tw.text.?);
+
+    // A pan: the canvas node's rect is the frame's damage, and nothing outside it is sent.
+    const probe: [2]u32 = .{ 290, 190 };
+    w.fb.fill(.{ probe[0], probe[1], probe[0] + 1, probe[1] + 1 }, .white);
+    app.camera.offset = .{ 50, 30 };
+    ctx.waker.post();
+    try loop(page.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(c, app.list.damage.bounds());
+    try testing.expectEqual(T.red, try page.pixelIn(&w, c, 55, 35));
+    try testing.expectEqual(T.canvas_fill, try page.pixelIn(&w, c, 15, 15));
+    try testing.expectEqual(T.region_fill, try x11.pixel(&w, 290, 190));
+
+    // The compiled checkbox: within its rect; the region's pixels are kept.
+    const widget = app.widgetRect();
+    w.fb.fill(.{ probe[0], probe[1], probe[0] + 1, probe[1] + 1 }, .white);
+    app.ui.signals.state.grid = false;
+    ctx.waker.post();
+    try loop(page.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    const d = app.list.damage.bounds();
+    try testing.expect(d[0] >= widget[0] and d[1] >= widget[1]);
+    try testing.expect(d[2] <= widget[2] and d[3] <= widget[3]);
+    try testing.expect(d[0] < d[2]);
+    try testing.expectEqual(T.region_fill, try x11.pixel(&w, 290, 190));
+
+    // Idle: nothing is sent. (A loop's first frame is built; here it is a new loop.)
+    const presents = w.presents;
+    const builds = app.builds;
+    try loop(page.TestApp, &app, &shell, &ctx, clockFor(1), glyphs, &tw);
+    try testing.expectEqual(presents, w.presents);
+    try testing.expect(app.builds <= builds + 1);
+    try testing.expectEqual(@as(u32, 0), conn.errors);
+}
+
+test "app on X11: a composed page in the bundled font draws both sides' text as letters" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const B = Buffers(page_options);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    conn.overrideScale(1);
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(testing.allocator);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, 300, 200, "lcgf app page mono", bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+    var ctx = try context.Context.init(&B.ctx, limitsOf(page_options));
+    ctx.trackDamageWhole();
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const o = textOptions(page_options);
+    var tw = try text.Window.open(&B.service, o, &.{}, false, testing.allocator, testing.io);
+    defer tw.close();
+    try testing.expect(!tw.on());
+    var app: page.TestApp = .{};
+    try loop(page.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(page.TestApp.tint, try x11.pixel(&w, 258, 16));
+    // Each run's rect holds some lit pixels and some not: letters, not boxes.
+    const d = &app.list;
+    try testing.expectEqual(2, d.run_len);
+    for (d.runs[0..d.run_len]) |r| {
+        var lit: u32 = 0;
+        var all: u32 = 0;
+        const y0: u32 = @intFromFloat(r.rect[1]);
+        const x0: u32 = @intFromFloat(r.rect[0]);
+        for (y0..y0 + 12) |y| for (x0..x0 + 24) |x| {
+            lit += @intFromBool((try x11.pixel(&w, @intCast(x), @intCast(y))).r > 128);
+            all += 1;
+        };
+        try testing.expect(lit > 4);
+        try testing.expect(lit < all / 2);
+    }
 }
