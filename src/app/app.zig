@@ -1,7 +1,17 @@
-//! app: an application in a window on the desktop, in one call. It picks the platform's shell
-//! (Wayland when `WAYLAND_DISPLAY` names a compositor and X11 otherwise on Linux, Win32 on Windows, AppKit
-//! with Metal on macOS), opens a window and runs `shell_iface.run`'s loop, built frame by frame
-//! from your `build`, until the window closes:
+//! app: an application in a window on the desktop, in one call. It picks the platform's shell,
+//! opens a window and runs `shell_iface.run`'s loop, built frame by frame from your `build`,
+//! until the window closes. On Windows a Win32 window, on macOS an AppKit one with Metal. On
+//! Linux it reads the environment:
+//!
+//!   - A Vulkan build (the default) opens X11 with Vulkan whenever `DISPLAY` is set and
+//!     `LCGF_RENDER` is not `sw`, whatever `WAYLAND_DISPLAY` says. If the X server cannot be
+//!     reached or has no Vulkan device, it takes the software path below. With
+//!     `LCGF_RENDER=sw`, or `DISPLAY` unset or empty, it takes the software path at once.
+//!   - The software path (and every `-Drender=sw` build) opens Wayland when `WAYLAND_DISPLAY`
+//!     is set and not empty, and X11 on `DISPLAY` only when it is not, or when the compositor
+//!     cannot be reached and `DISPLAY` is set. Neither reachable: `run` returns the error.
+//!
+//! An application:
 //!
 //!     const App = struct {
 //!         theme: lcgf.widgets_base.Theme = .default,
@@ -206,43 +216,13 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     defer tw.close();
     ctx.enableCanvas(&B.canvas_rows);
     openLabels(App, app, options, &tw);
-    if (has_gpu) switch (try runGpu(App, app, gpuEnv(init), options, clock, &ctx, &tw)) {
+    const env = if (builtin.os.tag == .linux) envOf(init) else {};
+    if (has_gpu) switch (try runGpu(App, app, env, options, clock, &ctx, &tw)) {
         .done => return,
         .software => if (composing) ctx.trackDamageWhole() else ctx.trackDamage(),
     };
     switch (builtin.os.tag) {
-        .linux => {
-            const env = init.minimal.environ;
-            // Wayland when WAYLAND_DISPLAY names a compositor; X11 when it is unset or empty,
-            // or when the compositor cannot be reached and DISPLAY is set.
-            wayland: {
-                const name = env.getPosix("WAYLAND_DISPLAY") orelse break :wayland;
-                if (name.len == 0) break :wayland;
-                const wl = @import("wayland");
-                const fd = wl.wire.connect(env.getPosix("XDG_RUNTIME_DIR") orelse "/tmp", name) catch |e| {
-                    if (init.environ_map.get("DISPLAY") != null) break :wayland;
-                    return e;
-                };
-                var shell = try wl.Wayland.connect(fd, .{ .title = options.title, .size = .{ @floatFromInt(options.size[0]), @floatFromInt(options.size[1]) } }, .{ .glyphs = &B.glyphs, .first = &B.first, .count = &B.count });
-                defer shell.deinit();
-                return loop(App, app, &shell, &ctx, clock, glyphs, &tw);
-            }
-            const x11 = @import("x11");
-            const display = init.environ_map.get("DISPLAY") orelse return error.NoDisplay;
-            var auth_path_buf: [512]u8 = undefined;
-            const auth_path = init.environ_map.get("XAUTHORITY") orelse if (init.environ_map.get("HOME")) |home| try std.fmt.bufPrint(&auth_path_buf, "{s}/.Xauthority", .{home}) else "";
-            const auth = std.Io.Dir.cwd().readFileAlloc(init.io, auth_path, init.gpa, .limited(1 << 20)) catch "";
-            const conn = &B.x11_conn;
-            try conn.open(display, auth);
-            defer conn.close();
-            var pixels: std.ArrayList(u32) = .empty;
-            defer pixels.deinit(init.gpa);
-            var w: x11.Window = undefined;
-            try w.open(conn, @intCast(options.size[0]), @intCast(options.size[1]), options.title, .{ .pixels = pixels.items, .glyphs = &B.glyphs, .first = &B.first, .count = &B.count });
-            defer w.close();
-            var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = init.gpa };
-            return loop(App, app, &shell, &ctx, clock, glyphs, &tw);
-        },
+        .linux => return runSoftwareLinux(App, app, env, options, clock, &ctx, &tw, init.gpa),
         .windows => {
             const Win32 = @import("win32").Win32;
             var shell: Win32 = undefined;
@@ -283,29 +263,87 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
 /// How a GPU build's window ran: to the end on the GPU, or not at all (the software path).
 const GpuRun = enum { done, software };
 
-/// What the environment says about the GPU window: `LCGF_RENDER`, `DISPLAY`, and the X
-/// authority cookie file's bytes.
-const GpuEnv = struct { render: []const u8 = "", display: []const u8 = "", auth: []const u8 = "" };
+/// What the environment says about the window on Linux: `LCGF_RENDER`, `WAYLAND_DISPLAY`,
+/// `XDG_RUNTIME_DIR`, `DISPLAY` and the X authority cookie file's bytes. Unset is empty.
+const Env = struct {
+    render: []const u8 = "",
+    wayland: []const u8 = "",
+    runtime_dir: []const u8 = "/tmp",
+    display: []const u8 = "",
+    auth: []const u8 = "",
+};
 
-fn gpuEnv(init: std.process.Init) GpuEnv {
+fn envOf(init: std.process.Init) Env {
     const env = init.environ_map;
     return .{
         .render = env.get("LCGF_RENDER") orelse "",
+        .wayland = env.get("WAYLAND_DISPLAY") orelse "",
+        .runtime_dir = env.get("XDG_RUNTIME_DIR") orelse "/tmp",
         .display = env.get("DISPLAY") orelse "",
         .auth = readAuth(init) catch "",
     };
 }
 
+/// The software window on Linux: Wayland when `env.wayland` names a compositor; X11 on
+/// `env.display` when it names none, or when the compositor cannot be reached and a display
+/// is named. error.NoDisplay when neither is named; else the error of the last one tried.
+// tidy: allow-fn(large-generic-function) one instance per App
+// tidy: allow(too-many-parameters) `run`'s own inputs, passed through
+fn runSoftwareLinux(
+    comptime App: type,
+    app: *App,
+    env: Env,
+    comptime options: Options,
+    clock: Clock,
+    ctx: *context.Context,
+    tw: anytype,
+    gpa: std.mem.Allocator,
+) !void {
+    const B = Buffers(options);
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    wayland: {
+        if (env.wayland.len == 0) break :wayland;
+        const wl = @import("wayland");
+        const fd = wl.wire.connect(env.runtime_dir, env.wayland) catch |e| {
+            if (env.display.len > 0) break :wayland;
+            return e;
+        };
+        const size: [2]f32 = .{ @floatFromInt(options.size[0]), @floatFromInt(options.size[1]) };
+        const bufs: wl.Wayland.Buffers = .{ .glyphs = &B.glyphs, .first = &B.first, .count = &B.count };
+        var shell = try wl.Wayland.connect(fd, .{ .title = options.title, .size = size }, bufs);
+        defer shell.deinit();
+        return loop(App, app, &shell, ctx, clock, glyphs, tw);
+    }
+    if (env.display.len == 0) return error.NoDisplay;
+    const x11 = @import("x11");
+    const conn = &B.x11_conn;
+    try conn.open(env.display, env.auth);
+    defer conn.close();
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(gpa);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, @intCast(options.size[0]), @intCast(options.size[1]), options.title, bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = gpa };
+    return loop(App, app, &shell, ctx, clock, glyphs, tw);
+}
+
 /// The window on the GPU when the build has one: X11 with Vulkan where `DISPLAY` is set
 /// (under Wayland, through XWayland) and `LCGF_RENDER` is not `sw`. `.software` when it
-/// cannot (no display, no Vulkan device, or forced), so `run` opens the software window
-/// instead, where `App.draw` is never called and `Surface.live` is false.
+/// cannot (no display, no X server there, no Vulkan device, or forced), so `run` opens the
+/// software window instead, where `App.draw` is never called and `Surface.live` is false.
 // tidy: allow-fn(large-generic-function) one instance per App
 // tidy: allow(too-many-parameters) `run`'s own inputs, passed through
 fn runGpu(
     comptime App: type,
     app: *App,
-    env: GpuEnv,
+    env: Env,
     comptime options: Options,
     clock: anytype,
     ctx: *context.Context,
@@ -318,7 +356,8 @@ fn runGpu(
     const x11 = @import("x11");
     const display = env.display;
     const conn = &B.x11_conn;
-    try conn.open(display, env.auth);
+    // No server there (a stale `DISPLAY`): the software path, which may find a compositor.
+    conn.open(display, env.auth) catch return .software;
     defer conn.close();
     var w: x11.Window = undefined;
     const bufs: x11.Window.Buffers = .{
@@ -771,10 +810,10 @@ test "a GPU build draws in software when forced or without a device, an App with
     var app: ImageApp = .{};
     var sa: SurfaceApp = .{};
     const k = clockFor(0.1);
-    const forced: GpuEnv = .{ .render = "sw", .display = display };
+    const forced: Env = .{ .render = "sw", .display = display };
     try testing.expectEqual(.software, try runGpu(ImageApp, &app, forced, options, k, &ctx, &tw));
     try testing.expectEqual(.software, try runGpu(SurfaceApp, &sa, forced, options, k, &ctx, &tw));
-    const headless: GpuEnv = .{};
+    const headless: Env = .{};
     try testing.expectEqual(.software, try runGpu(ImageApp, &app, headless, options, k, &ctx, &tw));
 
     // No Vulkan driver to load: the window opens, the device does not.
@@ -792,10 +831,44 @@ test "a GPU build draws in software when forced or without a device, an App with
     const name = "VK_ICD_FILENAMES";
     defer _ = if (was) |v| libc.setenv(name, v, 1) else libc.unsetenv(name);
     _ = libc.setenv("VK_ICD_FILENAMES", "/nonexistent/lcgf_no_icd.json", 1);
-    const gpu_env: GpuEnv = .{ .display = display };
+    const gpu_env: Env = .{ .display = display };
     try testing.expectEqual(.software, try runGpu(ImageApp, &app, gpu_env, options, k, &ctx, &tw));
     try testing.expectEqual(.software, try runGpu(SurfaceApp, &sa, gpu_env, options, k, &ctx, &tw));
     try testing.expectEqual(@as(u32, 0), sa.draws);
+}
+
+test "a DISPLAY with no server behind it: the GPU path falls through, the software path tries on" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const options: Options = .{ .limits = .{ .nodes = 16, .texts = 4 } };
+    const B = Buffers(options);
+    var ctx = try context.Context.init(&B.ctx, limitsOf(options));
+    ctx.trackDamage();
+    const gpa = testing.allocator;
+    var tw = try text.Window.open(&B.service, textOptions(options), &.{}, false, gpa, testing.io);
+    defer tw.close();
+    var app: ImageApp = .{};
+    const k = clockFor(0.2);
+    // No X server is display 4093, and no compositor is in a runtime dir that does not exist.
+    const stale = ":4093";
+    const none = "/nonexistent/lcgf";
+    if (has_gpu) {
+        const env: Env = .{ .display = stale };
+        try testing.expectEqual(.software, try runGpu(ImageApp, &app, env, options, k, &ctx, &tw));
+    }
+    // Neither reachable: the error of the one tried last, X11's or the compositor's.
+    const x11_only: Env = .{ .display = stale };
+    try testing.expect(std.meta.isError(runSoftwareLinux(ImageApp, &app, x11_only, options, k, &ctx, &tw, gpa)));
+    const both: Env = .{ .wayland = "wayland-0", .runtime_dir = none, .display = stale };
+    try testing.expect(std.meta.isError(runSoftwareLinux(ImageApp, &app, both, options, k, &ctx, &tw, gpa)));
+    const wayland_only: Env = .{ .wayland = "wayland-0", .runtime_dir = none };
+    try testing.expect(std.meta.isError(runSoftwareLinux(ImageApp, &app, wayland_only, options, k, &ctx, &tw, gpa)));
+    try testing.expectError(error.NoDisplay, runSoftwareLinux(ImageApp, &app, .{}, options, k, &ctx, &tw, gpa));
+    // A compositor that cannot be reached and a display that can: X11.
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse return;
+    const builds = app.builds;
+    const x11: Env = .{ .wayland = "wayland-0", .runtime_dir = none, .display = display };
+    try runSoftwareLinux(ImageApp, &app, x11, options, k, &ctx, &tw, gpa);
+    try testing.expect(app.builds > builds);
 }
 
 /// A surface on a ground, which says whether it is live, and counts the `draw` calls.
@@ -834,7 +907,7 @@ test "a surface App in the software window runs: not live, no draw, its node's f
     var app: SurfaceApp = .{};
     // What `run` does under LCGF_RENDER=sw: the GPU window declines, the software one opens.
     if (has_gpu) {
-        const forced: GpuEnv = .{ .render = "sw", .display = display };
+        const forced: Env = .{ .render = "sw", .display = display };
         const k = clockFor(0.1);
         const ran = try runGpu(SurfaceApp, &app, forced, options, k, &ctx, &tw);
         try testing.expectEqual(.software, ran);

@@ -247,12 +247,11 @@ environment:
 
 - **A Vulkan build** (the default) opens X11 with Vulkan whenever `DISPLAY` is set and
   `LCGF_RENDER` is not `sw`, whatever `WAYLAND_DISPLAY` says. If the X server cannot be
-  reached, `run` returns the error; if it has no Vulkan device, `run` takes the software path
-  below. With `LCGF_RENDER=sw`, or `DISPLAY` unset or empty, it takes the software path at
+  reached or has no Vulkan device, `run` takes the software path below. With `LCGF_RENDER=sw`, or `DISPLAY` unset or empty, it takes the software path at
   once.
 - **The software path** (and every `-Drender=sw` build) opens Wayland when `WAYLAND_DISPLAY`
   is set and not empty, and X11 on `DISPLAY` only when it is not, or when the compositor
-  cannot be reached and `DISPLAY` is set.
+  cannot be reached and `DISPLAY` is set. If neither can be reached, `run` returns the error.
 
 So a test that runs a program on an Xvfb sets `DISPLAY` to it and unsets `WAYLAND_DISPLAY`
 (or sets it empty): otherwise a software window opens on the session's compositor.
