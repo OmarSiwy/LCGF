@@ -171,6 +171,8 @@ pub const Stats = struct {
     row_bytes: u64 = 0,
     /// Bytes of the canvas label atlas uploaded.
     label_bytes: u64 = 0,
+    /// Bytes of canvas rows, vertices and uniforms uploaded.
+    canvas_bytes: u64 = 0,
     /// The damage of the last frame presented, logical pixels.
     damage: Region = .empty,
     /// Frames presented that drew the whole window.
@@ -505,6 +507,17 @@ fn owe(
     };
 }
 
+/// Marks every canvas `list` drew clean once its rows are uploaded, as `Instances.clearDirty`
+/// asks of the host. The rows are the application's, given as `*const` to `Frame.canvas`;
+/// only their dirty ranges change.
+fn clearCanvases(list: *const DrawList) void {
+    std.debug.assert(list.cmd_len <= list.cmd.kind.len);
+    for (0..list.cmd_len) |i| {
+        if (list.cmd.kind[i] != @backingInt(DrawList.Kind.canvas)) continue;
+        @constCast(list.canvases[list.cmd.first[i]].instances).clearDirty();
+    }
+}
+
 /// Draws and presents the frame owed: textures written, `draw` for dirty surfaces, the UI
 /// inside the damage and the surfaces' rectangles. error.NotShown: nothing drawn or consumed.
 // tidy: allow-fn(large-generic-function) one instance per App
@@ -560,6 +573,12 @@ fn present(comptime App: type, app: *App, gw: *Window, w: *x11.Window) !void {
     const bg = w.background;
     const clear: [4]f32 = .{ unit(bg.r), unit(bg.g), unit(bg.b), 1 };
     try win.present(g, &f, .{ .rows = gw.rows, .damage = gw.owed, .clear = clear });
+    // `prepare` ran with the rows: what it wrote is this frame's, and the rows it uploaded
+    // are clean (the canvas's contract: the host clears them after `prepare`).
+    if (gw.rows) |r| if (g.gfx.canvas) |*cv| {
+        gw.stats.canvas_bytes += cv.uploaded;
+        clearCanvases(r.list);
+    };
     gw.stats.presents += 1;
     gw.stats.damage = gw.owed;
     gw.stats.whole += @intFromBool(std.meta.eql(gw.owed, Region.everything));
@@ -833,6 +852,20 @@ const Fixture = struct {
 
     /// With the text service over `files` (none: the bundled font).
     fn openWith(fx: *Fixture, display: []const u8, w: u16, h: u16, files: []const text.File) !void {
+        const room: Window.Open = .{ .gpu_bytes = 8 << 20, .staging_bytes = 1 << 20 };
+        try fx.openRoom(display, .{ w, h }, files, room);
+    }
+
+    /// With the GPU window's room `o` (what app.zig makes of `Options.canvas`).
+    // tidy: allow(too-many-parameters) the window's display, size, faces and room
+    fn openRoom(
+        fx: *Fixture,
+        display: []const u8,
+        size: [2]u16,
+        files: []const text.File,
+        o: Window.Open,
+    ) !void {
+        const w, const h = size;
         std.debug.assert(w > 0);
         fx.conn = .{};
         try fx.conn.open(display, "");
@@ -846,7 +879,7 @@ const Fixture = struct {
         };
         try fx.w.open(&fx.conn, w, h, "lcgf app gpu", bufs);
         errdefer fx.w.close();
-        try fx.gw.open(&fx.w, display, .{ .gpu_bytes = 8 << 20, .staging_bytes = 1 << 20 });
+        try fx.gw.open(&fx.w, display, o);
         errdefer fx.gw.close();
         fx.ctx = try .init(&ctx_buffer, limits);
         fx.ctx.trackDamageWhole();
@@ -1298,6 +1331,100 @@ test "gpu canvas: bitmap canvas glyphs sample the bundled font beside the servic
     }
 }
 
+/// 100,000 filled squares `cell` logical pixels a side, `across` to a line, in their own grey,
+/// the first, the middle and the last red, green and blue; the camera `pan` pixels right.
+/// `moves` more frames each move it a pixel.
+const RowsApp = struct {
+    const n = 100_000;
+    const Instances = lcgf.canvas.Instances;
+    const Storage = struct {
+        const len = Instances.requiredBytes(n, 0, 1, .{});
+        var bytes: [len]u8 align(lcgf.mem.column_align) = undefined;
+    };
+    const grey: Color = .rgb(64, 64, 64);
+    const picked = [3]u32{ 0, n / 2, n - 1 };
+    const colors = [3]Color{ .rgb(255, 0, 0), .rgb(0, 255, 0), .rgb(0, 0, 255) };
+    shapes: Instances,
+    cell: u32,
+    across: u32,
+    pan: i32 = 0,
+    moves: u32 = 0,
+    builds: u32 = 0,
+    ranges: [1]lcgf.canvas.Range = undefined,
+
+    fn init(cell: u32, across: u32) RowsApp {
+        std.debug.assert(cell > 0);
+        var carver: lcgf.mem.Carver = .{ .buf = &Storage.bytes };
+        const shapes: Instances = .init(&carver, n, 0, 1, .{});
+        var a: RowsApp = .{ .shapes = shapes, .cell = cell, .across = across };
+        for (0..n) |k| {
+            const p = a.at(@intCast(k));
+            const q = [2]i32{ p[0] + @as(i32, @intCast(cell)), p[1] + @as(i32, @intCast(cell)) };
+            _ = a.shapes.rect(p, q, .{ .color = grey, .stroke = false });
+        }
+        for (picked, colors) |k, color| a.shapes.setColor(k, color);
+        return a;
+    }
+
+    /// Row `k`'s top-left corner, logical pixels at camera scale 1 and no pan.
+    fn at(a: *const RowsApp, k: u32) [2]i32 {
+        return .{ @intCast((k % a.across) * a.cell), @intCast((k / a.across) * a.cell) };
+    }
+
+    pub fn build(a: *RowsApp, f: *lcgf.frame.Frame, _: *const Events) void {
+        a.builds += 1;
+        if (a.moves > 0) {
+            a.moves -= 1;
+            a.pan += 1;
+            f.ctx.waker.post();
+        }
+        a.ranges = .{a.shapes.since(0)};
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = .black });
+        const cam: lcgf.canvas.Camera = .{ .scale = 1, .offset = .{ @floatFromInt(a.pan), 0 } };
+        const o: lcgf.frame.CanvasOptions = .{ .camera = cam, .ranges = &a.ranges };
+        _ = f.canvas(.from("rows"), .{ .size = .{ .fill, .fill } }, &a.shapes, o);
+        f.close();
+    }
+};
+
+/// The GPU window's room for `RowsApp`: `Options.canvas = .{ .rows = 100_000 }`.
+const rows_room: Window.Open = .{ .staging_bytes = 8 << 20, .canvas_rows = RowsApp.n };
+
+test "gpu canvas: 100,000 rows draw to the last one, and a pan uploads none of them" {
+    var fx: Fixture = undefined;
+    try fx.openRoom(try displayOrSkip(), .{ 808, 500 }, &.{}, rows_room);
+    defer fx.close();
+    var app: RowsApp = .init(2, 400);
+    try fx.run(&app, seconds(0.5));
+    try testing.expectEqual(null, fx.gw.x.setup.gfx.canvas.?.err);
+    try expectRows(&fx, &app);
+    // Four frames, the camera a pixel further each: the rows stay where they were uploaded.
+    const bytes = fx.gw.stats.canvas_bytes;
+    const presents = fx.gw.stats.presents;
+    app.moves = 4;
+    fx.ctx.waker.post();
+    try fx.run(&app, seconds(0.5));
+    try testing.expectEqual(4, app.pan);
+    try testing.expect(fx.gw.stats.presents - presents >= 4);
+    const uniforms = lcgf.canvas_shader.Uniforms.headBytes(0);
+    try testing.expect(fx.gw.stats.canvas_bytes - bytes <= 8 * uniforms);
+    try expectRows(&fx, &app);
+}
+
+/// The first, the middle and the last row of `app` in their colours, and the row before the
+/// last grey: a canvas that drew short leaves the ground there.
+fn expectRows(fx: *Fixture, app: *const RowsApp) !void {
+    std.debug.assert(app.cell >= 2);
+    for (RowsApp.picked, RowsApp.colors) |k, want| {
+        const p = app.at(k);
+        const got = try shown(&fx.w, @intCast(p[0] + app.pan + 1), @intCast(p[1] + 1), want);
+        try testing.expectEqual(want, got);
+    }
+    const p = app.at(RowsApp.n - 2);
+    const got = try shown(&fx.w, @intCast(p[0] + app.pan + 1), @intCast(p[1] + 1), RowsApp.grey);
+    try testing.expectEqual(RowsApp.grey, got);
+}
+
 /// A canvas with a half-transparent line, and a box beside it that `lit` turns white.
 const CanvasApp = struct {
     shapes: *const lcgf.canvas.Instances,
@@ -1532,4 +1659,49 @@ test "gpu frame cost at 2560 x 1440 (LCGF_APP_GPU_BENCH)" {
     us = t.per(1);
     const idle = "idle second: {d} frames, thread cpu {d:.1} us\n";
     note(fd, idle, .{ fx.gw.stats.presents - presents, us[1] });
+}
+
+// The canvas of 100,000 rows (`RowsApp`, 6-pixel squares over the window) at 2560 x 1440, the
+// camera moving a pixel a frame, through `lcgf_app`'s loop: calling-thread CPU and wall time
+// per frame, canvas bytes uploaded per frame, builds, and frames unfinished and not shown,
+// appended to the file LCGF_APP_GPU_BENCH names.
+test "gpu canvas of 100,000 rows at 2560 x 1440, the camera moving (LCGF_APP_GPU_BENCH)" {
+    const display = try displayOrSkip();
+    const path = testing.environ.getPosix("LCGF_APP_GPU_BENCH") orelse return error.SkipZigTest;
+    const flags: std.os.linux.O = .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true };
+    const opened = std.os.linux.open(path, flags, 0o644);
+    if (std.os.linux.errno(opened) != .SUCCESS) return error.BenchFile;
+    const fd: i32 = @intCast(opened);
+    defer _ = std.os.linux.close(fd);
+    var fx: Fixture = undefined;
+    try fx.openRoom(display, .{ 2560, 1440 }, &.{}, rows_room);
+    defer fx.close();
+    var app: RowsApp = .init(6, 426);
+    try fx.run(&app, seconds(0.5));
+    const frames = 300;
+    const Done = struct {
+        a: *const RowsApp,
+        fn stop(d: @This()) bool {
+            return d.a.moves == 0;
+        }
+    };
+    const builds = app.builds;
+    const presents = fx.gw.stats.presents;
+    const bytes = fx.gw.stats.canvas_bytes;
+    const refused = fx.gw.stats.not_shown;
+    app.moves = frames;
+    fx.ctx.waker.post();
+    const t = Spent.start();
+    const t0: std.Io.Timestamp = .now(testing.io, .awake);
+    const clock = Clock(Done){ .t0 = t0, .seconds = 120, .done = .{ .a = &app } };
+    try fx.run(&app, clock);
+    const shown_n = fx.gw.stats.presents - presents;
+    const us = t.per(shown_n);
+    const per_frame = (fx.gw.stats.canvas_bytes - bytes) / @max(shown_n, 1);
+    note(fd, "device {s}\n", .{fx.gw.x.setup.device.name()});
+    const line = "canvas 100k rows, camera moving: {d} frames, wall {d:.1} us, " ++
+        "thread cpu {d:.1} us, {d} canvas bytes uploaded a frame; builds {d}; " ++
+        "unfinished {d}, not shown {d}\n";
+    const refusals = fx.gw.stats.not_shown - refused;
+    note(fd, line, .{ shown_n, us[0], us[1], per_frame, app.builds - builds, app.moves, refusals });
 }
