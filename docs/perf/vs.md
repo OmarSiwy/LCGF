@@ -247,7 +247,7 @@ Fair in both directions, two more changes:
 
 Run `nix develop .#vs -c bench/vs/window-resize/run.sh` on Linux. The same comparison
 runs in `ci/run.sh gates-vs`. It opens one mapped window at a time on a private 24-bit
-Xvfb display. LCGF uses the X11 host and software renderer shared by its desktop examples.
+Xvfb display. LCGF runs through `lcgf_app` in its X11 software window (`LCGF_RENDER=sw`, `WAYLAND_DISPLAY` empty), as an application opens it; until 0.2.0 it ran on the software-only example host, whose retained repaint (`Incremental`) is gone.
 Every framework lays out the same centered 64 × 64 rectangle. The background changes
 with window width so stale rows and frames from the previous size are detectable.
 

@@ -39,7 +39,9 @@ def private_display():
 
 def measure(name, args, cpus, display, rounds):
     env = dict(os.environ, DISPLAY=display, XAUTHORITY="/dev/null", QT_QPA_PLATFORM="xcb", QT_QUICK_BACKEND="software",
-               QT_SCALE_FACTOR="1", QT_AUTO_SCREEN_SCALE_FACTOR="0")
+               QT_SCALE_FACTOR="1", QT_AUTO_SCREEN_SCALE_FACTOR="0",
+               # LCGF's X11 software window (lcgf_app), as the other clients present in software.
+               LCGF_RENDER="sw", WAYLAND_DISPLAY="")
     # Only one client runs at a time. Keep polling/readback off its CPU.
     client = subprocess.Popen(["taskset", "-c", str(cpus[0]), args.bin / f"resize-{name}"], env=env)
     try:

@@ -1346,21 +1346,25 @@ pub fn build(b: *std.Build) void {
         }
     }
 
-    // The examples (examples/): their smoke tests, and each one in an X11 window
-    // (src/example/window.zig) as zig-out/bin/example-<name> (ci/run.sh examples, examples-x11).
-    const examples_step = b.step("examples", "Run the examples' smoke tests and build zig-out/bin/example-<name> (X11)");
-    examples_step.dependOn(&b.addInstallFile(b.path("src/example/font/LICENSE.txt"), "share/licenses/examples/DejaVu.txt").step);
-    const desktop = DesktopExamples.init(b, b.path("."), lcgf, target, optimize);
-    const resize_app = desktop.app(b.path("bench/vs/window-resize/lcgf.zig"));
-    const resize_exe = desktop.executable(resize_app, "resize-lcgf");
-    b.step("vs-window-resize", "Build the LCGF window repaint benchmark").dependOn(&b.addInstallArtifact(resize_exe, .{}).step);
-    const examples_tests = b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("examples/tests.zig"),
+    // The desktop examples are packages of their own (examples/<name>/build.zig, on lcgf_app):
+    // ci/run.sh examples builds and tests each, examples-x11 runs each in a window. Here, the
+    // window repaint benchmark's client through lcgf_app (bench/vs/window-resize), and the
+    // microcontroller demo's test.
+    const resize_exe = b.addExecutable(.{ .name = "resize-lcgf", .root_module = b.createModule(.{
+        .root_source_file = b.path("bench/vs/window-resize/lcgf.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = desktop.host } },
+        .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "lcgf_app", .module = app_mod } },
     }) });
-    examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
+    b.step("vs-window-resize", "Build the LCGF window repaint benchmark").dependOn(&b.addInstallArtifact(resize_exe, .{}).step);
+    const examples_step = b.step("examples", "Test the microcontroller demo and link it for a Cortex-M7 (the desktop examples are packages: ci/run.sh examples)");
+    const mcu_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("examples/mcu/app.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "lcgf", .module = lcgf }},
+    }) });
+    examples_step.dependOn(&b.addRunArtifact(mcu_tests).step);
     // The microcontroller demo (examples/mcu/app.zig) also links for a Cortex-M7 with no OS.
     const m7 = b.resolveTargetQuery(.{ .cpu_arch = .thumb, .os_tag = .freestanding, .abi = .eabihf, .cpu_model = .{ .explicit = &std.Target.arm.cpu.cortex_m7 } });
     const m7_lcgf = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = m7, .optimize = .ReleaseSmall });
@@ -1547,67 +1551,6 @@ pub fn addApp(b: *std.Build, dep: *std.Build.Dependency, o: AppOptions) *std.Bui
         .imports = &.{ .{ .name = "lcgf", .module = dep.module("lcgf") }, .{ .name = "lcgf_app", .module = dep.module("lcgf_app") } },
     }) });
 }
-
-pub fn buildDesktopExample(b: *std.Build, name: []const u8) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-    const pkg = b.dependency("lcgf", .{ .target = target, .optimize = optimize, .render = .sw });
-    const desktop = DesktopExamples.init(b, pkg.path("."), pkg.module("lcgf"), target, optimize);
-    const app = desktop.app(b.path("app.zig"));
-    const exe = desktop.executable(app, name);
-    b.installArtifact(exe);
-    b.getInstallStep().dependOn(&b.addInstallFile(pkg.path("src/example/font/LICENSE.txt"), b.fmt("share/licenses/{s}/DejaVu.txt", .{name})).step);
-    const run = b.addRunArtifact(exe);
-    run.addPassthruArgs();
-    b.step("run", "Open the example in an X11 window").dependOn(&run.step);
-    b.step("test", "Run the headless replay tests").dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app })).step);
-}
-
-const DesktopExamples = struct {
-    b: *std.Build,
-    lcgf: *std.Build.Module,
-    host: *std.Build.Module,
-    x11: *std.Build.Module,
-    window: std.Build.LazyPath,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-
-    fn init(b: *std.Build, root: std.Build.LazyPath, lcgf: *std.Build.Module, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) DesktopExamples {
-        const imports: []const std.Build.Module.Import = &.{.{ .name = "lcgf", .module = lcgf }};
-        return .{
-            .b = b,
-            .lcgf = lcgf,
-            .host = b.createModule(.{ .root_source_file = root.path(b, "src/example/host.zig"), .imports = imports }),
-            .x11 = b.createModule(.{ .root_source_file = root.path(b, "src/shell/x11/x11.zig"), .target = target, .optimize = optimize, .imports = imports }),
-            .window = root.path(b, "src/example/window.zig"),
-            .target = target,
-            .optimize = optimize,
-        };
-    }
-
-    fn app(d: DesktopExamples, source: std.Build.LazyPath) *std.Build.Module {
-        return d.b.createModule(.{
-            .root_source_file = source,
-            .target = d.target,
-            .optimize = d.optimize,
-            .imports = &.{ .{ .name = "lcgf", .module = d.lcgf }, .{ .name = "host", .module = d.host } },
-        });
-    }
-
-    fn executable(d: DesktopExamples, application: *std.Build.Module, name: []const u8) *std.Build.Step.Compile {
-        return d.b.addExecutable(.{ .name = name, .root_module = d.b.createModule(.{
-            .root_source_file = d.window,
-            .target = d.target,
-            .optimize = d.optimize,
-            .imports = &.{
-                .{ .name = "lcgf", .module = d.lcgf },
-                .{ .name = "x11", .module = d.x11 },
-                .{ .name = "host", .module = d.host },
-                .{ .name = "example", .module = application },
-            },
-        }) });
-    }
-};
 
 // Native comparison sources are supplied by Zig's pinned package dependencies.
 fn resizeAdapter(b: *std.Build, step: *std.Build.Step, target: std.Build.ResolvedTarget, name: []const u8, cpp: bool) *std.Build.Module {

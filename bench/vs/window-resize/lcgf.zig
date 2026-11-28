@@ -1,5 +1,9 @@
-//! Paint the resize fixture through the desktop examples' normal X11 host.
+//! Paint the resize fixture through `lcgf_app`, as an application opens its window. measure.py
+//! runs it with `LCGF_RENDER=sw` and no `WAYLAND_DISPLAY`: the X11 software window, whose
+//! pixels the observer reads back like every other client's.
+const std = @import("std");
 const lcgf = @import("lcgf");
+const lcgf_app = @import("lcgf_app");
 
 pub const App = struct {
     pub fn build(_: *App, f: *lcgf.frame.Frame, ev: *const lcgf.shell_iface.Events) void {
@@ -10,3 +14,9 @@ pub const App = struct {
         f.close();
     }
 };
+
+pub fn main(init: std.process.Init) !void {
+    var app: App = .{};
+    // The observer finds the window by this title.
+    try lcgf_app.run(App, &app, init, .{ .title = "resize-lcgf", .size = .{ 800, 600 } });
+}
