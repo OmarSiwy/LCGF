@@ -270,18 +270,28 @@ window stays open until it is closed.
 
 ### Testing it without a window
 
-The `App` you give `run` is a plain struct, so a test drives it with no window at all. The
-`lcgf_replay` module (`dep.module("lcgf_replay")`, src/example/replay.zig) plays a recording
-(`input.Replay`: `frame`, `viewport 800 600`, `pointer x y`, `buttons left`, `text abc`) into
-it through the headless shell (src/shell/headless.zig): `replay.run(&app, recording)` builds
-each frame the context asks for, draws it with the software back end into an 800 x 600
-framebuffer, and returns where each node was laid out (`rect(id)`), the last draw list
-(`out`) and the pixels (`at(x, y)`). `replay.clicks` writes a recording that clicks points in
-turn. Text is drawn as solid cells of its colour, a canvas as it is, and the App's `images` as
-the window draws them; a `Surface` is never live there, so the test sees the software
-window's path. Each example's build.zig adds it to the executable's module and tests that
-module: `exe.root_module.addImport("lcgf_replay", dep.module("lcgf_replay"))`, then
-`b.addTest(.{ .root_module = exe.root_module })`.
+The `App` you give `run` is a plain struct, so a test drives it with no window at all.
+`lcgf_app.replay` (src/app/replay.zig) plays a recording (`input.Replay`: `frame`,
+`viewport 800 600`, `scale 2`, `pointer x y`, `buttons left`, `text abc`) into it through the
+frame path `run` takes on a software window, the same code: `build`, or `page`, `build` and
+`compose` for a composing App, its `images`, its canvases (an `lcgf_app.Canvas` too), and its
+canvas labels when the replay has font files. Each frame is drawn by the software back end
+into a framebuffer that keeps the last frame's pixels, as a window does.
+
+- `replay.run(&app, recording)` plays at 800 x 600, scale 1, in the bundled bitmap font;
+  `replay.runWith(&app, recording, .{ .size = .{ 300, 200 }, .scale = 2, .fonts = &files })`
+  chooses the size, the scale and font files for the text service (never the system's, so a
+  replay draws the same on every machine).
+- The result gives `rect(id)`, where a node of the last frame was laid out (in its region's
+  coordinates for a composing App); `out`, that frame's output; `list()`, the list it drew
+  (the composed one); `at(x, y)`, a pixel; `frames` and `builds`.
+- `replay.draw(&fb, list, images, scale, background)` paints a list the test composed itself,
+  as a replay would, for pixel parity; `replay.clicks` and `replay.center` write a recording
+  that clicks points in turn.
+
+A `Surface` is never live in a replay, so the test sees the software window's path. Since it
+is part of `lcgf_app`, an application's build.zig tests the executable's own module:
+`b.addTest(.{ .root_module = exe.root_module })`, as every example does.
 
 ## A widget of your own
 

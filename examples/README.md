@@ -38,9 +38,9 @@ From a project directory, `zig build` installs the application (and, for the
 desktop projects, the licence of the bundled font a window without font files draws
 with, under `share/licenses/`), `zig build run` opens its window and `zig build test` runs its headless checks. The desktop
 projects' build.zig is examples/app's: LCGF as a dependency with the default back
-end, `lcgf.addApp`, and a test of the same module with `lcgf_replay`, which plays
-recordings into the `App` through the headless shell and checks what it built and
-drew ([runtime guide](../docs/guide/runtime.md#testing-it-without-a-window)).
+end, `lcgf.addApp`, and a test of the same module with `lcgf_app.replay`, which
+plays recordings into the `App` through the window's frame path, without a window, and
+checks what it built and drew ([runtime guide](../docs/guide/runtime.md#testing-it-without-a-window)).
 `LCGF_APP_SECONDS=1` closes a window after a second and `LCGF_RENDER=sw` forces the
 software window. For interactive timing at large window sizes, run
 `zig build run -Doptimize=ReleaseFast` in the example directory.
@@ -69,7 +69,7 @@ zig build test
 Pass a relative path to the framework when using a different layout. Zig
 updates the local dependency entry in the copied project's manifest. Use the
 framework revision that ships these projects. The window layer (`lcgf_app`) and
-the replay support (`lcgf_replay`) are modules of the framework package, so these
+its replay support (`lcgf_app.replay`) are part of the framework package, so these
 commands also work with an unpacked SDK containing the package's declared paths.
 Each board project owns its simulator inputs and firmware sources.
 
