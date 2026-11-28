@@ -218,6 +218,10 @@ pub const Win32 = struct {
     hz: u32 = 60,
     /// A WM_MOUSELEAVE is asked for (TrackMouseEvent); asked again on the next move after it.
     tracking: bool = false,
+    /// A WM_PAINT arrived since the host last cleared it: the window was uncovered or resized.
+    /// A host that draws the window with a GPU swapchain (src/shell/win32/gpu.zig) presents
+    /// again then; the software path has already copied its framebuffer back.
+    damaged: bool = false,
 
     /// Applies DWM's actual system backdrop. The compositor owns its appearance and may
     /// reduce transparency itself. A successful call does not make opaque client pixels
@@ -474,10 +478,7 @@ pub const Win32 = struct {
         images: []const sw.Image,
     ) void {
         std.debug.assert(images.len > @backingInt(glyphs.texture));
-        var r: RECT = .{};
-        _ = GetClientRect(w.hwnd, &r);
-        const width: u32 = @intCast(@max(r.right - r.left, 0));
-        const height: u32 = @intCast(@max(r.bottom - r.top, 0));
+        const width, const height = w.clientSize();
         const rows: u32 = @intCast(@min(height, w.pixels.len / @max(lcgf.simd.padded(width), 1)));
         w.fb = .init(w.pixels, width, rows, .bgra8);
         w.gfx.gfx.images = images;
@@ -485,6 +486,14 @@ pub const Win32 = struct {
         const dc = GetDC(w.hwnd) orelse return;
         w.blit(dc);
         _ = ReleaseDC(w.hwnd, dc);
+    }
+
+    /// The client area in physical pixels, now: what a swapchain over `hwnd` is sized to. Zero
+    /// while the window is minimised.
+    pub fn clientSize(w: *const Win32) [2]u32 {
+        var r: RECT = .{};
+        _ = GetClientRect(w.hwnd, &r);
+        return .{ @intCast(@max(r.right - r.left, 0)), @intCast(@max(r.bottom - r.top, 0)) };
     }
 
     /// Copies the framebuffer to the client area, as last drawn.
@@ -524,6 +533,7 @@ pub const Win32 = struct {
             wm_paint => {
                 // Uncovered or resized: show the last frame again until the next one is drawn.
                 var ps: PAINTSTRUCT = undefined;
+                w.damaged = true;
                 const dc = BeginPaint(hwnd, &ps) orelse return 0;
                 w.blit(dc);
                 _ = EndPaint(hwnd, &ps);

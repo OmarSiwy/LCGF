@@ -14,6 +14,9 @@ export WINEPREFIX="${WINEPREFIX:-$PWD/zig-out/wineprefix}" WINEDEBUG="${WINEDEBU
 export WINEDLLOVERRIDES="mscoree=;mshtml=;winemenubuilder.exe="
 quiet() { grep -v -e '^libEGL' -e '^pci id' -e '^MESA' -e '^$' || true; }
 "${WINE:-wine}" zig-out/bin/d3d12-test.exe 2>&1 | quiet
+# Direct3D 12 over a shown Win32 shell window (src/shell/win32/gpu.zig): its pictures are read
+# back from the GPU, not from the screen.
+"${WINE:-wine}" zig-out/bin/win32-gpu-test.exe 2>&1 | quiet
 for mode in offscreen present; do
     out=zig-out/d3d12/$mode; rm -rf "$out"
     "${WINE:-wine}" zig-out/bin/d3d12-play.exe "$out" "$mode" 2>&1 | quiet

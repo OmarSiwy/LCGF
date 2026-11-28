@@ -1065,9 +1065,23 @@ pub fn build(b: *std.Build) void {
         for ([_][]const u8{ "rects", "clip", "text", "custom" }) |n|
             m.addAnonymousImport(b.fmt("golden_{s}", .{n}), .{ .root_source_file = b.path(b.fmt("src/render/conformance/{s}.png", .{n})) });
     }
-    const d3d12_step = b.step("d3d12", "Build zig-out/bin/d3d12-test.exe (the Direct3D 12 back end's tests) and d3d12-play.exe (draws the render conformance scenes); ci/run.sh d3d12 runs them under Wine");
+    const d3d12_step = b.step("d3d12", "Build zig-out/bin/d3d12-test.exe (the Direct3D 12 back end's tests), win32-gpu-test.exe (Direct3D 12 over the Win32 shell's window) and d3d12-play.exe (draws the render conformance scenes); ci/run.sh d3d12 runs them under Wine");
     d3d12_step.dependOn(&b.addInstallArtifact(d3d12_tests, .{}).step);
     d3d12_step.dependOn(&b.addInstallArtifact(d3d12_play, .{}).step);
+    // Direct3D 12 over the Win32 shell's window (src/shell/win32/gpu.zig): its tests, built with
+    // the back end's and run under Wine by ci/run.sh d3d12.
+    const win32_gpu_tests = b.addTest(.{ .name = "win32-gpu-test", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/shell/win32/gpu.zig"),
+        .target = win,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "lcgf", .module = lcgf_win },
+            .{ .name = "d3d12", .module = renderBackend(b, .d3d12, win, optimize, lcgf_win, wgpu_native_mod).? },
+            .{ .name = "win32", .module = b.createModule(.{ .root_source_file = b.path("src/shell/win32/win32.zig"), .target = win, .optimize = optimize, .imports = &.{.{ .name = "lcgf", .module = lcgf_win }} }) },
+        },
+    }) });
+    d3d12_step.dependOn(&b.addInstallArtifact(win32_gpu_tests, .{}).step);
 
     // The AccessKit bridge (src/a11y/accesskit/): outside the tiers, a module of its own over
     // lcgf. AccessKit's C release archive (build.zig.zon, lazy) carries prebuilt static
