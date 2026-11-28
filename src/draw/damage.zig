@@ -281,6 +281,24 @@ pub const Damage = struct {
     }
 };
 
+/// Adds to `into` the painted area of every quad of `d` whose texture `changed` names (bit k:
+/// `types.Texture` k; a texture past 127 never), so a host whose image changed its pixels and
+/// nothing else redraws the image where it shows. The tree's hash sees no such change: it hashes
+/// the texture's handle, not its pixels. Read `d` whole, before `cull`. A region that is
+/// everything stays everything.
+pub fn addTextures(d: *const DrawList, changed: u128, into: *Region) void {
+    if (changed == 0 or std.math.isInf(into.pixels())) return;
+    const quads_kind = @backingInt(DrawList.Kind.quads);
+    for (0..d.cmd_len) |i| {
+        const texture = d.cmd.key[i] >> 16;
+        const named = (d.cmd.kind[i] == quads_kind) and texture < 128 and
+            (changed >> @intCast(@min(texture, 127))) & 1 != 0;
+        if (!named) continue;
+        for (d.quads[d.cmd.first[i]..][0..d.cmd.count[i]]) |q| into.add(geometry.quadBounds(q));
+    }
+    std.debug.assert(into.count() <= max_rects);
+}
+
 /// Drops from `d`, as `paint.emit` wrote it, every quad whose painted area (rect inside its
 /// clip) misses `g`, so a renderer that redraws only the region uploads and draws only what can
 /// reach it. Kept quads stay in paint order; a batch left empty is removed, text and custom
@@ -566,6 +584,26 @@ test "cull: one changed node repaints the quads under one small rect" {
     try testing.expectEqual(@import("draw_list.zig").Cmd{ .quads = .{ .first = 0, .count = 3, .texture = .white, .material = .solid } }, sc.d.command(0));
     try testing.expectEqual(@import("draw_list.zig").Cmd{ .text = 0 }, sc.d.command(1));
     try testing.expectEqual(@import("draw_list.zig").Cmd{ .custom = 0 }, sc.d.command(2));
+}
+
+test "addTextures: the quads that sample a changed texture, no others; everything stays" {
+    var buf: [Scene.bytes]u8 align(mem.column_align) = undefined;
+    var sc: Scene = .build(&buf, .{});
+    paint.emit(&sc.t, &sc.tx, &sc.cu, sc.s.buf[0..sc.s.len], &sc.d);
+    // The first batch samples texture 3; its quads' bounds are what an image change redraws.
+    sc.d.cmd.key[0] = 3 << 16;
+    const first = sc.d.cmd.first[0];
+    var want: Region = .empty;
+    for (sc.d.quads[first..][0..sc.d.cmd.count[0]]) |q| want.add(geometry.quadBounds(q));
+    var g: Region = .empty;
+    addTextures(&sc.d, 1 << 2, &g);
+    try testing.expectEqual(0, g.count());
+    addTextures(&sc.d, 1 << 3, &g);
+    try testing.expectEqual(want.bounds(), g.bounds());
+    try testing.expect(g.count() > 0);
+    var all: Region = .everything;
+    addTextures(&sc.d, 1 << 3, &all);
+    try testing.expectEqual(Region.everything, all);
 }
 
 test "cull: a quad clipped away from the region is dropped even when its rect reaches it" {

@@ -2608,6 +2608,7 @@ damage: which part of the window changed since the last frame.
 
 - `max_rects = 4`: Rects a `Region` holds.
 - `fn hashNodes(t: *const Tree, tx: *const Texts, cu: *const Customs, strings: []const u8, out: []u32) void`: Writes, for every node of `t`, a hash of what painting it reads: its rect, its visible (clipped) rect, its look, and the text run or custom draw it owns.
+- `fn addTextures(d: *const DrawList, changed: u128, into: *Region) void`: Adds to `into` the painted area of every quad of `d` whose texture `changed` names (bit k: `types.Texture` k; a texture past 127 never), so a host whose image changed its pixels and nothing else redraws the image where it shows.
 - `fn cull(d: *DrawList, g: *const Region) void`: Drops from `d`, as `paint.emit` wrote it, every quad whose painted area (rect inside its clip) misses `g`, so a renderer that redraws only the region uploads and draws only what can reach it.
 
 ### `Region` (struct)
