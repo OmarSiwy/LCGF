@@ -1,14 +1,17 @@
-//! UI rendered into a texture ("texture out" in the header of prototype/ui_wgpu.zig: point the
-//! pass at any texture view). A second UI, the hello example with its own `Context` and
-//! buffer, is built and drawn into an offscreen framebuffer; that framebuffer is texture 1 of
+//! UI rendered into a texture. A second UI, the hello example with its own `Context` and
+//! buffer, is built and drawn on the CPU by the software renderer (`render_sw`, with the bundled
+//! font) into pixels the application owns; those pixels are its `lcgf_app.Image`, texture 1 of
 //! the outer UI, which shows it on a tilted card (`Style.texture`, `Style.transform`) as a game
-//! shows a screen inside its world. The inner UI is redrawn only when it builds a frame.
+//! shows a screen inside its world. The window draws the outer UI on the GPU or in software,
+//! as it can. The inner UI is redrawn, and the image's `generation` moved on, only when it
+//! builds a frame.
 //!
 //! ponytail: the inner UI gets no input (pointer mapping through the card's transform is the
-//! host's to add); it shows what it would show at rest.
+//! application's to add); it shows what it would show at rest.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
+const lcgf_app = @import("lcgf_app");
 const w = lcgf.widgets_base;
 const sw = lcgf.render_sw;
 const context = lcgf.context;
@@ -18,7 +21,7 @@ const Quad = lcgf.draw_list.Quad;
 const types = lcgf.types;
 const Id = types.Id;
 const Events = lcgf.shell_iface.Events;
-const host = @import("host");
+const font = lcgf.render_sw_font;
 const panel_id = Id.from("hello");
 
 pub const tex_w = 320;
@@ -58,14 +61,14 @@ pub const App = struct {
     inner_ctx: ?context.Context = null,
     inner_in: Input = .{ .viewport = .{ tex_w, tex_h } },
     tex: sw.Framebuffer = undefined,
-    gfx: sw.Software = .{},
+    gfx: sw.Software = .{ .images = &font.images },
     /// Frames the inner UI built and drew into the texture.
     renders: u32 = 0,
     /// Where the inner UI's panel was laid out, in texels.
     inner_panel: types.Rect = .{},
     /// Card rotation, radians.
     tilt: f32 = 0.2,
-    image_rows: [2]sw.Image = undefined,
+    image: [1]lcgf_app.Image = undefined,
 
     pub fn build(app: *App, f: *Frame, ev: *const Events) void {
         if (app.inner_ctx == null) {
@@ -81,7 +84,8 @@ pub const App = struct {
             const iev: Events = .{ .in = app.inner_in };
             app.inner.build(&inner, &iev);
             const out = inner.end(.{});
-            host.draw(&app.inner, &app.gfx, &app.tex, .{ .quads = &quads, .first = &first, .count = &count }, &out, 1, app.theme.control_held);
+            app.gfx.prepare({}, out.draw, font.glyphs(out.draw, &quads, &first, &count), .{ 0, 0 }, 1);
+            app.gfx.redraw(&app.tex, app.tex.all(), out.draw, app.theme.control_held);
             app.renders += 1;
             app.inner_panel = out.tree.rect(out.tree.find(panel_id));
         }
@@ -96,18 +100,24 @@ pub const App = struct {
         f.close();
     }
 
-    /// Texture 0 is white for plain quads, texture 1 holds the inner UI's pixels.
-    pub fn images(app: *App) []const sw.Image {
-        app.image_rows = .{ sw.Image.white, .{ .pixels = app.tex.pixels, .width = app.tex.stride, .height = tex_h } };
-        return &app.image_rows;
+    /// Texture 1: the inner UI's pixels, a new generation each time it drew.
+    pub fn images(app: *App) []const lcgf_app.Image {
+        app.image = .{.{ .pixels = app.tex.pixels, .size = .{ app.tex.stride, tex_h }, .generation = app.renders }};
+        return &app.image;
     }
 };
 
+pub fn main(init: std.process.Init) !void {
+    var app: App = .{};
+    try lcgf_app.run(App, &app, init, .{ .title = "Texture" });
+}
+
 const testing = std.testing;
+const replay = @import("lcgf_replay");
 
 test "texture: the hello UI is drawn into a texture and shown on a card" {
     var app: App = .{};
-    var s = try host.Smoke.run(&app, "frame\nviewport 800 600\nframe\nframe\n");
+    var s = try replay.run(&app, "frame\nviewport 800 600\nframe\nframe\n");
     try testing.expect(app.renders >= 1);
     // The texture holds the hello panel at its centre.
     const p = app.inner_panel;
@@ -120,7 +130,7 @@ test "texture: the hello UI is drawn into a texture and shown on a card" {
     try testing.expectEqual(app.inner.theme.panel, app.tex.at(x + 4, y + 5));
     // The card's centre (the transform keeps it in place) shows the texture's centre.
     const r = s.rect(id_card);
-    const mid = host.center(r);
+    const mid = replay.center(r);
     try testing.expectEqual(app.tex.at(tex_w / 2, tex_h / 2), s.at(@intFromFloat(mid[0]), @intFromFloat(mid[1])));
     // Untilted, the card's corner is the texture's corner colour; tilted, it is not drawn there.
     try testing.expect(!std.meta.eql(app.tex.at(1, 1), s.at(@intFromFloat(r.x0 + 1), @intFromFloat(r.y0 + 1))));

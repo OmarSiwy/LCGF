@@ -1361,7 +1361,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "host", .module = desktop.host } },
     }) });
     examples_step.dependOn(&b.addRunArtifact(examples_tests).step);
-    for ([_][]const u8{ "dashboard", "viewport", "texture" }) |name| {
+    for ([_][]const u8{"viewport"}) |name| {
         const app = desktop.app(b.path(b.fmt("examples/{s}/app.zig", .{name})));
         const exe = desktop.executable(app, b.fmt("example-{s}", .{name}));
         examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
