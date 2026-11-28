@@ -32,6 +32,8 @@ fn hr(comptime v: u32) HRESULT {
     return @bitCast(v);
 }
 pub const E_NOTIMPL = hr(0x80004001);
+/// A success code: the present went nowhere, as no part of the window is visible.
+pub const DXGI_STATUS_OCCLUDED = hr(0x087A0001);
 pub const E_OUTOFMEMORY = hr(0x8007000E);
 pub const DXGI_ERROR_UNSUPPORTED = hr(0x887A0004);
 pub const DXGI_ERROR_DEVICE_REMOVED = hr(0x887A0005);

@@ -152,7 +152,7 @@ pub const Player = struct {
                 const f = try p.frames.begin(&p.d, &p.chain);
                 p.gfx.prepare(f.slot, &p.st.draw, glyphs, s.viewport, 1);
                 p.drawFrame(f.list, f.buffer, f.rtv);
-                try p.frames.present(&p.d, &p.chain, f, 0);
+                _ = try p.frames.present(&p.d, &p.chain, f, 0);
                 try p.d.waitIdle();
             },
         }
@@ -295,7 +295,7 @@ test "conformance: the scenes still match after the swapchain was resized away a
     const f = try p.frames.begin(&p.d, &p.chain);
     f.list.omSetRenderTarget(f.rtv);
     f.list.clearRenderTargetView(f.rtv, .{ 0, 0, 0, 1 });
-    try p.frames.present(&p.d, &p.chain, f, 0);
+    _ = try p.frames.present(&p.d, &p.chain, f, 0);
     try p.d.waitIdle();
     try p.chain.resize(&p.d, width, height);
     try expectGoldens(&p, &.{ "rects", "clip", "text", "custom" });

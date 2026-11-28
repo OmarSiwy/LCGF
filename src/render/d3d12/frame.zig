@@ -15,7 +15,7 @@
 //!     gfx.prepare(f.slot, &draw, glyphs, viewport, scale);
 //!     f.list.omSetRenderTarget(f.rtv);  f.list.clearRenderTargetView(f.rtv, .{ 0, 0, 0, 1 });
 //!     gfx.render(f.list, &draw);
-//!     try frames.present(&d, &chain, f);
+//!     _ = try frames.present(&d, &chain, f, 1);
 
 const std = @import("std");
 const com = @import("com.zig");
@@ -50,6 +50,8 @@ pub const Frames = struct {
     count: u32,
     next: u32 = 0,
     latency: c.HANDLE,
+    /// How long `begin` waits on the latency object before `error.Timeout`.
+    wait_ms: u32 = 1000,
 
     /// `count` frames in flight (match the renderer's `Desc.frames`). The swapchain must have
     /// been made with `flags`.
@@ -77,10 +79,11 @@ pub const Frames = struct {
 
     /// Waits until the compositor can take a frame and the next slot is free, then returns
     /// the frame, recording, with its back buffer in RENDER_TARGET. `error.Timeout` when
-    /// the latency object stays unsignalled for a second (a hidden or minimised window may
+    /// the latency object stays unsignalled for `wait_ms` (a hidden or minimised window may
     /// never signal it; the host skips the frame).
     pub fn begin(f: *Frames, d: *Device, chain: *const Swapchain) (Error || error{Timeout})!Frame {
-        if (c.WaitForSingleObjectEx(f.latency, 1000, 1) != c.WAIT_OBJECT_0) return error.Timeout;
+        const signalled = c.WaitForSingleObjectEx(f.latency, f.wait_ms, 1) == c.WAIT_OBJECT_0;
+        if (!signalled) return error.Timeout;
         const slot = f.next;
         try d.wait(f.done[slot]);
         try f.allocators[slot].reset();
@@ -92,13 +95,20 @@ pub const Frames = struct {
 
     /// Returns the back buffer to PRESENT, submits the frame and presents it, vsync'd
     /// (`sync_interval` 1) or at once (0). `error.DeviceLost` when the device is gone: the
-    /// host then recreates device, swapchain, frames and renderer (device.zig).
-    pub fn present(f: *Frames, d: *Device, chain: *const Swapchain, frame: Frame, sync_interval: u32) Error!void {
+    /// host then recreates device, swapchain, frames and renderer (device.zig). Whether the
+    /// window showed it (`Swapchain.Shown`).
+    pub fn present(
+        f: *Frames,
+        d: *Device,
+        chain: *const Swapchain,
+        frame: Frame,
+        sync_interval: u32,
+    ) Error!Swapchain.Shown {
         frame.list.resourceBarrier(&.{transition(frame.buffer, c.D3D12_RESOURCE_STATE_RENDER_TARGET, c.D3D12_RESOURCE_STATE_PRESENT)});
         try frame.list.close();
         f.done[frame.slot] = try d.submit(&.{frame.list});
         f.next = (frame.slot + 1) % f.count;
-        try chain.present(sync_interval);
+        return chain.present(sync_interval);
     }
 };
 
@@ -118,7 +128,7 @@ test "frame: the latency object paces a loop of presented frames" {
         try testing.expectEqual(@as(u32, @intCast(n % 2)), f.slot);
         f.list.omSetRenderTarget(f.rtv);
         f.list.clearRenderTargetView(f.rtv, .{ 0, 0, 0, 1 });
-        try frames.present(&d, &chain, f, 0);
+        _ = try frames.present(&d, &chain, f, 0);
     }
     try d.waitIdle();
     // Every frame's slot fence has passed.

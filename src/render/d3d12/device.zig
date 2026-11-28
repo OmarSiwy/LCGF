@@ -288,9 +288,23 @@ pub const Swapchain = struct {
         return cpuAt(s.rtv_heap.cpuStart(), s.rtv_stride, i);
     }
 
+    /// What a present found: the window showed the frame, or nothing of it is visible
+    /// (DXGI_STATUS_OCCLUDED: minimised, or covered whole), and the frame went nowhere.
+    pub const Shown = enum { shown, occluded };
+
     /// Presents the current buffer: vsync'd with `sync_interval` 1, at once with 0.
-    pub fn present(s: *const Swapchain, sync_interval: u32) Error!void {
-        try com.check(s.handle.present(sync_interval, 0));
+    pub fn present(s: *const Swapchain, sync_interval: u32) Error!Shown {
+        const result = s.handle.present(sync_interval, 0);
+        try com.check(result);
+        return if (result == com.DXGI_STATUS_OCCLUDED) .occluded else .shown;
+    }
+
+    /// Whether the window would show a frame now, presenting nothing (DXGI_PRESENT_TEST): how
+    /// a host that saw `.occluded` learns when to draw again.
+    pub fn visible(s: *const Swapchain) Error!Shown {
+        const result = s.handle.present(0, c.DXGI_PRESENT_TEST);
+        try com.check(result);
+        return if (result == com.DXGI_STATUS_OCCLUDED) .occluded else .shown;
     }
 };
 
@@ -356,7 +370,7 @@ test "device: a device on the software rasteriser, a flip-model swapchain, a cle
         rb.copy(l, s.buffers[i]);
         l.resourceBarrier(&.{transition(s.buffers[i], c.D3D12_RESOURCE_STATE_COPY_SOURCE, c.D3D12_RESOURCE_STATE_PRESENT)});
         try once.submit(&d);
-        try s.present(0);
+        _ = try s.present(0);
         var px: [64 * 48 * 4]u8 = undefined;
         try rb.read(&px);
         const want = [4]u8{ @intFromFloat(@round(colour[0] * 255)), @intFromFloat(@round(colour[1] * 255)), @intFromFloat(@round(colour[2] * 255)), 255 };
