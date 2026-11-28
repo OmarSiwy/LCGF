@@ -211,7 +211,7 @@ yourself through `Surface`, and 2D primitives through `Frame.canvas`.
 - **Text** is drawn in real fonts at the window's scale (src/app/text.zig): the files of
   `Options.fonts` (`.fonts = &.{.{ .bytes = @embedFile("Inter.ttf") }}`, font k the k-th), else
   the system's default faces where the build can ask for them (not a Linux build without
-  libc), else, and on macOS for now, the bundled bitmap font. `Options.text` sizes the service
+  libc; on macOS through Core Text), else the bundled bitmap font. `Options.text` sizes the service
   ([text.md](text.md), "Text in an `lcgf_app` window").
 - **Images**: an `App` with `pub fn images(*App) []const lcgf_app.Image` has image k drawn by
   `Style.texture` k + 1 (at most `images_max`). An image is straight RGBA8 `pixels`, or
@@ -239,10 +239,11 @@ yourself through `Surface`, and 2D primitives through `Frame.canvas`.
   side's text rows. The frame is built in the region's coordinates; the window draws and
   uploads only the union of both sides' damage. `run`'s doc comment has the two functions.
 - **Damage** is on: the window keeps last frame's pixels and redraws only what changed
-  (`Context.trackDamage` on the software window, `trackDamageWhole` on the GPU one); macOS
-  draws every frame whole. An idle window presents nothing.
-- **The GPU**: a Vulkan build on Linux draws the window with Vulkan over X11, and an `App`
-  with `pub fn draw` draws its own `Surface`s there ([surface.md](surface.md)).
+  (`Context.trackDamage` on the software window, `trackDamageWhole` on the GPU one). An idle
+  window presents nothing.
+- **The GPU**: the default build draws the window on the GPU (Vulkan on Linux, native
+  Wayland or X11; Metal on macOS; Direct3D 12 on Windows), and an `App` with `pub fn draw`
+  draws its own `Surface`s there ([surface.md](surface.md)).
   `LCGF_RENDER=sw`, no `DISPLAY`, an X server that cannot be reached or no Vulkan device
   gives the software window, where every `App` runs and `Surface.live()` is false
   ([backends.md](backends.md), "When you bring no device").

@@ -102,12 +102,11 @@ Every stage ends with `zig build test fmt lint`, `ci/run.sh census-src` and `ci/
 passing, and the job named in its row. `docs` compares `docs/api/API.md` with the index
 `zig build docs` generates, so a commit that changes a public declaration regenerates it.
 
-Stages 0 to 7 are on `main` ("Landed", below), the examples on `lcgf_app` from branch
-`plan/examples`. What is open:
+Stages 0 to 8 are on `main` ("Landed", below). What is open:
 
 | # | Work | Done when |
 |---|---|---|
-| 8 | Win32 with Direct3D 12; the picture on Metal; the GPU on Wayland (the shell has no libwayland, so a Vulkan surface cannot be made over it: dmabuf buffers on the shell's own connection); GL ES; the web. | |
+| 9 | GL ES and the web through `lcgf_app`; Metal run on a Mac and Direct3D 12 on Windows (both are cross-built and tested off their platform: recorded Objective-C calls, Wine with vkd3d). | Each platform's T1 to T4 and not-shown pass on its own machine. |
 
 ## Tests that show the contract
 
@@ -154,6 +153,7 @@ lavapipe and on the machine's GPU where its display can be reached.
 | 7, in part: `lcgf_app.Image.alpha`; an App draws its frame inside a page of its own (`page`, `compose`); `lcgf_app` registered for dependent packages, examples/app a package that calls `addApp`; canvas labels in the window's fonts (`labels: lcgf_app.Labels`, `Options.labels`), also in a composed page; `Options.canvas` sizes the GPU window's canvas rows | 85b08b30, 4480c11e, 5773d30d, 08dd77ba, 8be9626b, 690417b1, b217a16d |
 | 7: every desktop example a package on `lcgf_app` with the default back end, tested without a window by `lcgf_app.replay` (the software window's frame path on a recording); dashboard on `Frame.canvas`, viewport a `Surface` with a CPU `lcgf_app.Image` in the software window, texture an `lcgf_app.Image`; the example host (`Incremental`, its X11 runner) and its build helper deleted; the window-resize client on `lcgf_app` | plan/examples |
 | No GPU is a state (`Surface.live()`, no `error.NoGpu`; `Surface` and `GpuFrame` on every build), an unreachable X server takes the software path, a `custom` node is said once in a debug build; a new image generation redraws only the nodes that show it (`damage.addTextures`); bitmap canvas glyphs on both windows; a floating `.fill` region is a compile error; the general canvas row | 29fdabaa, 2143e029, 5bef6afd, 748cbcbc, 5e30337b, af5e8e85, 6b35cc75 |
+| 8: one GPU loop over a per-platform window contract (src/app/gpu.zig); native Wayland through dma-bufs shared on the shell's own connection; Metal in an AppKit window; Direct3D 12 in a Win32 window | 6b720d28, 19bc85db, fb331bf1..3a59da66, ca270545..af5a279a, 92da6ea5, e27d95a0, e051dd75, a60ef64f |
 
 Measured on main 71cae28e, ReleaseFast, calling-thread CPU time per frame, 300 frames a mode:
 

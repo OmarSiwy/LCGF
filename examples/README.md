@@ -2,7 +2,8 @@
 
 An application is written against `lcgf_app`: `lcgf_app.run` from `main`,
 `lcgf.addApp` in build.zig, and `-Drender` left at its default. `lcgf_app` draws on
-the GPU where it has a window for it (Vulkan over X11 on Linux) and falls back to
+the GPU where it has a window for it (Vulkan on Linux, Metal on macOS, Direct3D 12 on
+Windows) and falls back to
 software by itself, and application code names no back end. Every desktop program
 here is written that way:
 

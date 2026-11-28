@@ -153,7 +153,8 @@ output), text runs, `canvas` batches (LCGF's own instanced primitives under a ca
   surface frame skips and the `draw` a widget frame skips (docs/plans/window.md, "Landed").
   On macOS the window layer runs on Metal in an AppKit window (src/app/gpu_macos.zig), its
   text from the text service over Core Text's faces; it compiles and links here but has not
-  run on a Mac. Windows has no GPU window through `lcgf_app` yet.
+  run on a Mac. On Windows it runs on Direct3D 12 in a Win32 window (src/app/gpu_win32.zig),
+  tested under Wine with vkd3d, not on a Windows machine.
   `LCGF_RENDER=sw`, no display, an X server that cannot be reached or no Vulkan device falls
   back to the software window (on macOS, which has none, the shell's own Metal window). Every application runs there: `draw` is
   never called and a `Surface` is not live (`Surface.live`), so its node paints its fill and

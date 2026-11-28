@@ -2,7 +2,7 @@
 
 A Zig GUI framework with runtime and comptime front ends over shared layout, interaction and draw-list data. The application owns its buffers, frame loop and graphics resources, or hands them to the window layer, `lcgf_app`.
 
-To write a desktop application, call `lcgf_app.run` from `main` (`lcgf.addApp` in build.zig) and leave `-Drender` at its default. `lcgf_app` draws on the GPU where it has a window for it (Vulkan over X11 on Linux today) and falls back to software by itself, so application code names no back end: images go through `lcgf_app.Image`, a widget you draw yourself through `Surface`, 2D primitives through `Frame.canvas`. `-Drender=sw` is for microcontrollers, machines that must not load a GPU driver and the smallest static binary. [A window in one call](docs/guide/runtime.md#a-window-in-one-call) · [examples/app](examples/app/main.zig) · [examples/surface](examples/surface/main.zig)
+To write a desktop application, call `lcgf_app.run` from `main` (`lcgf.addApp` in build.zig) and leave `-Drender` at its default. `lcgf_app` draws on the GPU where it has a window for it (Vulkan on Linux, native Wayland or X11; Metal on macOS; Direct3D 12 on Windows) and falls back to software by itself, so application code names no back end: images go through `lcgf_app.Image`, a widget you draw yourself through `Surface`, 2D primitives through `Frame.canvas`. `-Drender=sw` is for microcontrollers, machines that must not load a GPU driver and the smallest static binary. [A window in one call](docs/guide/runtime.md#a-window-in-one-call) · [examples/app](examples/app/main.zig) · [examples/surface](examples/surface/main.zig)
 
 ## Documentation
 

@@ -36,8 +36,8 @@
 //! `App` with a `theme` field of `widgets_base.Theme` follows the system's light or dark
 //! appearance where the shell reports it. Text is drawn in the faces of `Options.fonts`, else
 //! in the system's default faces where the build can ask the system for them (text.zig
-//! `can_discover`: not a Linux build without libc), at the window's scale (src/app/text.zig);
-//! else, and on macOS, with the bundled bitmap font (`render_sw.font`, DejaVu Sans Mono under
+//! `can_discover`: not a Linux build without libc; Core Text on macOS), at the window's scale
+//! (src/app/text.zig); else with the bundled bitmap font (`render_sw.font`, DejaVu Sans Mono under
 //! its own licence: ship src/example/font/LICENSE.txt with the program). An `App` with
 //! `pub fn images(*App) []const Image` gives the UI its images: `Style.texture` k + 1 is
 //! image k. `Frame.canvas` draws a canvas; an App with a field `labels: Labels` gets, before
