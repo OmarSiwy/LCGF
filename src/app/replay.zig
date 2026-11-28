@@ -10,9 +10,10 @@
 //! same on every machine). A `Surface` is never live here.
 //!
 //! In: the App, the recording, `Options`. Out: `Run`, the last frame's tree, output and list
-//! (for a composing App the composed list, and the tree in its region's coordinates) and the
-//! pixels. `draw` paints a list a test composed itself, for pixel parity. Static buffers, one
-//! set per `Options`, and `std.testing`'s allocator and io: for tests, and not re-entrant.
+//! (for a composing App the composed list, and where its region's corner is) and the pixels,
+//! all in the window's coordinates, as the recording's. `draw` paints a list a test composed
+//! itself, for pixel parity. Static buffers, one set per `Options`, and `std.testing`'s
+//! allocator and io: for tests, and not re-entrant.
 //!
 //! Contents
 //!   pub const width, height
@@ -72,12 +73,18 @@ pub const Run = struct {
     out: ?context.Output = null,
     /// What the window cleared to: the theme's panel for an App with a `theme`.
     background: types.Color = .rgb(0, 0, 0),
+    /// Where the frame's (0, 0) is in the window, logical pixels: the corner of a composing
+    /// App's region (`page`), else (0, 0). `out.tree` is in the frame's coordinates.
+    origin: [2]f32 = .{ 0, 0 },
 
-    /// Where node `id` of the frame was laid out in the last frame built (for a composing App,
-    /// in its region's coordinates).
+    /// Where node `id` of the last frame built is in the window, logical pixels: the
+    /// coordinates of `at` (divided by the scale) and of the recording, so a click at
+    /// `center(rect(id))` hits the node.
     pub fn rect(r: *const Run, id: types.Id) types.Rect {
         const t = r.out.?.tree;
-        return t.rect(t.find(id));
+        const n = t.rect(t.find(id));
+        const o = r.origin;
+        return .{ .x0 = n.x0 + o[0], .y0 = n.y0 + o[1], .x1 = n.x1 + o[0], .y1 = n.y1 + o[1] };
     }
 
     /// Pixel (x, y) of the framebuffer, physical pixels.
@@ -100,6 +107,8 @@ const Shell = struct {
     gfx: sw.Setup = .{},
     /// What the window clears to; `loop` sets it to the theme's panel for an App with one.
     background: types.Color = .rgb(0, 0, 0),
+    /// Where the frame's (0, 0) is; `loop` sets it for a composing App.
+    origin: [2]f32 = .{ 0, 0 },
     scale: f32 = 1,
     frames: u32 = 0,
     builds: u32 = 0,
@@ -188,6 +197,7 @@ pub fn runWith(app: anytype, recording: []const u8, comptime o: Options) !Run {
         .builds = shell.builds,
         .out = shell.last,
         .background = shell.background,
+        .origin = shell.origin,
     };
 }
 
@@ -285,11 +295,11 @@ test "replay: a composed page through a click, both sides drawn, the list compos
     // The list drawn is the one the App composed: the page's runs, then the frame's.
     try testing.expectEqual(@as(*const DrawList, &app.list), s.list());
     try testing.expect(s.list().run_len > app.top.run_len);
-    // The frame's tree is in its region's coordinates: the plot is where the window shows it,
-    // less the region's corner.
+    // Rects are in the window's coordinates: the plot is where the window shows it, below the
+    // page's header, where the region starts.
     const plot = s.rect(.from("plot"));
-    try testing.expectEqual(@as(f32, 200), plot.x1 - plot.x0);
-    try testing.expect(plot.y0 < c[1]);
+    try testing.expectEqual(c, [4]f32{ plot.x0, plot.y0, plot.x1, plot.y1 });
+    try testing.expect(s.origin[1] > 0);
 
     // A click on the compiled checkbox reaches the page.
     try testing.expect(app.ui.signals.state.grid);
@@ -342,4 +352,44 @@ test "replay: draw paints a list as the replay drew it" {
     for (0..200) |y| for (0..300) |x| {
         try testing.expectEqual(s.at(@intCast(x), @intCast(y)), fb.at(@intCast(x), @intCast(y)));
     };
+}
+
+/// `TestApp` with a button at the top of its region, above the frame `TestApp` builds.
+const Pressable = struct {
+    inner: T = .{},
+    presses: u32 = 0,
+
+    pub fn page(a: *Pressable, in: *const Input, t: lcgf_page.PageText) [4]f32 {
+        return a.inner.page(in, t);
+    }
+
+    pub fn build(a: *Pressable, f: *lcgf.frame.Frame, ev: *const Events) void {
+        const th: lcgf.widgets_base.Theme = .default;
+        _ = f.open(.none, .{ .dir = .y, .size = .{ .fill, .fill } });
+        if (lcgf.widgets_base.button(f, &th, .from("press"), "Press").clicked) a.presses += 1;
+        a.inner.build(f, ev);
+        f.close();
+    }
+
+    pub fn compose(a: *Pressable, out: *const context.Output) lcgf_page.Composed {
+        return a.inner.compose(out);
+    }
+
+    pub fn images(a: *Pressable) []const Image {
+        return a.inner.images();
+    }
+};
+
+test "replay: a click at the centre of a region's widget's rect hits it" {
+    var app: Pressable = .{};
+    const s = try runWith(&app, "frame\n", page_size);
+    const r = s.rect(.from("press"));
+    // In the window: inside the region, below the page's header.
+    try testing.expect(r.y0 >= s.origin[1] and s.origin[1] > 0);
+    const p = center(r);
+    var rec: [256]u8 = undefined;
+    const click = "frame\npointer {d} {d}\nframe\nbuttons left\nframe\nbuttons\nframe\n";
+    app = .{};
+    _ = try runWith(&app, try std.fmt.bufPrint(&rec, click, .{ p[0], p[1] }), page_size);
+    try testing.expectEqual(@as(u32, 1), app.presses);
 }

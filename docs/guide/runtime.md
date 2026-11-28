@@ -282,9 +282,11 @@ into a framebuffer that keeps the last frame's pixels, as a window does.
   `replay.runWith(&app, recording, .{ .size = .{ 300, 200 }, .scale = 2, .fonts = &files })`
   chooses the size, the scale and font files for the text service (never the system's, so a
   replay draws the same on every machine).
-- The result gives `rect(id)`, where a node of the last frame was laid out (in its region's
-  coordinates for a composing App); `out`, that frame's output; `list()`, the list it drew
-  (the composed one); `at(x, y)`, a pixel; `frames` and `builds`.
+- The result gives `rect(id)`, where a node of the last frame is in the window, in the
+  coordinates of the recording and of `at`, so a click at `center(rect(id))` hits it, a
+  composing App's region included; `origin`, where that region's corner is; `out`, that
+  frame's output (its tree in the frame's own coordinates); `list()`, the list it drew (the
+  composed one); `at(x, y)`, a pixel; `frames` and `builds`.
 - `replay.draw(&fb, list, images, scale, background)` paints a list the test composed itself,
   as a replay would, for pixel parity; `replay.clicks` and `replay.center` write a recording
   that clicks points in turn.

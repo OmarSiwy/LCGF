@@ -815,6 +815,9 @@ fn composedFrame(
     ev: *const Events,
 ) void {
     const b = page.build(App, app, paging, ctx, tw, ev);
+    // A headless window (`replay`) keeps where the frame's (0, 0) is, to answer in the window's
+    // coordinates.
+    if (@hasField(@TypeOf(shell.*), "origin")) shell.origin = b.origin;
     shell.apply(&b.out.platform);
     const d = b.composed.draw;
     sayCustom(d);
