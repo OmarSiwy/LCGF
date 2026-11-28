@@ -195,7 +195,9 @@ The kit adds no behaviour: `ui.button(.add, .{ .label = "Add" })` is
 chosen from the target and the environment, with the shells' loop above. In build.zig,
 `lcgf.addApp(b, dep, .{ .name = "hello", .root_source_file = b.path("main.zig"), .target =
 target, .optimize = optimize })` gives the executable the `lcgf_app` module with the shells its
-target needs. examples/app/main.zig is a whole program; `zig build app-example
+target needs, in your package as in LCGF's own. examples/app is a whole application as a
+package of its own: its build.zig takes LCGF as a dependency with the back end left at its
+default and calls `addApp`. From the checkout root, `zig build app-example
 -Dtarget=x86_64-windows` builds it for Windows from anywhere. The web, Android and iOS start an
 application their own way: see their shells' examples.
 
@@ -210,9 +212,26 @@ yourself through `Surface`, and 2D primitives through `Frame.canvas`.
   the system's default faces where the build can ask for them (not a Linux build without
   libc), else, and on macOS for now, the bundled bitmap font. `Options.text` sizes the service
   ([text.md](text.md), "Text in an `lcgf_app` window").
-- **Images**: an `App` with `pub fn images(*App) []const lcgf_app.Image` (RGBA8 pixels, a
-  size and a `generation` you change when the pixels do; at most `images_max`) has image k
-  drawn by `Style.texture` k + 1. macOS does not draw them yet.
+- **Images**: an `App` with `pub fn images(*App) []const lcgf_app.Image` has image k drawn by
+  `Style.texture` k + 1 (at most `images_max`). An image is straight RGBA8 `pixels`, or
+  `alpha`, one coverage byte a texel (an icon), read as white with that alpha so the node's
+  `fill` colours it; a size; and a `generation` you change when the texels do. macOS does not
+  draw them yet.
+- **Canvases**: `Frame.canvas` draws in every window. On the GPU window `Options.canvas` sizes
+  the instance buffers (`rows`, `verts`, 4096 each by default); past them a canvas draws short.
+  The software windows take any number.
+- **Canvas labels**: an `App` with a field `labels: lcgf_app.Labels` gets, before its first
+  `build`, what makes canvas labels in the window's fonts, sharp at any zoom
+  (`app.labels.label(&shapes, str, .{ .origin, .px })`; `Options.labels` sizes the atlas).
+  When the atlas fills, `label` fails with `error.Full` and `generation` moves on: make every
+  label again. On the bitmap font it fails with `error.Unavailable`. The header of
+  src/app/app.zig shows the loop ([text.md](text.md), "Text in an `lcgf_app` window").
+- **A page of your own**: an `App` whose window is a compiled page (`ComptimeUi`) with the
+  runtime frame in one region has both `pub fn page(*App, *const Input, lcgf_app.PageText)
+  [4]f32`, which lays the page out and returns the region, and `pub fn compose(*App, *const
+  Output) lcgf_app.Composed`, which returns the composed list (`ct_interop.compose`) and each
+  side's text rows. The frame is built in the region's coordinates; the window draws and
+  uploads only the union of both sides' damage. `run`'s doc comment has the two functions.
 - **Damage** is on: the window keeps last frame's pixels and redraws only what changed
   (`Context.trackDamage` on the software window, `trackDamageWhole` on the GPU one); macOS
   draws every frame whole. An idle window presents nothing.

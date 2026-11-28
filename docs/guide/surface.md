@@ -5,6 +5,25 @@ A `Surface` is a rectangle of the window that you draw yourself with `lcgf_rende
 texture of its own, and the UI shows that texture as an ordinary quad at its node's place in
 paint order. Widgets over it cover it, and its node's clip, radius and opacity apply.
 
+## Which layer to pick
+
+A surface is one of three ways to draw what the widgets cannot (docs/DESIGN.md, "An
+application's own drawing: three layers"):
+
+- **A `Surface`** when you need the GPU itself: your own passes, pipelines and WGSL. It needs
+  a GPU window (below).
+- **`Frame.canvas`** for 2D content (lines, rectangles, arcs, polygons, labels) under a camera.
+  LCGF owns its shader and a software twin held to the same pixels, so it draws the same on
+  every back end, software included, and your code fills columns and moves the camera.
+- **An `lcgf_app.Image`** when there is no GPU at all, or the pixels are yours anyway: CPU
+  pixels you fill, with `src/draw/paths.zig` (paths to coverage, an `alpha` image) or your
+  own code. The window shows it and redraws it when its `generation` changes.
+
+Pick the canvas for anything a 2D batch can draw, and a surface only for what needs shaders of
+your own.
+
+## An example
+
 The whole program is [`examples/surface/main.zig`](../../examples/surface/main.zig): a button
 and rings that a WGSL shader animates. It is not quoted here because the guides' examples
 build without a GPU; `ci/run.sh app` builds it and runs it on Xvfb, where it fails if no
@@ -58,3 +77,10 @@ runs only if a surface asked for it.
 device falls back to it. An application without `draw` then runs as it always did. An
 application with `draw` has nothing to draw its surfaces with, so `run` returns
 `error.NoGpu`.
+
+A surface has no software fallback, because its pixels are defined by your shaders and
+pipeline state. Running them takes an implementation of the GPU API and a shader compiler,
+which is what a software driver (lavapipe, WARP) is; no framework ships one, and WebGPU makes a
+fallback adapter optional. Where a software Vulkan driver is installed, a surface runs on it
+unchanged: that is how CI runs `examples/surface`. Content that must draw without any GPU
+belongs on the canvas or in an image.

@@ -194,7 +194,10 @@ window in one call"). A host with its own loop can run it the same way.
 Canvas labels (`Frame.canvas`) that must stay sharp under any camera zoom take their glyphs from
 `text.labels` (`src/app/labels.zig`): it shapes a label with the service's faces and appends
 canvas glyph rows that sample a distance atlas (`bit.distance` in `src/draw/canvas.zig`), each
-glyph's image made once. A back end reads that atlas through `Glyphs.canvas`. `lcgf_app` does
-not run labels yet: canvas glyphs in its window sample the bundled bitmap font's cells.
+glyph's image made once. A back end reads that atlas through `Glyphs.canvas`. In an
+`lcgf_app` window, give the `App` a field `labels: lcgf_app.Labels` and the window hands it the
+service and an atlas (`Options.labels`) before the first `build`, and draws the canvas glyphs
+from that atlas ([runtime.md](runtime.md), "A window in one call"). Without the field, or on
+the bitmap font, canvas glyphs sample the bundled font's cells (`Instances.glyphs`).
 `bench/micro/canvastext.zig` measures the choice of distance images over rasterising again at
 each zoom.

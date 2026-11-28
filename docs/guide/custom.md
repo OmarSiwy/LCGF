@@ -18,6 +18,13 @@ texture, calling your `draw` only when that surface asks for it and redrawing on
 rectangle. The routes that need the UI's pass (under, over and inline) stay with a host that
 owns its loop; an `lcgf_app` window skips `custom` commands, as `iface.render` does.
 
+Custom drawing is one of three layers (docs/DESIGN.md, "An application's own drawing: three
+layers"). For 2D content that must look the same on every back end, software included, use
+`Frame.canvas` instead: LCGF owns its shader and the software twin, so nothing here applies.
+For pixels made on the CPU, use a texture (`lcgf_app.Image` in a window, `Style.texture`
+here). Use the routes on this page, or a `Surface`, only for drawing that needs shaders of
+your own; they have no software fallback.
+
 Every code block below is a piece of `docs/guide/custom.zig`, which `zig build docs` compiles
 and runs against `render_null.Null`, the back end that records the calls a GPU back end makes.
 The renderer interface describes three ways to interleave custom drawing with UI commands. The wgpu backend documents the five kinds of raw access below. [Renderer interface](../../src/render/iface.zig) · [wgpu backend](../../src/render/wgpu/wgpu.zig)
