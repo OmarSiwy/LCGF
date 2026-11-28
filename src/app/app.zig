@@ -1214,3 +1214,40 @@ test "app on X11: a full label atlas is reported, and the labels made again draw
     try app.expectWindow(&w, x11.pixel, 1, &Rows.reference);
     try testing.expectEqual(@as(u32, 0), conn.errors);
 }
+
+test "app on X11: a canvas label in a composed page's region draws as the reference" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const B = Buffers(page_options);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    conn.overrideScale(1);
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(testing.allocator);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, 300, 200, "lcgf app page labels", bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+    var ctx = try context.Context.init(&B.ctx, limitsOf(page_options));
+    ctx.trackDamageWhole();
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const o = textOptions(page_options);
+    var tw = try text.Window.open(&B.service, o, &font_files, false, testing.allocator, testing.io);
+    defer tw.close();
+    var app: page.TestApp = .{};
+    openLabels(page.TestApp, &app, page_options, &tw);
+    try testing.expect(app.labels.available());
+    try loop(page.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expect(app.labelled);
+    try page.expectCanvas(&w, &app);
+    try page.expectPageText(&w, &app, &tw.text.?);
+    try testing.expectEqual(@as(u32, 0), conn.errors);
+}

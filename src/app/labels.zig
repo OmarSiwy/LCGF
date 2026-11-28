@@ -354,7 +354,11 @@ const Node = struct {
         n.drawAt(fb, s, cam, img, .{ .scale = 1, .ground = .black });
     }
 
-    const At = struct { scale: f32, ground: lcgf.types.Color };
+    const At = struct {
+        scale: f32,
+        ground: lcgf.types.Color,
+        palette: *const canvas.Palette = &palette,
+    };
 
     fn drawAt(n: *Node, fb: *Framebuffer, s: *const Instances, c: Camera, i: Img, at: At) void {
         std.debug.assert(at.scale > 0);
@@ -366,7 +370,7 @@ const Node = struct {
         n.list.customs[0] = .{ .rect = r, .clip = r, .data = 0, .id = 0, .node = 0 };
         n.list.custom_len = 1;
         n.all = .{s.since(0)};
-        n.rows = .{.{ .instances = s, .camera = c, .ranges = &n.all, .palette = &palette }};
+        n.rows = .{.{ .instances = s, .camera = c, .ranges = &n.all, .palette = at.palette }};
         n.list.canvases = &n.rows;
         n.list.cmd.kind[0] = @backingInt(DrawList.Kind.canvas);
         n.list.cmd.first[0] = 0;
@@ -376,6 +380,30 @@ const Node = struct {
         sw.canvas.draw(.{ .fb = fb, .scissor = fb.all() }, &n.list, 0, at.scale, i);
     }
 };
+
+/// How `drawCanvas` draws: physical pixels per logical one, the node's own fill, its palette.
+pub const CanvasLook = struct {
+    scale: f32 = 1,
+    ground: lcgf.types.Color,
+    palette: *const canvas.Palette,
+};
+
+/// Test helper: `s` under `cam` in a canvas node over all of `fb`, as `look` says, its glyphs
+/// from `atlas`, drawn by the software back end: what a window shows of that node.
+pub fn drawCanvas(
+    fb: *Framebuffer,
+    s: *const Instances,
+    c: Camera,
+    a: *const Atlas,
+    look: CanvasLook,
+) void {
+    const Draw = struct {
+        var node: Node = .{};
+    };
+    const img: Img = .{ .alpha8 = a.pixels, .width = a.w, .height = a.h };
+    const at: Node.At = .{ .scale = look.scale, .ground = look.ground, .palette = look.palette };
+    Draw.node.drawAt(fb, s, c, img, at);
+}
 
 /// Test helper for lcgf_app's own tests (app.zig, gpu.zig): an App whose window is one canvas
 /// of labels in the test face, made once and made again only when `words` change or the

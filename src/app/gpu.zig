@@ -1188,6 +1188,21 @@ test "gpu page: a composed page draws both sides; a pan scissors the canvas; idl
     try testing.expectEqual(presents, fx.gw.stats.presents);
 }
 
+test "gpu page: a canvas label in a composed page's region draws as the reference" {
+    var fx: Fixture = undefined;
+    try fx.openWith(try displayOrSkip(), 300, 200, &Fixture.face);
+    defer fx.close();
+    Fixture.label_atlas = .init(&Fixture.label_bytes, Fixture.label_options);
+    fx.tw.labels = &Fixture.label_atlas;
+    const handle: text.labels.Handle = .{ .text = &fx.tw.text.?, .labels = &Fixture.label_atlas };
+    var app: page.TestApp = .{ .labels = handle };
+    try fx.run(&app, seconds(0.3));
+    try testing.expect(app.labelled);
+    _ = try shown(&fx.w, 258, 16, page.TestApp.tint);
+    try page.expectCanvas(&fx.w, &app);
+    try page.expectPageText(&fx.w, &app, &fx.tw.text.?);
+}
+
 /// A canvas with a half-transparent line, and a box beside it that `lit` turns white.
 const CanvasApp = struct {
     shapes: *const lcgf.canvas.Instances,

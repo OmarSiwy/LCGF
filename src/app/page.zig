@@ -157,7 +157,7 @@ pub const TestApp = struct {
         _ = DrawList.init(&counter, 64, 16, 8);
         break :blk counter.off;
     };
-    const shapes_bytes = lcgf.canvas.Instances.requiredBytes(4, 0, 1, .{});
+    const shapes_bytes = lcgf.canvas.Instances.requiredBytes(32, 0, 1, .{});
     const AppImage = @import("app.zig").Image;
     var dm_buf: [dm_bytes]u8 align(mem.column_align) = undefined;
     var list_buf: [list_bytes]u8 align(mem.column_align) = undefined;
@@ -180,6 +180,10 @@ pub const TestApp = struct {
     image: [1]AppImage = undefined,
     /// The canvas node's rect in the window, as the last frame laid it out.
     canvas_rect: [4]f32 = .{ 0, 0, 0, 0 },
+    /// Canvas labels, when the test gives them (`lcgf_app.Labels`): a label in the canvas
+    /// beside its square, made once.
+    labels: text.labels.Handle = .{},
+    labelled: bool = false,
     builds: u32 = 0,
     ready: bool = false,
 
@@ -196,6 +200,13 @@ pub const TestApp = struct {
         std.debug.assert(a.ready);
         a.builds += 1;
         f.ctx.enableCanvas(&a.rows);
+        if (a.labels.available() and !a.labelled) {
+            const o: text.labels.Label = .{ .origin = .{ 20, 30 }, .px = 15 };
+            _ = a.labels.label(&a.shapes, "R1 10k", o) catch
+                @panic("TestApp: no room for the label");
+            a.ranges = .{a.shapes.since(0)};
+            a.labelled = true;
+        }
         const root: lcgf.types.Style = .{
             .dir = .y,
             .size = .{ .fill, .fill },
@@ -247,13 +258,46 @@ pub const TestApp = struct {
         a.list = .init(&list_carver, 64, 16, 8);
         a.list.canvases = &a.canvases;
         var carver: mem.Carver = .{ .buf = &shapes_buf };
-        a.shapes = .init(&carver, 4, 0, 1, .{});
+        a.shapes = .init(&carver, 32, 0, 1, .{});
         _ = a.shapes.rect(.{ 0, 0 }, .{ 10, 10 }, .{});
         a.ranges = .{a.shapes.since(0)};
         a.palette = .{ .layers = &a.layers };
         a.ready = true;
     }
 };
+
+/// The canvas node of `app`, label and square, as the software back end draws it headless:
+/// every pixel of its rect in window `w` within 2 of it, at scale 1.
+// tidy: allow-fn(large-generic-function) a test helper over the X11 window, one instance
+pub fn expectCanvas(w: anytype, app: *const TestApp) !void {
+    const x11 = @import("x11");
+    const Buf = struct {
+        var px: [lcgf.render_sw.Framebuffer.len(200, 60)]u32 = undefined;
+    };
+    const r = app.canvas_rect;
+    var fb = lcgf.render_sw.Framebuffer.init(&Buf.px, 200, 60, .rgba8);
+    const atlas = &app.labels.labels.?.atlas;
+    const look: text.labels.CanvasLook = .{
+        .ground = TestApp.canvas_fill,
+        .palette = &app.palette,
+    };
+    text.labels.drawCanvas(&fb, &app.shapes, app.camera, atlas, look);
+    var bad: u32 = 0;
+    var lit: u32 = 0;
+    for (0..60) |y| for (0..200) |x| {
+        const want = fb.at(@intCast(x), @intCast(y));
+        const fx: f32 = @floatFromInt(x);
+        const fy: f32 = @floatFromInt(y);
+        const got = try x11.pixel(w, @intFromFloat(r[0] + fx), @intFromFloat(r[1] + fy));
+        lit += @intFromBool(want.r > 128);
+        const off = @abs(@as(i32, got.r) - want.r) > 2 or @abs(@as(i32, got.g) - want.g) > 2;
+        bad += @intFromBool(off);
+    };
+    errdefer std.debug.print("page canvas: {d} bad pixels, {d} lit\n", .{ bad, lit });
+    try testing.expectEqual(0, bad);
+    // The square's 100 pixels and the label's.
+    try testing.expect(lit > 150);
+}
 
 /// Pixel `dx`, `dy` from `box`'s corner of window `w`.
 pub fn pixelIn(w: anytype, box: [4]f32, dx: f32, dy: f32) !Color {
