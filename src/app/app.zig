@@ -1450,6 +1450,65 @@ const small_labels: Options = .{
     .labels = .{ .atlas = .{ 256, 112 }, .images = 64, .label_glyphs = 32 },
 };
 
+const bitmap_options: Options = .{
+    .fonts = &font_files,
+    .limits = .{ .nodes = 16, .texts = 4, .customs = 2 },
+    .text = font_options.text,
+};
+
+/// `BitmapApp` in software through `loop` with `options`' text: the service's when it has
+/// fonts, else the bundled font's.
+fn expectBitmapGlyphs(comptime options: Options, display: []const u8) !void {
+    const x11 = @import("x11");
+    const B = Buffers(options);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    const Shapes = lcgf.canvas.Instances;
+    const Rows = struct {
+        var bytes: [Shapes.requiredBytes(64, 1, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
+        var reference: [lcgf.render_sw.Framebuffer.len(300, 200)]u32 = undefined;
+    };
+    for ([_]f32{ 1, 2 }) |s| {
+        conn.overrideScale(s);
+        var pixels: std.ArrayList(u32) = .empty;
+        defer pixels.deinit(testing.allocator);
+        var w: x11.Window = undefined;
+        const bufs: x11.Window.Buffers = .{
+            .pixels = pixels.items,
+            .glyphs = &B.glyphs,
+            .first = &B.first,
+            .count = &B.count,
+        };
+        try w.open(conn, 300, 200, "lcgf app bitmap glyphs", bufs);
+        defer w.close();
+        var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+        var ctx = try context.Context.init(&B.ctx, limitsOf(options));
+        ctx.trackDamage();
+        ctx.enableCanvas(&B.canvas_rows);
+        const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+        const gpa = testing.allocator;
+        const files = options.fonts;
+        const o = textOptions(options);
+        var tw = try text.Window.open(&B.service, o, files, false, gpa, testing.io);
+        defer tw.close();
+        try testing.expectEqual(files.len != 0, tw.on());
+        var carver: lcgf.mem.Carver = .{ .buf = &Rows.bytes };
+        var shapes = Shapes.init(&carver, 64, 1, 1, .{});
+        var app: text.labels.BitmapApp = .{ .shapes = &shapes };
+        try loop(text.labels.BitmapApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+        try app.expectWindow(&w, x11.pixel, s, &Rows.reference);
+    }
+    try testing.expectEqual(@as(u32, 0), conn.errors);
+}
+
+test "app on X11: bitmap canvas glyphs sample the bundled font, with the service on or off" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    try expectBitmapGlyphs(bitmap_options, display);
+    try expectBitmapGlyphs(.{ .limits = bitmap_options.limits }, display);
+}
+
 test "app on X11: canvas labels in the font file draw as the reference at camera scales 1 and 4" {
     const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
         return error.SkipZigTest;

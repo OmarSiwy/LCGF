@@ -327,6 +327,8 @@ const testing = std.testing;
 const sw = lcgf.render_sw;
 const DrawList = lcgf.draw_list.DrawList;
 const Camera = canvas.Camera;
+const sw_font = lcgf.render_sw_font;
+const AppImage = @import("app.zig").Image;
 const Framebuffer = sw.Framebuffer;
 const Img = sw.Image;
 const text_mod = @import("text.zig");
@@ -496,6 +498,81 @@ pub const TestApp = struct {
         const l = &a.labels.labels.?.atlas;
         const img: sw.Image = .{ .alpha8 = l.pixels, .width = l.w, .height = l.h };
         Draw.node.drawAt(fb, a.shapes, a.camera(), img, .{ .scale = s, .ground = ground });
+    }
+};
+
+/// Test helper for lcgf_app's own tests: an App without labels that writes canvas glyphs in
+/// the bundled bitmap font (Schemify's labels), beside two images of its own and a line of
+/// text, which the text service draws when it is on. Its canvas must sample the bundled font.
+pub const BitmapApp = struct {
+    pub const ground: lcgf.types.Color = .rgb(20, 20, 24);
+    /// The canvas's height, logical pixels; the images and the text are under it.
+    pub const height = 40;
+    const palette: canvas.Palette = .{ .layers = &.{.of(.{ .stroke = .white })} };
+    const lines = [_][]const u8{ "4-bit INVERTER BUFFER", "IN" };
+    shapes: *Instances,
+    texels: [2][4]u32 = .{ @splat(0xff0000ff), @splat(0xffff0000) },
+    list: [2]AppImage = undefined,
+    ranges: [1]Range = undefined,
+
+    pub fn images(a: *BitmapApp) []const AppImage {
+        a.list = .{
+            .{ .pixels = &a.texels[0], .size = .{ 2, 2 } },
+            .{ .pixels = &a.texels[1], .size = .{ 2, 2 } },
+        };
+        return &a.list;
+    }
+
+    pub fn build(a: *BitmapApp, f: *lcgf.frame.Frame, _: *const lcgf.shell_iface.Events) void {
+        std.debug.assert(a.shapes.cap >= 32);
+        if (a.shapes.len == 0) for (lines, 0..) |line, k| {
+            _ = a.shapes.glyphs(line, .{ 0, @intCast(k * 2000) }, .{ .px = 13 * per_px });
+        };
+        a.ranges = .{a.shapes.since(0)};
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ground });
+        const o: lcgf.frame.CanvasOptions = .{
+            .camera = camera,
+            .palette = &palette,
+            .ranges = &a.ranges,
+        };
+        _ = f.canvas(.from("bitmap"), .{ .size = .{ .fill, .px(height) } }, a.shapes, o);
+        for (0..2) |k| _ = f.leaf(.none, .{
+            .float = true,
+            .offset = .{ @floatFromInt(10 + 30 * k), height + 10 },
+            .size = .{ .px(20), .px(20) },
+            .fill = .white,
+            .texture = @fromBackingInt(@as(u16, @intCast(k + 1))),
+        });
+        const line: lcgf.types.Style = .{ .float = true, .offset = .{ 80, height + 8 } };
+        _ = f.textStyled("Wave office", .{ .px = 15, .color = .white }, line);
+        f.close();
+    }
+
+    const camera: Camera = .{ .scale = 1.0 / @as(f32, per_px), .offset = .{ 4, 4 } };
+
+    /// Every pixel of the canvas in window `w` (read by `pixel(w, x, y)`) within 2 of the same
+    /// rows drawn by the software back end from the bundled font, at window scale `s`.
+    // tidy: allow-fn(large-generic-function) a test helper over the X11 window, one instance
+    pub fn expectWindow(a: *const BitmapApp, w: anytype, pixel: anytype, s: f32, buf: []u32) !void {
+        const rows: u32 = @intFromFloat(height * s);
+        var fb = sw.Framebuffer.init(buf, w.width, rows, .rgba8);
+        const Draw = struct {
+            var node: Node = .{};
+        };
+        Draw.node.drawAt(&fb, a.shapes, camera, sw_font.image, .{ .scale = s, .ground = ground });
+        var bad: u32 = 0;
+        var ink: u32 = 0;
+        for (0..rows) |y| for (0..w.width) |x| {
+            const want = fb.at(@intCast(x), @intCast(y));
+            const got = try pixel(w, @intCast(x), @intCast(y));
+            ink += @intFromBool(want.r > 128);
+            const off = @abs(@as(i32, got.r) - want.r) > 2 or @abs(@as(i32, got.b) - want.b) > 2;
+            bad += @intFromBool(off);
+        };
+        const at = .{ s, bad, ink };
+        errdefer std.debug.print("bitmap glyphs at scale {d}: {d} bad pixels, {d} inked\n", at);
+        try testing.expectEqual(0, bad);
+        try testing.expect(ink > 50);
     }
 };
 

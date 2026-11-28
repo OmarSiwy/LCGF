@@ -1274,6 +1274,30 @@ test "gpu page: a canvas label in a composed page's region draws as the referenc
     try page.expectPageText(&fx.w, &app, &fx.tw.text.?);
 }
 
+test "gpu canvas: bitmap canvas glyphs sample the bundled font beside the service's text" {
+    for ([_][]const text.File{ &Fixture.face, &.{} }) |files| {
+        var fx: Fixture = undefined;
+        try fx.openWith(try displayOrSkip(), 300, 200, files);
+        defer fx.close();
+        try testing.expectEqual(files.len != 0, fx.tw.on());
+        const Shapes = lcgf.canvas.Instances;
+        const Rows = struct {
+            const n = Shapes.requiredBytes(64, 1, 1, .{});
+            var bytes: [n]u8 align(lcgf.mem.column_align) = undefined;
+            var reference: [lcgf.render_sw.Framebuffer.len(300, 200)]u32 = undefined;
+        };
+        var carver: lcgf.mem.Carver = .{ .buf = &Rows.bytes };
+        var shapes = Shapes.init(&carver, 64, 1, 1, .{});
+        var app: text.labels.BitmapApp = .{ .shapes = &shapes };
+        for ([_]f32{ 1, 2 }) |s| {
+            fx.conn.overrideScale(s);
+            fx.ctx.waker.post();
+            try fx.run(&app, seconds(0.3));
+            try app.expectWindow(&fx.w, x11.pixel, s, &Rows.reference);
+        }
+    }
+}
+
 /// A canvas with a half-transparent line, and a box beside it that `lit` turns white.
 const CanvasApp = struct {
     shapes: *const lcgf.canvas.Instances,
