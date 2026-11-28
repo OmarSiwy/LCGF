@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### New
+
+- Test an application without a window: the `lcgf_replay` module (`dep.module("lcgf_replay")`, src/example/replay.zig) plays a recording into an `App` through the headless shell and gives its tree, draw list and software-rendered pixels; an App's `images` are bound as the window binds them. Every example's `zig build test` uses it.
+
+### Changed
+
+- The desktop examples are packages on `lcgf_app`, written as an application is: `main` calls `lcgf_app.run`, build.zig calls `lcgf.addApp` with the render back end left at its default. dashboard draws its charts with `Frame.canvas`; viewport's sphere is a `Surface` drawn by a WGSL shader, and a CPU-shaded `lcgf_app.Image` in the software window; texture gives its inner UI as an `lcgf_app.Image`. `ci/run.sh examples` builds and tests each package, `examples-x11` runs each window on the GPU and in software. [Examples](examples/README.md)
+- `zig build examples` tests the microcontroller demo and links it for a Cortex-M7; it no longer builds `example-<name>` X11 programs.
+- The window-resize comparison (bench/vs/window-resize) runs LCGF through `lcgf_app`'s X11 software window, where it ran on the example host.
+
+### Removed
+
+- The software-only example host (src/example/host.zig: `Smoke`, the `under`, `drawCustom`, `images`, `glyphs` and `textImages` hooks, `Incremental`), its X11 runner (src/example/window.zig) and `buildDesktopExample`. An application copied from an example: build it with `lcgf.addApp` and run it with `lcgf_app.run`; draw what a hook drew with a `Surface`, `Frame.canvas` or an `lcgf_app.Image` (docs/guide/surface.md).
+
 ## 0.2.0 — 2026-11-27
 
 The first tagged release: [v0.2.0](https://github.com/OmarSiwy/LCGF/releases/tag/v0.2.0).

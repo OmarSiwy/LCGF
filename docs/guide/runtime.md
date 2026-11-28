@@ -198,7 +198,8 @@ target, .optimize = optimize })` gives the executable the `lcgf_app` module with
 target needs, in your package as in LCGF's own. examples/app is a whole application as a
 package of its own: its build.zig takes LCGF as a dependency with the back end left at its
 default and calls `addApp`. From the checkout root, `zig build app-example
--Dtarget=x86_64-windows` builds it for Windows from anywhere. The web, Android and iOS start an
+-Dtarget=x86_64-windows` builds it for Windows from anywhere. Every desktop example in
+[examples/](../../examples/README.md) is written the same way. The web, Android and iOS start an
 application their own way: see their shells' examples.
 
 Leave `-Drender` at its default for an application. `-Drender=sw` is for microcontrollers,
@@ -265,6 +266,21 @@ So a test that runs a program on an Xvfb sets `DISPLAY` to it and unsets `WAYLAN
 WAYLAND_DISPLAY= LCGF_APP_SECONDS=1 zig-out/bin/app-example`. `LCGF_APP_SECONDS` closes the
 window after that many seconds and `run` returns; without it, or if it is not a number, the
 window stays open until it is closed.
+
+### Testing it without a window
+
+The `App` you give `run` is a plain struct, so a test drives it with no window at all. The
+`lcgf_replay` module (`dep.module("lcgf_replay")`, src/example/replay.zig) plays a recording
+(`input.Replay`: `frame`, `viewport 800 600`, `pointer x y`, `buttons left`, `text abc`) into
+it through the headless shell (src/shell/headless.zig): `replay.run(&app, recording)` builds
+each frame the context asks for, draws it with the software back end into an 800 x 600
+framebuffer, and returns where each node was laid out (`rect(id)`), the last draw list
+(`out`) and the pixels (`at(x, y)`). `replay.clicks` writes a recording that clicks points in
+turn. Text is drawn as solid cells of its colour, a canvas as it is, and the App's `images` as
+the window draws them; a `Surface` is never live there, so the test sees the software
+window's path. Each example's build.zig adds it to the executable's module and tests that
+module: `exe.root_module.addImport("lcgf_replay", dep.module("lcgf_replay"))`, then
+`b.addTest(.{ .root_module = exe.root_module })`.
 
 ## A widget of your own
 

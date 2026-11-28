@@ -88,7 +88,7 @@ const background: lcgf.types.Color = .rgb(0, 0, 0);
 var gpu: ?rweb.webgpu.Renderer = null;
 var queue: u32 = 0;
 
-/// The bundled font (DejaVu Sans Mono in `Mono.atlas`'s 16 x 16 byte grid, the example host's
+/// The bundled font (DejaVu Sans Mono in `Mono.atlas`'s 16 x 16 byte grid, src/example/font/'s
 /// glyphs repacked: render_sw_font), which the glyph quads `font.quads` makes sample. The 2D
 /// canvas binds it as image 1; WebGPU as a texture the page uploads (`lcgf_font_rgba`).
 const font_image = lcgf.render_sw_font.image;
