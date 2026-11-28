@@ -114,7 +114,8 @@ pub fn RendererOver(comptime Encoder: type, comptime with_canvas: bool) type {
         canvas: if (canvases) ?Canvas else void = if (canvases) null else {},
         list: ?*const DrawList = null,
 
-        pub const max_textures = 64;
+        /// lcgf_app's GPU window registers 84 (src/app/gpu.zig `handles`).
+        pub const max_textures = 128;
         /// Metal uploads by writing shared memory: nothing to pass.
         pub const Queue = void;
         /// The render command encoder of the host's pass (`mtl.RenderEncoder.id` is the raw
