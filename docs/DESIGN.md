@@ -158,6 +158,29 @@ output), text runs, `canvas` batches (LCGF's own instanced primitives under a ca
   resident and GPU memory, start-up, vendors, and presenting. docs/research/gompute.md has the
   numbers; Vulkan compute covers the offscreen effects it was meant for.
 
+### An application's own drawing: three layers
+
+Qt Quick, GTK 4, egui, Dear ImGui, iced, Slint, LVGL and the web platform each give an
+application three ways to draw what their widgets cannot, and LCGF gives the same three:
+
+| Need | Mechanism | LCGF's job | The application's job |
+|---|---|---|---|
+| Raw GPU drawing | `Surface` (`Frame.custom` for a host that owns its loop) | the texture, its place in paint order, independent redraw | passes, pipelines, WGSL |
+| 2D drawing identical on every back end, software included | `Frame.canvas`: a batch command in the `DrawList` | the shader, its software twin, parity goldens | fill the columns, own the camera |
+| No GPU at all | `lcgf_app.Image`: CPU pixels, filled with `src/draw/paths.zig` or the application's own code | show it and damage it | rasterize |
+
+LCGF owns the second layer because application code names no back end only if the
+application's 2D content is in the `DrawList`: anything drawn outside it is drawn with some back
+end's API. So the canvas is one WGSL source (`src/render/shaders/canvas.wgsl`) and a Zig twin in
+the software back end (`src/render/sw/canvas.zig`), held to the same pixels by the `canvas` and
+`labels` goldens. A new canvas kind lands only with its software twin and a golden.
+
+`Surface` has no software fallback. Its pixels are defined by the application's shaders and
+pipeline state, so running them takes an implementation of the GPU API and a shader compiler,
+which is what a software driver (lavapipe, WARP) is. No framework ships one, and WebGPU makes a
+fallback adapter optional. Where a software Vulkan driver is installed, a surface runs on it
+unchanged.
+
 ## Code standard: which "clean code" rules apply
 
 Adopted: names that say what a thing is for; functions that name one step of a pass; tests next to
