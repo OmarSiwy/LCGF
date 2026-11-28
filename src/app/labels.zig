@@ -27,6 +27,10 @@
 //!     pub fn label(l: *Labels, t: *const Text, s: *Instances, str: []const u8, o: Label)
 //!         Error!Range
 //!   pub const Error = error{ Full, NoSpace }
+//!   pub const Handle = struct
+//!     pub fn label(h: Handle, s: *Instances, str: []const u8, o: Label) LabelError!Range
+//!     pub fn generation(h: Handle) u32
+//!     pub fn available(h: Handle) bool
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -227,6 +231,41 @@ pub const Labels = struct {
     }
 };
 
+/// What an application holds to make labels in its window's fonts: the window's text
+/// service and label atlas, which `lcgf_app.run` gives an App with a field
+/// `labels: lcgf_app.Labels` before its first `build`, and which the window draws canvas
+/// glyphs from. Empty when the window draws the bitmap font: `label` then fails with
+/// `error.Unavailable`, and bitmap canvas labels (`Instances.glyphs`) draw as before.
+///
+/// Make a label once and keep its rows while `generation` stays what it was when it was made.
+/// When the atlas fills, `label` fails with `error.Full` and `generation` moves on: the rows
+/// of every label made before sample texels that are gone, so make all of them again (the
+/// call that failed too). Nothing else (a pan, a zoom, a new window scale) asks for that.
+pub const Handle = struct {
+    text: ?*const Text = null,
+    labels: ?*Labels = null,
+
+    pub const LabelError = Error || error{Unavailable};
+
+    /// `Labels.label` in the window's faces and atlas.
+    pub fn label(h: Handle, s: *Instances, str: []const u8, o: Label) LabelError!Range {
+        const t = h.text orelse return error.Unavailable;
+        const l = h.labels orelse return error.Unavailable;
+        std.debug.assert(t.face_len > 0);
+        return l.label(t, s, str, o);
+    }
+
+    /// The atlas's generation: a label made at another one is stale. 0 without an atlas.
+    pub fn generation(h: Handle) u32 {
+        return if (h.labels) |l| l.generation else 0;
+    }
+
+    /// Whether labels in real fonts can be made: the window draws with the text service.
+    pub fn available(h: Handle) bool {
+        return h.labels != null;
+    }
+};
+
 /// Where a distance image is in the atlas and its box from the pen at the em (`sdf.box`).
 const Slot = struct { x: u16 = 0, y: u16 = 0, w: u16 = 0, h: u16 = 0, left: i16 = 0, top: i16 = 0 };
 
@@ -287,6 +326,9 @@ fn carve(c: *mem.Carver, o: Options) Labels {
 const testing = std.testing;
 const sw = lcgf.render_sw;
 const DrawList = lcgf.draw_list.DrawList;
+const Camera = canvas.Camera;
+const Framebuffer = sw.Framebuffer;
+const Img = sw.Image;
 const text_mod = @import("text.zig");
 
 const scales = [_]f32{ 0.5, 1, 2, 4, 8 };
@@ -294,8 +336,8 @@ const scales = [_]f32{ 0.5, 1, 2, 4, 8 };
 const per_px = 100;
 const words = "R1 10k Vout";
 
-/// One canvas node over `w` x `h` pixels drawing `shapes` under `cam`, white on black, by the
-/// software back end; `atlas` is the distance atlas.
+/// One canvas node over all of `fb` drawing `shapes` under `cam`, white over `ground`, by the
+/// software back end at `scale` physical pixels per logical one; `atlas` is the distance atlas.
 const Node = struct {
     list_buf: [list_bytes]u8 align(mem.column_align) = undefined,
     rows: [1]lcgf.draw_list.CanvasDraw = undefined,
@@ -308,27 +350,124 @@ const Node = struct {
     };
     const palette: canvas.Palette = .{ .layers = &.{.of(.{ .stroke = .white })} };
 
-    fn draw(
-        n: *Node,
-        fb: *sw.Framebuffer,
-        s: *const Instances,
-        cam: canvas.Camera,
-        img: sw.Image,
-    ) void {
+    fn draw(n: *Node, fb: *sw.Framebuffer, s: *const Instances, cam: Camera, img: sw.Image) void {
+        n.drawAt(fb, s, cam, img, .{ .scale = 1, .ground = .black });
+    }
+
+    const At = struct { scale: f32, ground: lcgf.types.Color };
+
+    fn drawAt(n: *Node, fb: *Framebuffer, s: *const Instances, c: Camera, i: Img, at: At) void {
+        std.debug.assert(at.scale > 0);
         var a: mem.Carver = .{ .buf = &n.list_buf };
         n.list = DrawList.init(&a, 1, 1, 1);
-        const r: [4]f32 = .{ 0, 0, @floatFromInt(fb.width), @floatFromInt(fb.height) };
+        const w = @as(f32, @floatFromInt(fb.width)) / at.scale;
+        const h = @as(f32, @floatFromInt(fb.height)) / at.scale;
+        const r: [4]f32 = .{ 0, 0, w, h };
         n.list.customs[0] = .{ .rect = r, .clip = r, .data = 0, .id = 0, .node = 0 };
         n.list.custom_len = 1;
         n.all = .{s.since(0)};
-        n.rows = .{.{ .instances = s, .camera = cam, .ranges = &n.all, .palette = &palette }};
+        n.rows = .{.{ .instances = s, .camera = c, .ranges = &n.all, .palette = &palette }};
         n.list.canvases = &n.rows;
         n.list.cmd.kind[0] = @backingInt(DrawList.Kind.canvas);
         n.list.cmd.first[0] = 0;
         n.list.cmd.count[0] = 1;
         n.list.cmd_len = 1;
-        fb.clear(.black);
-        sw.canvas.draw(.{ .fb = fb, .scissor = fb.all() }, &n.list, 0, 1, img);
+        fb.clear(at.ground);
+        sw.canvas.draw(.{ .fb = fb, .scissor = fb.all() }, &n.list, 0, at.scale, i);
+    }
+};
+
+/// Test helper for lcgf_app's own tests (app.zig, gpu.zig): an App whose window is one canvas
+/// of labels in the test face, made once and made again only when `words` change or the
+/// atlas starts again (`Handle.generation`).
+pub const TestApp = struct {
+    pub const ground: lcgf.types.Color = .rgb(20, 20, 24);
+    const palette: canvas.Palette = .{ .layers = &.{.of(.{ .stroke = .white })} };
+    labels: Handle = .{},
+    shapes: *Instances,
+    words: []const []const u8,
+    /// Camera scale, and pixels the camera has moved right.
+    zoom: f32 = 1,
+    pan: f32 = 0,
+    /// The generation and words the labels were made at; how often they were made and how
+    /// often an atlas filled while making them.
+    made: ?u32 = null,
+    made_words: []const []const u8 = &.{},
+    remakes: u32 = 0,
+    fulls: u32 = 0,
+    /// Read when the frame is drawn, after `build`.
+    ranges: [1]Range = undefined,
+
+    pub fn build(a: *TestApp, f: *lcgf.frame.Frame, _: *const lcgf.shell_iface.Events) void {
+        if (a.made != a.labels.generation() or a.made_words.ptr != a.words.ptr) a.remake();
+        a.ranges = .{a.shapes.since(0)};
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ground });
+        const o: lcgf.frame.CanvasOptions = .{
+            .camera = a.camera(),
+            .palette = &palette,
+            .ranges = &a.ranges,
+        };
+        _ = f.canvas(.from("labels"), .{ .size = .{ .fill, .fill } }, a.shapes, o);
+        f.close();
+    }
+
+    pub fn camera(a: *const TestApp) canvas.Camera {
+        return .{ .scale = a.zoom / per_px, .offset = .{ 4 - a.pan, 4 + 13 * a.zoom } };
+    }
+
+    /// Every word a label, one under the other: when the atlas fills, all of them again in
+    /// the new one.
+    fn remake(a: *TestApp) void {
+        std.debug.assert(a.labels.available());
+        a.remakes += 1;
+        var fulls: u32 = 0;
+        for (0..2) |_| {
+            a.shapes.reset();
+            const done = for (a.words, 0..) |w, k| {
+                const o: Label = .{ .origin = .{ 0, @intCast(k * 2000) }, .px = 13 * per_px };
+                _ = a.labels.label(a.shapes, w, o) catch |e| switch (e) {
+                    error.Full => break false,
+                    else => @panic("labels: no room for the test's rows"),
+                };
+            } else true;
+            if (done) break;
+            fulls += 1;
+        }
+        a.fulls += fulls;
+        a.made = a.labels.generation();
+        a.made_words = a.words;
+    }
+
+    /// Every pixel of window `w` (read by `pixel(w, x, y)`) within 2 of `reference` at window
+    /// scale `s`, drawn into `pixels`.
+    // tidy: allow-fn(large-generic-function) a test helper over the X11 window, one instance
+    pub fn expectWindow(a: *const TestApp, w: anytype, pixel: anytype, s: f32, buf: []u32) !void {
+        var fb = sw.Framebuffer.init(buf, w.width, w.height, .rgba8);
+        a.reference(&fb, s);
+        var bad: u32 = 0;
+        var ink: u32 = 0;
+        for (0..w.height) |y| for (0..w.width) |x| {
+            const want = fb.at(@intCast(x), @intCast(y));
+            const got = try pixel(w, @intCast(x), @intCast(y));
+            ink += @intFromBool(want.r > 128);
+            const off = @abs(@as(i32, got.r) - want.r) > 2 or @abs(@as(i32, got.b) - want.b) > 2;
+            bad += @intFromBool(off);
+        };
+        const at = .{ s, a.zoom, bad, ink };
+        errdefer std.debug.print("labels at scale {d}, zoom {d}: {d} bad pixels, {d} inked\n", at);
+        try testing.expectEqual(0, bad);
+        try testing.expect(ink > 50);
+    }
+
+    /// What the window shows at window scale `s`: the canvas drawn headless by the software
+    /// back end from the same rows and atlas.
+    pub fn reference(a: *const TestApp, fb: *sw.Framebuffer, s: f32) void {
+        const Draw = struct {
+            var node: Node = .{};
+        };
+        const l = &a.labels.labels.?.atlas;
+        const img: sw.Image = .{ .alpha8 = l.pixels, .width = l.w, .height = l.h };
+        Draw.node.drawAt(fb, a.shapes, a.camera(), img, .{ .scale = s, .ground = ground });
     }
 };
 

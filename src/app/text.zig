@@ -112,6 +112,10 @@ pub const Frame = struct {
     /// Moves on when the atlas started again empty: no texel or quad of an earlier frame is
     /// valid. The same generation and the same draw list give the same quads.
     generation: u32,
+    /// The window's canvas label atlas (`Window.labels`), what `Glyphs.canvas` names, and its
+    /// region changed since the last frame (all of it at first); null without labels.
+    labels: ?*const Atlas = null,
+    labels_dirty: ?Atlas.Upload = null,
 };
 
 /// The rows behind a run of a draw list: of one front end's frame, or of one side of a list
@@ -650,6 +654,10 @@ pub const Window = struct {
     io: Io,
     /// The generation of the last frame's glyphs.
     generation: ?u32 = null,
+    /// The canvas label atlas, set by `lcgf_app.run` for an App with labels, and the
+    /// generation of the last frame's.
+    labels: ?*labels.Labels = null,
+    label_generation: u32 = 0,
 
     /// The service over `buf` (`Text.requiredBytes(o)`) with `files`, else, when `discover`
     /// and the build can, the system's default faces. Fails when a file is not a face this
@@ -718,6 +726,14 @@ pub const Window = struct {
         const frame = t.glyphsOf(d, sides, scale);
         var again = if (w.generation) |g| g != frame.generation else false;
         w.generation = frame.generation;
+        var placed = frame;
+        if (w.labels) |l| {
+            placed.labels = &l.atlas;
+            placed.labels_dirty = l.atlas.takeDirty();
+            // A new label atlas: canvases with labels not yet made again sample nothing.
+            again = again or l.generation != w.label_generation;
+            w.label_generation = l.generation;
+        }
         if (can_discover) if (w.discovery) |*found| {
             again = again or (t.cover(w.gpa, w.io, found, d.strings) catch 0) > 0;
         };
@@ -725,7 +741,7 @@ pub const Window = struct {
             ctx.redrawAll();
             ctx.waker.post();
         }
-        return frame;
+        return placed;
     }
 };
 

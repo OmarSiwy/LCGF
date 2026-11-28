@@ -26,7 +26,30 @@
 //! else, and on macOS, with the bundled bitmap font (`render_sw.font`, DejaVu Sans Mono under
 //! its own licence: ship src/example/font/LICENSE.txt with the program). An `App` with
 //! `pub fn images(*App) []const Image` gives the UI its images: `Style.texture` k + 1 is
-//! image k. The software shells keep last frame's pixels and redraw only what changed
+//! image k. `Frame.canvas` draws a canvas; an App with a field `labels: Labels` gets, before
+//! its first `build`, what makes canvas labels in the window's fonts, sharp at any zoom
+//! (src/app/labels.zig), and the window draws its canvas glyphs from their atlas:
+//!
+//!     labels: lcgf_app.Labels = .{},
+//!     made: ?u32 = null, // the label atlas's generation the labels were made at
+//!     fn makeLabels(app: *App) void { // when the document changes, or `made` is stale
+//!         app.shapes.reset(); // or only the label rows
+//!         for (app.nets) |n| {
+//!             const o: lcgf_app.text.labels.Label = .{ .origin = n.at, .px = 1270 };
+//!             _ = app.labels.label(&app.shapes, n.name, o) catch |e| switch (e) {
+//!                 // A new atlas: `generation` moved on, the next frame makes all again.
+//!                 error.Full => return,
+//!                 error.Unavailable => {}, // the bitmap font: `Instances.glyphs`
+//!                 error.NoSpace => {}, // more rows than `shapes` holds
+//!             };
+//!         }
+//!         app.made = app.labels.generation();
+//!     }
+//!     // in build: if (app.made != app.labels.generation()) app.makeLabels();
+//!
+//! A pan, a zoom or a new window scale makes no label again. Without the field, or without
+//! fonts, nothing is carved and canvas glyphs sample the bundled font's cells. The software
+//! shells keep last frame's pixels and redraw only what changed
 //! (`Context.trackDamage`). The buffers are static: nothing is allocated but X11's pixels,
 //! which follow the window's size.
 //! `LCGF_APP_SECONDS` in the environment closes the window after that many seconds (a test on
@@ -46,6 +69,9 @@ const Event = lcgf.input.Input.Event;
 /// The window's text: real fonts at the window's scale (src/app/text.zig).
 pub const text = @import("text.zig");
 const TextService = text.Text;
+/// Canvas labels in the window's fonts, for an App with a field `labels: Labels`, which `run`
+/// fills before the first `build` (src/app/labels.zig `Handle`).
+pub const Labels = text.labels.Handle;
 const render = @import("render_options").render;
 /// Whether this build draws the window with a GPU: Vulkan over X11 on Linux (src/app/gpu.zig).
 pub const has_gpu = builtin.os.tag == .linux and render == .vk;
@@ -100,6 +126,9 @@ pub const Options = struct {
     fonts: []const text.File = &.{},
     /// The text service's capacities; its `texts` are `limits.texts`.
     text: text.Options = .{ .quads = 4096 },
+    /// The canvas label atlas's capacities, carved only for an App with a `labels` field in a
+    /// window that draws with the text service.
+    labels: text.labels.Options = .{},
 };
 
 /// Opens a window titled `options.title` and runs `app` in it until the window is closed.
@@ -155,6 +184,8 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     const TextWindow = text.WindowOf(serves(options));
     var tw = try TextWindow.open(&B.service, textOptions(options), fonts, !mac, init.gpa, init.io);
     defer tw.close();
+    ctx.enableCanvas(&B.canvas_rows);
+    openLabels(App, app, options, &tw);
     if (has_gpu) switch (try runGpu(App, app, gpuEnv(init), options, clock, &ctx, &tw)) {
         .done => return,
         .software => if (composing) ctx.trackDamageWhole() else ctx.trackDamage(),
@@ -358,6 +389,25 @@ fn serves(comptime options: Options) bool {
     return builtin.os.tag != .macos and (options.fonts.len > 0 or text.can_discover);
 }
 
+/// An App with a field `labels: Labels` gets the window's text service and a label atlas sized
+/// by `options.labels`, which the window then draws canvas glyphs from, when its text is the
+/// service's; else the field stays empty and canvas glyphs sample the bundled font. An App
+/// without the field carves nothing.
+fn openLabels(comptime App: type, app: *App, comptime options: Options, tw: anytype) void {
+    if (comptime !(@hasField(App, "labels") and serves(options))) return;
+    std.debug.assert(tw.labels == null);
+    comptime std.debug.assert(@FieldType(App, "labels") == Labels);
+    if (!tw.on()) return;
+    const L = struct {
+        const n = text.labels.Labels.requiredBytes(options.labels);
+        var bytes: [n]u8 align(lcgf.mem.column_align) = undefined;
+        var atlas: text.labels.Labels = undefined;
+    };
+    L.atlas = .init(&L.bytes, options.labels);
+    tw.labels = &L.atlas;
+    app.labels = .{ .text = &tw.text.?, .labels = &L.atlas };
+}
+
 /// `options.text` for the frame's runs.
 fn textOptions(comptime options: Options) text.Options {
     var o = options.text;
@@ -372,10 +422,12 @@ const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
 /// bundled font, and the text service's atlas when it draws the text. Remembers the images'
 /// generations, to tell when they change.
 const Textures = struct {
-    rows: [images_max + 3]sw.Image = undefined,
+    rows: [images_max + 4]sw.Image = undefined,
     generations: [images_max]u32 = undefined,
     len: u32 = 0,
     known: bool = false,
+    /// The last `service` frame had a canvas label atlas: the row after the text's.
+    labels: bool = false,
 
     /// The rows for `images`. `changed` is set when an image differs from the last call's
     /// (its generation, or how many there are), never on the first call.
@@ -432,6 +484,7 @@ const Textures = struct {
         images: []const Image,
         placed: text.Frame,
     ) lcgf.render_iface.Glyphs {
+        std.debug.assert(placed.glyphs.first.len == placed.glyphs.count.len);
         var changed = false;
         const rows = t.update(images, &changed);
         if (changed) {
@@ -443,12 +496,18 @@ const Textures = struct {
         var g = placed.glyphs;
         g.texture = @fromBackingInt(@as(u16, @intCast(rows.len)));
         g.canvas = @fromBackingInt(@as(u16, @intCast(rows.len - 1)));
+        t.labels = placed.labels != null;
+        if (placed.labels) |l| {
+            t.rows[rows.len + 1] = .{ .alpha8 = l.pixels, .width = l.w, .height = l.h };
+            g.canvas = @fromBackingInt(@as(u16, @intCast(rows.len + 1)));
+        }
         return g;
     }
 
     /// The rows the last `frame` or `service` gave the renderer.
     fn shown(t: *const Textures, service_on: bool) []const sw.Image {
-        return t.rows[0 .. t.len + 2 + @intFromBool(service_on)];
+        const atlases = @as(u32, @intFromBool(service_on)) + @intFromBool(service_on and t.labels);
+        return t.rows[0 .. t.len + 2 + atlases];
     }
 };
 
@@ -474,6 +533,7 @@ fn Buffers(comptime options: Options) type {
         var win32_pixels: [if (builtin.os.tag == .windows) lcgf.render_sw.Framebuffer.len(2560, 1600) else 0]u32 = undefined;
         var x11_conn: if (builtin.os.tag == .linux) @import("x11").Connection else void = if (builtin.os.tag == .linux) .{} else {};
         var gpu_window: if (has_gpu) gpu_app.Window else void = undefined;
+        var canvas_rows: [2 * limits.customs]lcgf.draw_list.CanvasDraw = undefined;
     };
 }
 
@@ -503,6 +563,7 @@ fn loop(
     glyphs: Glyphs,
     tw: anytype,
 ) !void {
+    std.debug.assert(glyphs.first.len == glyphs.count.len);
     const follows = @hasField(App, "theme") and @FieldType(App, "theme") == lcgf.widgets_base.Theme;
     var styled: ?lcgf.input.Input.Appearance = null;
     var textures: Textures = .{};
@@ -1021,4 +1082,129 @@ test "app on X11: a composed page in the bundled font draws both sides' text as 
         try testing.expect(lit > 4);
         try testing.expect(lit < all / 2);
     }
+}
+
+const label_options: Options = .{
+    .fonts = &font_files,
+    .limits = .{ .nodes = 16, .texts = 4, .customs = 2 },
+    .text = font_options.text,
+    .labels = .{ .atlas = .{ 256, 128 }, .images = 64, .label_glyphs = 32 },
+};
+/// "R1 10k Vout" and "GND" take 88 of its 112 rows: twelve more glyphs do not fit beside them.
+const small_labels: Options = .{
+    .fonts = &font_files,
+    .limits = label_options.limits,
+    .text = font_options.text,
+    .labels = .{ .atlas = .{ 256, 112 }, .images = 64, .label_glyphs = 32 },
+};
+
+test "app on X11: canvas labels in the font file draw as the reference at camera scales 1 and 4" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const B = Buffers(label_options);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    const Shapes = lcgf.canvas.Instances;
+    const Rows = struct {
+        var bytes: [Shapes.requiredBytes(64, 1, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
+        var reference: [lcgf.render_sw.Framebuffer.len(200, 100)]u32 = undefined;
+    };
+    for ([_]f32{ 1, 2 }) |s| {
+        conn.overrideScale(s);
+        var pixels: std.ArrayList(u32) = .empty;
+        defer pixels.deinit(testing.allocator);
+        var w: x11.Window = undefined;
+        const bufs: x11.Window.Buffers = .{
+            .pixels = pixels.items,
+            .glyphs = &B.glyphs,
+            .first = &B.first,
+            .count = &B.count,
+        };
+        try w.open(conn, 200, 100, "lcgf app labels", bufs);
+        defer w.close();
+        var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+        var ctx = try context.Context.init(&B.ctx, limitsOf(label_options));
+        ctx.trackDamage();
+        ctx.enableCanvas(&B.canvas_rows);
+        const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+        const gpa = testing.allocator;
+        const o = textOptions(label_options);
+        var tw = try text.Window.open(&B.service, o, &font_files, false, gpa, testing.io);
+        defer tw.close();
+        var carver: lcgf.mem.Carver = .{ .buf = &Rows.bytes };
+        var shapes = Shapes.init(&carver, 64, 1, 1, .{});
+        var app: text.labels.TestApp = .{ .shapes = &shapes, .words = &.{ "R1 10k Vout", "GND" } };
+        openLabels(text.labels.TestApp, &app, label_options, &tw);
+        try testing.expect(app.labels.available());
+        for ([_]f32{ 1, 4 }) |zoom| {
+            app.zoom = zoom;
+            ctx.waker.post();
+            try loop(text.labels.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+            try app.expectWindow(&w, x11.pixel, s, &Rows.reference);
+        }
+        try testing.expectEqual(1, app.remakes);
+        // A pan: no label is made again, no texel of the atlas changes.
+        const images = tw.labels.?.image_len;
+        app.pan = 30;
+        ctx.waker.post();
+        try loop(text.labels.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+        try app.expectWindow(&w, x11.pixel, s, &Rows.reference);
+        try testing.expectEqual(1, app.remakes);
+        try testing.expectEqual(images, tw.labels.?.image_len);
+    }
+    try testing.expectEqual(@as(u32, 0), conn.errors);
+}
+
+test "app on X11: a full label atlas is reported, and the labels made again draw" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const B = Buffers(small_labels);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    conn.overrideScale(1);
+    const Shapes = lcgf.canvas.Instances;
+    const Rows = struct {
+        var bytes: [Shapes.requiredBytes(64, 1, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
+        var reference: [lcgf.render_sw.Framebuffer.len(200, 100)]u32 = undefined;
+    };
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(testing.allocator);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, 200, 100, "lcgf app labels", bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+    var ctx = try context.Context.init(&B.ctx, limitsOf(small_labels));
+    ctx.trackDamage();
+    ctx.enableCanvas(&B.canvas_rows);
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const gpa = testing.allocator;
+    const o = textOptions(small_labels);
+    var tw = try text.Window.open(&B.service, o, &font_files, false, gpa, testing.io);
+    defer tw.close();
+    var carver: lcgf.mem.Carver = .{ .buf = &Rows.bytes };
+    var shapes = Shapes.init(&carver, 64, 1, 1, .{});
+    var app: text.labels.TestApp = .{ .shapes = &shapes, .words = &.{ "R1 10k Vout", "GND" } };
+    openLabels(text.labels.TestApp, &app, small_labels, &tw);
+    try loop(text.labels.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(0, app.fulls);
+    const first = app.labels.generation();
+    // Other words: their glyphs do not fit beside the first ones, so the atlas starts again
+    // and the call fails; the app makes them again in the new atlas.
+    app.words = &.{ "Qwerty pzx", "JMW" };
+    ctx.waker.post();
+    try loop(text.labels.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(1, app.fulls);
+    try testing.expect(app.labels.generation() != first);
+    try app.expectWindow(&w, x11.pixel, 1, &Rows.reference);
+    try testing.expectEqual(@as(u32, 0), conn.errors);
 }

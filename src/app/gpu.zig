@@ -14,7 +14,7 @@
 //! next event or after `retry_seconds`, asleep in between.
 //!
 //! Texture handles, as `Style.texture` sees them: 0 white, k + 1 image k of `App.images`,
-//! then the bundled font, the text service's atlas and the surfaces.
+//! then the bundled font, the text service's atlas, the canvas label atlas and the surfaces.
 //!
 //! Contents
 //!   pub const gpu
@@ -63,7 +63,8 @@ pub const retry_seconds: f32 = 0.5;
 
 const handle_font = images_max + 1;
 const handle_text = images_max + 2;
-const handle_surface = images_max + 3;
+const handle_labels = images_max + 3;
+const handle_surface = images_max + 4;
 const handles = handle_surface + surfaces_max;
 comptime {
     std.debug.assert(handles <= vk.renderer.CanvasRenderer.max_textures);
@@ -158,6 +159,8 @@ pub const Stats = struct {
     not_shown: u32 = 0,
     /// Bytes of UI rows (quads and glyph quads) uploaded.
     row_bytes: u64 = 0,
+    /// Bytes of the canvas label atlas uploaded.
+    label_bytes: u64 = 0,
     /// The damage of the last frame presented, logical pixels.
     damage: Region = .empty,
     /// Frames presented that drew the whole window.
@@ -196,6 +199,7 @@ const registry = struct {
 
 /// A window's GPU objects: Vulkan over the X window, the application's memory, the textures
 /// the UI samples and the frame's state. Filled in place (the renderer points at its device).
+// tidy: allow(bool-heavy-struct) one flag per texture the loop keeps, read where it is written
 pub const Window = struct {
     x: x11_gpu.Gpu,
     arena: gpu.Arena,
@@ -206,6 +210,7 @@ pub const Window = struct {
     /// images' and the text atlas's apart, as both are copied when the frame runs.
     writes: [2]vk.device.Buffer,
     text_writes: [2]vk.device.Buffer,
+    label_writes: [2]vk.device.Buffer,
     images: [images_max]?Image,
     generations: [images_max]u32,
     sizes: [images_max][2]u32,
@@ -215,6 +220,9 @@ pub const Window = struct {
     text: ?Image,
     /// The text service's atlas has to be written whole (new, or a frame not shown).
     text_whole: bool,
+    /// The canvas label atlas (`text.Window.labels`), and whether it has to be written whole.
+    labels: ?Image,
+    labels_whole: bool,
     text_dirty: ?text.Frame,
     /// Damage not yet presented, the rows of the last frame built when not yet uploaded.
     owed: Region,
@@ -260,6 +268,7 @@ pub const Window = struct {
         g.gfx.setTexture(d, @fromBackingInt(handle_font), gw.font.view, g.sampler);
         gw.writes = .{ .{ .size = 0 }, .{ .size = 0 } };
         gw.text_writes = gw.writes;
+        gw.label_writes = gw.writes;
         gw.images = @splat(null);
         gw.generations = @splat(0);
         gw.sizes = @splat(.{ 0, 0 });
@@ -267,6 +276,8 @@ pub const Window = struct {
         gw.images_known = false;
         gw.text = null;
         gw.text_whole = true;
+        gw.labels = null;
+        gw.labels_whole = true;
         gw.text_dirty = null;
         gw.owed = .everything;
         gw.rows = null;
@@ -292,6 +303,8 @@ pub const Window = struct {
         registry.shell = null;
         for (&gw.images) |*img| if (img.*) |*i| d.destroyImage(i);
         if (gw.text) |*t| d.destroyImage(t);
+        if (gw.labels) |*t| d.destroyImage(t);
+        for (&gw.label_writes) |*b| if (b.handle != null) d.destroyBuffer(b);
         d.destroyImage(&gw.font);
         for (&gw.writes) |*b| if (b.handle != null) d.destroyBuffer(b);
         for (&gw.text_writes) |*b| if (b.handle != null) d.destroyBuffer(b);
@@ -351,6 +364,7 @@ pub fn loop(comptime App: type, app: *App, gw: *Window, run: Run, clock: anytype
                     gw.stats.not_shown += 1;
                     gw.owed = .everything;
                     gw.text_whole = true;
+                    gw.labels_whole = true;
                     waiting_since_not_shown = true;
                 },
                 else => return e,
@@ -409,7 +423,8 @@ fn textGlyphs(gw: *Window, run: Run, list: *const DrawList, placed: ?text.Frame)
     if (placed) |p| {
         var glyphs = p.glyphs;
         glyphs.texture = @fromBackingInt(handle_text);
-        glyphs.canvas = @fromBackingInt(handle_font);
+        // Canvas glyphs sample the label atlas when the App has one, else the font's cells.
+        glyphs.canvas = @fromBackingInt(if (p.labels != null) handle_labels else handle_font);
         gw.text_dirty = p;
         return glyphs;
     }
@@ -470,7 +485,10 @@ fn present(comptime App: type, app: *App, gw: *Window, w: *x11.Window) !void {
     if (@hasDecl(App, "images")) {
         if (try writeImages(gw, f.cmd, slot, app.images())) gw.owed = .everything;
     }
-    if (gw.text_dirty) |placed| try writeText(gw, f.cmd, slot, placed);
+    if (gw.text_dirty) |placed| {
+        try writeText(gw, f.cmd, slot, placed);
+        if (placed.labels) |l| try writeLabels(gw, f.cmd, slot, l, placed.labels_dirty);
+    }
     for (registry.list) |l| if (l) |s| {
         s.dirty = s.dirty or s.requested;
         s.requested = false;
@@ -625,30 +643,71 @@ fn alphaOf(img: anytype) []const u8 {
 /// The text service's atlas: made on its first frame, its changed rectangle written (all of
 /// it when `text_whole`). A new generation owes the whole window.
 fn writeText(gw: *Window, cmd: c.VkCommandBuffer, slot: u32, placed: text.Frame) !void {
+    const at: GpuAtlas = .{
+        .image = &gw.text,
+        .whole = &gw.text_whole,
+        .writes = &gw.text_writes[slot],
+        .handle = handle_text,
+    };
+    _ = try writeAtlas(gw, cmd, placed.atlas, placed.dirty, at);
+}
+
+/// The canvas label atlas, as `writeText` writes the text's.
+fn writeLabels(
+    gw: *Window,
+    cmd: c.VkCommandBuffer,
+    slot: u32,
+    a: *const CoverageAtlas,
+    dirty: ?CoverageAtlas.Upload,
+) !void {
+    const at: GpuAtlas = .{
+        .image = &gw.labels,
+        .whole = &gw.labels_whole,
+        .writes = &gw.label_writes[slot],
+        .handle = handle_labels,
+    };
+    gw.stats.label_bytes += try writeAtlas(gw, cmd, a, dirty, at);
+}
+
+/// Where a coverage atlas lives on the GPU: its image, whether it has to be written whole,
+/// the frame slot's mapped buffer and its texture handle.
+const CoverageAtlas = lcgf.raster_atlas.Atlas;
+
+const GpuAtlas = struct { image: *?Image, whole: *bool, writes: *vk.device.Buffer, handle: u16 };
+
+/// Atlas `a`'s image made the first time, then its changed rectangle `dirty` written (all of
+/// it when `at.whole`), in the frame's upload phase. Returns the bytes written.
+fn writeAtlas(
+    gw: *Window,
+    cmd: c.VkCommandBuffer,
+    a: *const CoverageAtlas,
+    dirty: ?CoverageAtlas.Upload,
+    at: GpuAtlas,
+) !u64 {
     const g = &gw.x.setup;
     const d = &g.device;
-    const a = placed.atlas;
-    if (gw.text == null) {
-        gw.text = try coverage(d, a.w, a.h);
-        g.gfx.setTexture(d, @fromBackingInt(handle_text), gw.text.?.view, g.sampler);
-        gw.text_whole = true;
+    if (at.image.* == null) {
+        at.image.* = try coverage(d, a.w, a.h);
+        g.gfx.setTexture(d, @fromBackingInt(at.handle), at.image.*.?.view, g.sampler);
+        at.whole.* = true;
     }
     std.debug.assert(g.gfx.texture_count >= handles);
     const whole: Region2 = .{ .w = a.w, .h = a.h };
-    const u = placed.dirty;
-    const changed: ?Region2 = if (u) |v| .{ .x = v.x, .y = v.y, .w = v.w, .h = v.h } else null;
-    const r: Region2 = if (gw.text_whole) whole else changed orelse return;
-    if (r.w == 0 or r.h == 0) return;
-    const staged = try gw.room(&gw.text_writes[slot], @as(u64, r.w) * r.h);
+    const changed: ?Region2 = if (dirty) |v| .{ .x = v.x, .y = v.y, .w = v.w, .h = v.h } else null;
+    const r: Region2 = if (at.whole.*) whole else changed orelse return 0;
+    if (r.w == 0 or r.h == 0) return 0;
+    const bytes = @as(u64, r.w) * r.h;
+    const staged = try gw.room(at.writes, bytes);
     for (0..r.h) |y| {
         const src = a.pixels[(r.y + y) * a.w + r.x ..][0..r.w];
         @memcpy(staged[y * r.w ..][0..r.w], src);
     }
     const sampled = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    const from: c.VkImageLayout = if (gw.text_whole) c.VK_IMAGE_LAYOUT_UNDEFINED else sampled;
+    const from: c.VkImageLayout = if (at.whole.*) c.VK_IMAGE_LAYOUT_UNDEFINED else sampled;
     const region: vk.host.Rect = .{ .x = @intCast(r.x), .y = @intCast(r.y), .w = r.w, .h = r.h };
-    vk.host.uploadRegion(d, cmd, gw.text.?.handle, gw.text_writes[slot].handle, 0, from, region);
-    gw.text_whole = false;
+    vk.host.uploadRegion(d, cmd, at.image.*.?.handle, at.writes.handle, 0, from, region);
+    at.whole.* = false;
+    return bytes;
 }
 
 const Region2 = struct { x: u32 = 0, y: u32 = 0, w: u32, h: u32 };
@@ -718,6 +777,15 @@ const Fixture = struct {
     };
     var service: [text.Text.requiredBytes(text_options)]u8 align(lcgf.mem.column_align) = undefined;
     const face = [_]text.File{.{ .bytes = @embedFile("layout.ttf") }};
+    /// A label atlas, as `lcgf_app.run` gives an App with labels.
+    const label_options: text.labels.Options = .{
+        .atlas = .{ 256, 128 },
+        .images = 64,
+        .label_glyphs = 32,
+    };
+    const label_n = text.labels.Labels.requiredBytes(label_options);
+    var label_bytes: [label_n]u8 align(lcgf.mem.column_align) = undefined;
+    var label_atlas: text.labels.Labels = undefined;
 
     fn open(fx: *Fixture, display: []const u8, width: u16, height: u16) !void {
         try fx.openWith(display, width, height, &.{});
@@ -1140,6 +1208,45 @@ const CanvasApp = struct {
         f.close();
     }
 };
+
+test "gpu labels: labels draw as the reference at camera and window scales; a pan uploads none" {
+    var fx: Fixture = undefined;
+    try fx.openWith(try displayOrSkip(), 200, 100, &Fixture.face);
+    defer fx.close();
+    Fixture.label_atlas = .init(&Fixture.label_bytes, Fixture.label_options);
+    fx.tw.labels = &Fixture.label_atlas;
+    const Shapes = lcgf.canvas.Instances;
+    const Rows = struct {
+        var bytes: [Shapes.requiredBytes(64, 1, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
+        var reference: [lcgf.render_sw.Framebuffer.len(200, 100)]u32 = undefined;
+    };
+    var carver: lcgf.mem.Carver = .{ .buf = &Rows.bytes };
+    var shapes = Shapes.init(&carver, 64, 1, 1, .{});
+    var app: text.labels.TestApp = .{
+        .shapes = &shapes,
+        .words = &.{ "R1 10k Vout", "GND" },
+        .labels = .{ .text = &fx.tw.text.?, .labels = &Fixture.label_atlas },
+    };
+    for ([_]f32{ 1, 2 }) |s| {
+        fx.conn.overrideScale(s);
+        for ([_]f32{ 1, 4 }) |zoom| {
+            app.zoom = zoom;
+            fx.ctx.waker.post();
+            try fx.run(&app, seconds(0.3));
+            try app.expectWindow(&fx.w, x11.pixel, s, &Rows.reference);
+        }
+    }
+    try testing.expectEqual(1, app.remakes);
+    try testing.expect(fx.gw.stats.label_bytes > 0);
+    // A pan: no label made again, no byte of the label atlas uploaded.
+    const bytes = fx.gw.stats.label_bytes;
+    app.pan = 30;
+    fx.ctx.waker.post();
+    try fx.run(&app, seconds(0.3));
+    try app.expectWindow(&fx.w, x11.pixel, 2, &Rows.reference);
+    try testing.expectEqual(1, app.remakes);
+    try testing.expectEqual(bytes, fx.gw.stats.label_bytes);
+}
 
 test "gpu canvas: a canvas beside a damaged rect is not drawn again over itself" {
     var fx: Fixture = undefined;
