@@ -178,9 +178,6 @@ pub fn build(b: *std.Build) void {
     // the test face of its tests.
     app_mod.addImport("font_system", appText(b, target, optimize, lcgf, app_libc).import_table.get("font_system").?);
     app_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
-    // An application's tests without a window (src/example/replay.zig): a recording played
-    // into its `App` through the headless shell. The examples' `zig build test` imports it.
-    _ = b.addModule("lcgf_replay", .{ .root_source_file = b.path("src/example/replay.zig"), .target = target, .optimize = optimize, .imports = lcgf_import });
     // A downstream application consumes the modules and library above. The
     // benchmarks, SDK probes, docs and examples belong to this repository.
     if (!b.isRoot()) return;

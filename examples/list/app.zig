@@ -52,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "list: 100,000 rows build only the rows on screen; scroll and select far down" {
     var app: App = .{};

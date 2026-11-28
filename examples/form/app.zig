@@ -111,7 +111,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "check: what a name and an age must be" {
     try testing.expectEqualStrings("Name is required", checkName("  ").?);

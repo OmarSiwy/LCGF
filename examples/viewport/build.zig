@@ -27,7 +27,6 @@ pub fn build(b: *std.Build) void {
     const licence = b.addInstallFile(dep.path("src/example/font/LICENSE.txt"), "share/licenses/viewport/DejaVu.txt");
     b.getInstallStep().dependOn(&licence.step);
     b.step("run", "Open the window").dependOn(&b.addRunArtifact(exe).step);
-    exe.root_module.addImport("lcgf_replay", dep.module("lcgf_replay"));
     const tests = b.addTest(.{ .root_module = exe.root_module });
     b.step("test", "Run the headless replay tests").dependOn(&b.addRunArtifact(tests).step);
 }

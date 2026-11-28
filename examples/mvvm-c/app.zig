@@ -30,7 +30,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "mvvm-c: the ViewModel advances the model and the coordinator takes the navigation" {
     var app: App = .{};

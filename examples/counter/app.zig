@@ -62,7 +62,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "counter: clicks move the count; the memo and the summary follow only its changes" {
     var app: App = .{};

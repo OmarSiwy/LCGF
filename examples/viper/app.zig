@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "viper: the presenter sends Advance to the interactor and Open to the router" {
     var app: App = .{};

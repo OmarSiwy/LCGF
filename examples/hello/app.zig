@@ -38,7 +38,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "hello: builds, draws a centred panel and its text, and a click on Wave counts" {
     var app: App = .{};
@@ -58,5 +58,5 @@ test "hello: builds, draws a centred panel and its text, and a click on Wave cou
     app = .{};
     s = try replay.run(&app, click);
     try testing.expectEqual(@as(u32, 1), app.waves);
-    try testing.expectEqual(@as(u32, 5), s.shell.polls);
+    try testing.expectEqual(@as(u32, 5), s.frames);
 }

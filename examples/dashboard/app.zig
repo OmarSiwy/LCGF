@@ -111,7 +111,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "dashboard: the charts are canvases, drawn from the data, again on Next day" {
     var app: App = .{};

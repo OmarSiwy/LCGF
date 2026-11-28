@@ -196,7 +196,7 @@ fn lightDir(light: f32) [3]f32 {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "viewport: the CPU sphere sits in the viewport and shows through nothing but the panel" {
     var app: App = .{};

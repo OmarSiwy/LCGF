@@ -1,6 +1,6 @@
 # The examples (examples/). Each is a package of its own: the desktop ones on lcgf_app with the
 # render back end at its default, their tests playing recordings into their `App` without a
-# window (lcgf_replay); ci/run.sh examples-x11 runs their windows. The root `examples` step tests
+# window (lcgf_app.replay); ci/run.sh examples-x11 runs their windows. The root `examples` step tests
 # the microcontroller demo and links it for a Cortex-M7 (no emulator in the dev shell: linked,
 # not run).
 zig build examples --summary all

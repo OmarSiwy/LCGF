@@ -86,6 +86,9 @@ const TextService = text.Text;
 /// Canvas labels in the window's fonts, for an App with a field `labels: Labels`, which `run`
 /// fills before the first `build` (src/app/labels.zig `Handle`).
 pub const Labels = text.labels.Handle;
+/// An App played from a recording without a window, through `run`'s frame path: its tests
+/// (src/app/replay.zig).
+pub const replay = @import("replay.zig");
 const render = @import("render_options").render;
 /// The GPU window this build opens, per OS and `-Drender` (src/app/gpu.zig's contract), or an
 /// empty struct: the software window only. Each one has `Loop` (`gpu.Gpu(Window)`) and
@@ -533,7 +536,7 @@ const X11 = if (builtin.os.tag == .linux) struct {
 } else void;
 
 /// `options.limits` with room to track damage where the shell keeps its pixels.
-fn limitsOf(comptime options: Options) context.Limits {
+pub fn limitsOf(comptime options: Options) context.Limits {
     var limits = options.limits;
     limits.damage = true;
     return limits;
@@ -549,7 +552,7 @@ fn serves(comptime options: Options) bool {
 /// by `options.labels`, which the window then draws canvas glyphs from, when its text is the
 /// service's; else the field stays empty and canvas glyphs sample the bundled font. An App
 /// without the field carves nothing.
-fn openLabels(comptime App: type, app: *App, comptime options: Options, tw: anytype) void {
+pub fn openLabels(comptime App: type, app: *App, comptime options: Options, tw: anytype) void {
     if (comptime !(@hasField(App, "labels") and serves(options))) return;
     std.debug.assert(tw.labels == null);
     comptime std.debug.assert(@FieldType(App, "labels") == Labels);
@@ -565,14 +568,14 @@ fn openLabels(comptime App: type, app: *App, comptime options: Options, tw: anyt
 }
 
 /// `options.text` for the frame's runs.
-fn textOptions(comptime options: Options) text.Options {
+pub fn textOptions(comptime options: Options) text.Options {
     var o = options.text;
     o.texts = options.limits.texts;
     return o;
 }
 
 /// Rows for one frame's glyph quads.
-const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
+pub const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
 
 /// What a software shell's renderer samples: the white texture, the application's images, the
 /// bundled font, and the text service's atlas when it draws the text. Remembers the images'
@@ -705,7 +708,7 @@ fn Buffers(comptime options: Options) type {
 }
 
 /// How long the window stays open: `LCGF_APP_SECONDS`, else until it is closed.
-const Clock = struct {
+pub const Clock = struct {
     io: std.Io,
     t0: std.Io.Timestamp,
     seconds: f32,
@@ -718,10 +721,11 @@ const Clock = struct {
 
 /// `shell_iface.run`, with the theme following the system's appearance and a time limit. A
 /// software shell (one with `presentWith`) gets the text from `tw` at the window's scale, or
-/// in the bundled font written into `glyphs`, and the application's images.
+/// in the bundled font written into `glyphs`, and the application's images. `replay` runs it
+/// on a headless window, so a test takes the frames a window takes.
 // tidy: allow-fn(large-generic-function) one instance per shell a program can open (two on Linux)
 // tidy: allow(too-many-parameters) the run's own inputs, made once in `run`, passed through
-fn loop(
+pub fn loop(
     comptime App: type,
     app: *App,
     shell: anytype,
@@ -830,6 +834,7 @@ const testing = std.testing;
 const Color = lcgf.types.Color;
 
 test {
+    _ = replay;
     if (has_gpu) _ = gpu_window;
     inline for (gpu_first) |first| _ = first;
 }

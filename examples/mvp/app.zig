@@ -24,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const testing = std.testing;
-const replay = @import("lcgf_replay");
+const replay = lcgf_app.replay;
 
 test "mvp: clicks reach the model through the presenter" {
     var app: App = .{};
