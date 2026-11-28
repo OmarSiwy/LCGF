@@ -1,7 +1,10 @@
 # Changelog
 
+## Unreleased
 
-## 0.2.0
+## 0.2.0 — 2026-11-27
+
+The first tagged release: [v0.2.0](https://github.com/OmarSiwy/LCGF/releases/tag/v0.2.0).
 
 ### New
 
@@ -51,6 +54,9 @@
 - A `Surface` draws only on the GPU window; the software window paints its node's fill.
 - The examples other than examples/app and examples/surface still run on the software-only example host (`src/example/host.zig`, built with `-Drender=sw`). Read them for their UI code, not as the pattern for a build.
 - The Metal back end is cross-built only; its device tests and goldens need a macOS runner (`ci/run.sh macos`, outside `all`).
+- A canvas pan that comes from pointer input builds a frame, because input is handled in `build`: `Canvas.redraw` saves the build only for camera moves the program makes itself (an animation, follow, zoom to fit).
+- A row of the canvas has one colour of its own, for both its stroke and its fill.
+- Measurements on hardware: the GPU window was measured on an NVIDIA GeForce RTX 5060 at commit 71cae28e (docs/plans/window.md has the numbers and their conditions). At this tag the run could not be repeated: the display took about 30 of every 300 frames, on the earlier whole-redraw path as well, so the canvas redraw and the 100,000-row canvas have no hardware number. The GPU evidence for this tag is Mesa lavapipe.
 
 ## Maintaining the changelog
 

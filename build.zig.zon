@@ -1,6 +1,6 @@
 .{
     .name = .lcgf,
-    .version = "0.0.0",
+    .version = "0.2.0",
     .dependencies = .{
         .ucd = .{
             .url = "https://www.unicode.org/Public/16.0.0/ucd/UCD.zip",
