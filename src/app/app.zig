@@ -129,6 +129,10 @@ pub const Options = struct {
     /// The canvas label atlas's capacities, carved only for an App with a `labels` field in a
     /// window that draws with the text service.
     labels: text.labels.Options = .{},
+    /// Canvas rows and polygon vertices a frame draws on the GPU: the GPU window's instance
+    /// buffers hold this many, 32 and 8 bytes each. Past them a canvas draws short. The
+    /// software shells draw from `Instances` itself and take any number.
+    canvas: struct { rows: u32 = 4096, verts: u32 = 4096 } = .{},
 };
 
 /// Opens a window titled `options.title` and runs `app` in it until the window is closed.
@@ -313,7 +317,9 @@ fn runGpu(
     try w.open(conn, @intCast(options.size[0]), @intCast(options.size[1]), options.title, bufs);
     defer w.close();
     const gw = &B.gpu_window;
-    gw.open(&w, display, .{}) catch {
+    const c = options.canvas;
+    const room: gpu_app.Window.Open = .{ .canvas_rows = c.rows, .canvas_verts = c.verts };
+    gw.open(&w, display, room) catch {
         if (@hasDecl(App, "draw")) return error.NoGpu;
         return .software;
     };
