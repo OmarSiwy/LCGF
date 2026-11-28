@@ -161,6 +161,22 @@ const Fixture = struct {
         return error.NeverSettled;
     }
 
+    /// The client size once it is larger than `old` and the shell's viewport has it too: Wine
+    /// applies a SetWindowPos and sends its WM_SIZE in its own time. Polls for up to 5 s.
+    fn grown(fx: *Fixture, old: [2]u32) ![2]u32 {
+        for (0..50) |_| {
+            var ev: Events = .{};
+            try testing.expect(fx.w.poll(&ev));
+            const now = fx.w.clientSize();
+            const client = fx.w.t.client;
+            const seen = client[0] == @as(f32, @floatFromInt(now[0])) and
+                client[1] == @as(f32, @floatFromInt(now[1]));
+            if (now[0] > old[0] and seen) return now;
+            fx.w.wait(0.1, .idle);
+        }
+        return error.NeverResized;
+    }
+
     /// Pixel (x, y) of the picture.
     fn pixel(fx: *Fixture, x: u32, y: u32) !Color {
         const d = &fx.g.setup.device;
@@ -219,16 +235,16 @@ test "win32 gpu: a window that grows is drawn whole at its new size" {
     var fx: Fixture = undefined;
     try fx.open();
     defer fx.close();
+    try fx.settle(white);
     try fx.present(try fx.list(white, red), .everything);
     // The user drags the frame larger: WM_SIZE gives the new client size and viewport.
     const old = fx.w.clientSize();
     const grown: [2]i32 = .{ @intCast(old[0] + 80), @intCast(old[1] + 64) };
     const keep = 0x0016; // SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE
     try testing.expect(SetWindowPos(fx.w.hwnd, null, 0, 0, grown[0], grown[1], keep) != 0);
+    const now = try fx.grown(old);
     const list = try fx.list(white, red);
     list.damage = .empty;
-    const now = fx.w.clientSize();
-    try testing.expect(now[0] > old[0]);
     try fx.present(list, list.damage);
     try testing.expectEqual(now[0], fx.g.target.chain.width);
     try testing.expectEqual(white, try fx.pixel(now[0] - 1, now[1] - 1));
