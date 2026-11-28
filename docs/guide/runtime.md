@@ -215,9 +215,14 @@ yourself through `Surface`, and 2D primitives through `Frame.canvas`.
 - **Images**: an `App` with `pub fn images(*App) []const lcgf_app.Image` has image k drawn by
   `Style.texture` k + 1 (at most `images_max`). An image is straight RGBA8 `pixels`, or
   `alpha`, one coverage byte a texel (an icon), read as white with that alpha so the node's
-  `fill` colours it; a size; and a `generation` you change when the texels do. macOS does not
-  draw them yet.
-- **Canvases**: `Frame.canvas` draws in every window. On the GPU window `Options.canvas` sizes
+  `fill` colours it; a size; and a `generation` you change when the texels do, in a frame you
+  ask for (`build` changes it, or you post `ctx.waker`). A new generation redraws only the nodes that show the image; a change in the
+  number of images or an image's size redraws the whole window, and so does, on the GPU, a new
+  generation in a frame with no `build` (a surface's). macOS does not draw images yet.
+- **Canvases**: `Frame.canvas` draws many 2D rows (segments, rects, arcs, polygons, glyphs)
+  under a camera, the same on every back end. A row has its own colour or its layer's, from an
+  optional palette; the header of src/draw/canvas.zig describes the rows and their limits. On
+  the GPU window a changed row uploads 36 bytes. `Options.canvas` sizes
   the instance buffers (`rows`, `verts`, 4096 each by default); past them a canvas draws short.
   The software windows take any number.
 - **Canvas labels**: an `App` with a field `labels: lcgf_app.Labels` gets, before its first
@@ -237,7 +242,8 @@ yourself through `Surface`, and 2D primitives through `Frame.canvas`.
   draws every frame whole. An idle window presents nothing.
 - **The GPU**: a Vulkan build on Linux draws the window with Vulkan over X11, and an `App`
   with `pub fn draw` draws its own `Surface`s there ([surface.md](surface.md)).
-  `LCGF_RENDER=sw`, no `DISPLAY` or no Vulkan device gives the software window
+  `LCGF_RENDER=sw`, no `DISPLAY`, an X server that cannot be reached or no Vulkan device
+  gives the software window, where every `App` runs and `Surface.live()` is false
   ([backends.md](backends.md), "When you bring no device").
 
 ### Which window, and running under a test
@@ -247,8 +253,8 @@ environment:
 
 - **A Vulkan build** (the default) opens X11 with Vulkan whenever `DISPLAY` is set and
   `LCGF_RENDER` is not `sw`, whatever `WAYLAND_DISPLAY` says. If the X server cannot be
-  reached or has no Vulkan device, `run` takes the software path below. With `LCGF_RENDER=sw`, or `DISPLAY` unset or empty, it takes the software path at
-  once.
+  reached or has no Vulkan device, `run` takes the software path below. With `LCGF_RENDER=sw`,
+  or `DISPLAY` unset or empty, it takes the software path at once.
 - **The software path** (and every `-Drender=sw` build) opens Wayland when `WAYLAND_DISPLAY`
   is set and not empty, and X11 on `DISPLAY` only when it is not, or when the compositor
   cannot be reached and `DISPLAY` is set. If neither can be reached, `run` returns the error.

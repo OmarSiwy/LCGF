@@ -242,6 +242,9 @@ complete example.
 
 - Signal values are run-time; only their identity, type and dependencies are comptime.
 - A list of unknown length needs the runtime front end (or a bounded region).
+- A floating region (`.float = true`) is sized by its own `size` alone: a `.fill` share means
+  nothing out of flow, so `ct_interop.region`, `fitRegion` and `canvas` refuse it at compile
+  time. Write `.pct(1)` to fill the parent, or `.px(n)` (`Style.float`).
 - Changing the UI means recompiling, and compile time grows with the spec. `Flat` and
   `validate.check` raise their own branch quotas, so large specs need nothing from you; the walks
   recurse once per level, and about 2,000 levels is the compiler's stack limit (measured in

@@ -149,10 +149,12 @@ output), text runs, `canvas` batches (LCGF's own instanced primitives under a ca
   present whatever it draws, so what the kept picture saves is the build, layout and paint a
   surface frame skips and the `draw` a widget frame skips (docs/plans/window.md, "Landed").
   Windows, macOS and native Wayland have no GPU window through `lcgf_app`, and macOS text stays
-  on the bitmap font. `LCGF_RENDER=sw`, no
-  display or no Vulkan device falls back to the software window, where `draw` is never called
-  and a `Surface` is not live (`Surface.live`): its node paints its fill. A GPU build links libc on Linux (the loader is opened at run time);
-  `-Drender=sw` does not. docs/plans/window.md is the plan; docs/guide/surface.md the guide.
+  on the bitmap font. `LCGF_RENDER=sw`, no display, an X server that cannot be reached or no
+  Vulkan device falls back to the software window. Every application runs there: `draw` is
+  never called and a `Surface` is not live (`Surface.live`), so its node paints its fill and
+  `build` can show something else. A GPU build links libc on Linux (the loader is opened at
+  run time); `-Drender=sw` does not. docs/plans/window.md is the plan; docs/guide/surface.md
+  the guide.
 - **Gompute** (CUDA / HIP compute kernels): measured and dropped. Lane render-gompute built it
   (C0418-C0425) and it lost to the Vulkan back end on every measure on an RTX 4060: frame time,
   resident and GPU memory, start-up, vendors, and presenting. docs/research/gompute.md has the
@@ -174,6 +176,13 @@ application's 2D content is in the `DrawList`: anything drawn outside it is draw
 end's API. So the canvas is one WGSL source (`src/render/shaders/canvas.wgsl`) and a Zig twin in
 the software back end (`src/render/sw/canvas.zig`), held to the same pixels by the `canvas` and
 `labels` goldens. A new canvas kind lands only with its software twin and a golden.
+
+The canvas is general, not one application's: a row is 32 bytes plus its own colour (0 for its
+layer's), the palette of layers is optional, a stroke is its layer's width in logical pixels or
+the row's width in world units, a dashed layer holds its on and off lengths, and the canvas knows
+no font (`protocol.Mono.canvasGlyphs` and `lcgf_app`'s labels write glyph rows). Its limits are
+stated with it (src/draw/canvas.zig): polylines have no joins, a polygon tests every edge per
+pixel, and there are no curves or gradients; an arbitrary path goes through src/draw/paths.zig.
 
 `Surface` has no software fallback. Its pixels are defined by the application's shaders and
 pipeline state, so running them takes an implementation of the GPU API and a shader compiler,

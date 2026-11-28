@@ -14,10 +14,12 @@ application's own drawing: three layers"):
   a GPU window (below).
 - **`Frame.canvas`** for 2D content (lines, rectangles, arcs, polygons, labels) under a camera.
   LCGF owns its shader and a software twin held to the same pixels, so it draws the same on
-  every back end, software included, and your code fills columns and moves the camera.
+  every back end, software included, and your code fills columns and moves the camera. It has
+  no joins between segments, no curves and no gradients (src/draw/canvas.zig).
 - **An `lcgf_app.Image`** when there is no GPU at all, or the pixels are yours anyway: CPU
   pixels you fill, with `src/draw/paths.zig` (paths to coverage, an `alpha` image) or your
-  own code. The window shows it and redraws it when its `generation` changes.
+  own code. The window shows it and redraws the nodes that show it when its `generation`
+  changes.
 
 Pick the canvas for anything a 2D batch can draw, and a surface only for what needs shaders of
 your own.
