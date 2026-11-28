@@ -214,4 +214,7 @@ it breaks the bytes as `Mono.wrap` does. With a shaper it asks for each line's r
 line's first byte and each byte's x (`src/runtime/kept.zig`) for the next frame, and moves the
 caret the widget asked for (`Frame.keepCaret`) onto its line as laid out, in the same frame. A
 host turns that on with `Context.enableKept` and its own buffers; `lcgf_app` does it whenever it
-draws with the text service.
+draws with the text service. In the frame of an edit the widget has no kept run for the changed line
+yet and lays it out in `Mono`'s lines; when the shaper breaks it otherwise, `Frame.endText`
+asks for one more frame (`Context.waker`), in which the widget settles its scroll on the
+shaper's lines, and then none.

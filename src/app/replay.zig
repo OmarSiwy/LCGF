@@ -7,7 +7,9 @@
 //! (`sw.Setup`, real canvas drawing) into a framebuffer of `Options.size` logical pixels at
 //! `Options.scale`, which keeps the last frame's pixels as a window does. Text is the bundled
 //! bitmap font, or the text service over `Options.fonts` (no system faces: a replay draws the
-//! same on every machine). A `Surface` is never live here.
+//! same on every machine). A `Surface` is never live here. A frame the App asks for after the
+//! recording's last (a `Context.waker` post: a text area settling on the service's lines) is
+//! built as a window builds it, with no new input, up to eight (`Run.owed`).
 //!
 //! In: the App, the recording, `Options`. Out: `Run`, the last frame's tree, output and list
 //! (for a composing App the composed list, and where its region's corner is) and the pixels,
@@ -65,9 +67,11 @@ pub const Options = struct {
 /// One played recording.
 pub const Run = struct {
     fb: sw.Framebuffer,
-    /// Frames the recording had, and frames built (and drawn).
+    /// Frames the recording had, and frames built (and drawn); frames the App asked for after
+    /// the recording's last (a `Context.waker` post), built with no new input, at most eight.
     frames: u32 = 0,
     builds: u32 = 0,
+    owed: u32 = 0,
     /// The last frame built, as the window was given it: its `draw` the list drawn (for a
     /// composing App the composed one), its tree the frame's.
     out: ?context.Output = null,
@@ -115,13 +119,28 @@ const Shell = struct {
     last: ?context.Output = null,
     err: ?lcgf.input.Replay.Error = null,
     overflow: bool = false,
+    /// The App's wake (`Context.waker`): a frame it asks for after the recording's last is
+    /// built, as a window builds it, with no new input; at most `owed_max` of them.
+    waker: *const lcgf.scheduler.Wake,
+    owed: u32 = 0,
+    in: Input = .{},
+    const owed_max = 8;
 
     pub fn poll(s: *Shell, ev: *Events) bool {
+        std.debug.assert(s.owed <= owed_max);
         const next = s.replay.next(s.input) catch |e| {
             s.err = e;
             return false;
         };
-        const in = next orelse return false;
+        const in = next orelse {
+            if (!s.waker.flag.load(.acquire) or s.owed == owed_max) return false;
+            s.owed += 1;
+            s.in.events = &.{};
+            s.in.text = "";
+            ev.* = .{ .in = s.in };
+            return true;
+        };
+        s.in = in.*;
         ev.* = .{ .in = in.* };
         s.frames += 1;
         s.scale = in.scale;
@@ -182,6 +201,7 @@ pub fn runWith(app: anytype, recording: []const u8, comptime o: Options) !Run {
     if (serves) app_mod.openLabels(App, app, B.ao, &tw);
     const viewport: [2]f32 = .{ @floatFromInt(o.size[0]), @floatFromInt(o.size[1]) };
     var shell: Shell = .{
+        .waker = &ctx.waker,
         .replay = .{ .src = recording, .in = .{ .viewport = viewport, .scale = o.scale } },
         .input = .{ .text = &B.typed, .events = &B.events, .contacts = &B.contacts },
         .fb = .init(&B.pixels, B.physical[0], B.physical[1], .rgba8),
@@ -196,6 +216,7 @@ pub fn runWith(app: anytype, recording: []const u8, comptime o: Options) !Run {
         .fb = shell.fb,
         .frames = shell.frames,
         .builds = shell.builds,
+        .owed = shell.owed,
         .out = shell.last,
         .background = shell.background,
         .origin = shell.origin,
@@ -451,6 +472,46 @@ test "replay: Up, Home, End and Down on a text area's wrapped lines, in Mono and
         try testing.expect(last > 0 and last < typed.len);
         try testing.expect(below > last);
     }
+}
+
+/// A text area two lines tall at most, in a column 200 px wide: a box that scrolls.
+const Short = struct {
+    const textarea = lcgf.widgets_textarea;
+    draft: lcgf.widgets_textfield.Text(256) = .{},
+
+    pub fn build(a: *Short, f: *lcgf.frame.Frame, _: *const Events) void {
+        _ = f.open(.none, .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(10) });
+        _ = f.open(.none, .{ .dir = .y, .size = .{ .px(200), .fit } });
+        const o: textarea.Options = .{ .rows = .{ .min = 1, .max = 2 } };
+        _ = textarea.textarea(f, &Chat.th, .from("short"), &a.draft, o, "");
+        f.close();
+        f.close();
+    }
+};
+
+test "replay: a text area settles on the service's lines with no input after an edit" {
+    var app: Short = .{};
+    var rec: [512]u8 = undefined;
+    // The last input types four lines' worth at once: the frame lays them out in Mono's
+    // lines (none kept yet), the service breaks them otherwise, and one more frame settles.
+    const typed = "Wave office fluff and a few words that run on past the edge of it";
+    const script = "frame\npointer 14 14\nframe\nbuttons left\nframe\nbuttons\nframe\n" ++
+        "text {s}\n";
+    const o: Options = .{ .size = .{ 300, 200 }, .fonts = &font_files };
+    const s = try runWith(&app, try std.fmt.bufPrint(&rec, script, .{typed}), o);
+    // One frame the App asked for after the recording's last, then none: idle.
+    try testing.expectEqual(@as(u32, 1), s.owed);
+    const t = s.out.?.tree;
+    const a = t.find(.from("short"));
+    const box = s.rect(.from("short"));
+    const text_run = t.rect(a + 1);
+    const caret = t.rect(t.c.end[a] - 1);
+    const lines = @round(text_run.h() / caret.h());
+    try testing.expect(lines > 2);
+    // Scrolled so the caret's line, the last, is the second shown, inside the box.
+    try testing.expectEqual(lines - 2, app.draft.scroll);
+    try testing.expect(caret.y0 >= box.y0 and caret.y1 <= box.y1);
+    try testing.expectApproxEqAbs(text_run.y1, caret.y1, 1);
 }
 
 test "replay: draw paints a list as the replay drew it" {

@@ -551,6 +551,22 @@ pub const Wrap = struct {
         return w.hit(w.nth(@intCast(k)), goal.*);
     }
 
+    /// The lines guessed for hard line `hard` (bytes `bytes`) when no run of it is kept: its
+    /// bytes broken every `per`, as `Mono` breaks them; null when one is.
+    pub fn guess(w: *const Wrap, hard: u32, bytes: []const u8) ?kept_mod.Guess {
+        if (w.f) |f| if (f.keptRun(keyOf(w.id, hard), bytes) != null) return null;
+        const n: u32 = @intCast(bytes.len);
+        return .{ .lines = @max(std.math.divCeil(u32, n, w.per) catch 1, 1), .per = w.per };
+    }
+
+    /// Whether a line's kept run was broken otherwise than guessed the frame before: the view
+    /// settles on the font's lines.
+    pub fn moved(w: *const Wrap) bool {
+        var it = w.lines();
+        while (it.next()) |l| if (l.run) |r| if (r.moved) return true;
+        return false;
+    }
+
     /// The px a scroll of `first` whole visual lines moves the text up by.
     pub fn scrollPx(w: *const Wrap, first: u32) f32 {
         if (first == 0) return 0;
@@ -641,7 +657,7 @@ pub fn behaveWrapped(s: anytype, g: Wrapped, r: Response, in: *const Input) void
     scroll = @intCast(std.math.clamp(@as(i64, scroll) - wheel, 0, n -| rows));
     const caret = ed.shownCaret();
     const here = w.find(caret);
-    if (caret != before or res.changed) scroll = revealLine(scroll, here.k, rows, n);
+    if (caret != before or res.changed or w.moved()) scroll = revealLine(scroll, here.k, rows, n);
     s.scroll = @floatFromInt(scroll);
     if (r.focused) {
         const x = origin[0] + w.x(here.line, caret);
@@ -687,8 +703,11 @@ fn wrappedRows(
         const end = moves.lineEnd(t, start);
         var ts = tf.textStyle(th, empty);
         ts.wrap = true;
-        const leaf = f.textStyled(if (empty) hint else t[start..end], ts, .{ .shrink = true });
-        if (!empty) f.keepText(leaf, keyOf(id, @intCast(hard)));
+        // As wide as the box, so it wraps there; as tall as its lines, never cut to the box.
+        const bytes = if (empty) hint else t[start..end];
+        const leaf = f.textStyled(bytes, ts, .{ .size = .{ .fill, .fit } });
+        const h: u32 = @intCast(hard);
+        if (!empty) f.keepText(leaf, keyOf(id, h), w.guess(h, bytes));
         if (end >= t.len) break;
         start = end + 1;
     }

@@ -3659,7 +3659,7 @@ Fields: `ctx`, `in`
 - `fn room(f: *const Frame) []u8`: The free end of the frame's strings, to write text into before `textWritten`: how a caller with its own formatter puts formatted text in the frame without a buffer of its own.
 - `fn textWritten(f: *Frame, n: usize, ts: TextStyle) Node`: A text leaf over the `n` bytes just written at `room()`, as `text` would push them; `n` past the room is cut to it, and reported (`Status.strings`).
 - `fn textfStyled(f: *Frame, comptime fmt: []const u8, args: anytype, ts: TextStyle, style: Style) Node`: `textf` with full control over the leaf, as `textStyled`.
-- `fn keepText(f: *Frame, node: Node, key: u64) void`: Asks for text leaf `node`'s run as the shaper lays it out at this frame's end, kept under `key` for the next frame (`keptRun`), when the host keeps runs (`Context.enableKept`) and draws with a shaper (`endText`).
+- `fn keepText(f: *Frame, node: Node, key: u64, guess: ?@import("kept.zig").Guess) void`: Asks for text leaf `node`'s run as the shaper lays it out at this frame's end, kept under `key` for the next frame (`keptRun`), when the host keeps runs (`Context.enableKept`) and draws with a shaper (`endText`).
 - `fn keepCaret(f: *Frame, node: Node, key: u64, at: u32) void`: Asks for float leaf `node` (a caret) to be moved, at this frame's end, onto the run asked under `key` at byte `at`, as laid out: at its x, on its line, that line tall.
 - `fn keptRun(f: *const Frame, key: u64, bytes: []const u8) ?@import("kept.zig").Kept.Run`: The run kept under `key` by the last frame (`keepText`), while its text is `bytes`.
 - `fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node`: `text` with full control over the leaf (padding, sizing, background).
@@ -3720,6 +3720,7 @@ kept: text runs laid out by a real font, kept for the widget that drew them.
 
 ### Top level
 
+- `Guess = struct { lines: u32, per: u32 }`: The lines a widget laid a run out in without a kept one: `lines` of `per` bytes each (the last one shorter), as `Mono.wrap` breaks it.
 - `fn lineOf(starts: []const u32, at: u32) u32`: The line of `starts` (each line's first byte, ascending) holding byte `at`: the last that starts at or before it.
 - `fn lineHeight(r: Kept.Run, line: u32) f32`: How tall line `line` of `r` is: to the next line's top, the last to the run's height.
 
@@ -3731,18 +3732,18 @@ Fields: `tx`, `strings`, `text_of`, `pos`, `size`
 
 ### `Kept` (struct)
 
-Fields: `ask_key`, `ask_node`, `ask_len`, `caret_node`, `caret_key`, `caret_at`, `key`, `hash`, `height`, `line_first`, `line_len`, `x_first`, `len`, `starts`, `tops`, `ends`, `lines`, `xs`, `bytes`
+Fields: `ask_key`, `ask_node`, `ask_lines`, `ask_per`, `ask_len`, `moved_any`, `caret_node`, `caret_key`, `caret_at`, `key`, `hash`, `moved`, `height`, `line_first`, `line_len`, `x_first`, `len`, `starts`, `tops`, `ends`, `lines`, `xs`, `bytes`
 
 - `fn requiredBytes(runs: u32, lines: u32, bytes: u32) usize`
 - `fn init(carver: *mem.Carver, runs: u32, lines: u32, bytes: u32) Kept`
-- `fn ask(k: *Kept, key: u64, node: u32) void`: Asks for the run of `node` under `key`, laid out at this frame's end.
+- `fn ask(k: *Kept, key: u64, node: u32, guess: ?Guess) void`: Asks for the run of `node` under `key`, laid out at this frame's end; `guess`, the lines the widget laid it out in, when it had no kept run.
 - `fn get(k: *const Kept, key: u64, text: []const u8) ?Run`: The run kept under `key` by the last frame, while its text was `text`.
 - `fn record(k: *Kept, stack: *text_stack.Stack, laid: Laid) void`: Lays out again, with `stack`, the runs asked this frame, keeps them for the next frame, and moves the caret asked for onto its run (`laid`'s columns).
 
 ### `Kept.Run` (struct)
 One kept run: its lines' first bytes and tops, px from the run's top, its height, and each byte offset's x (`xs.len` is its bytes plus one).
 
-Fields: `starts`, `tops`, `ends`, `height`, `xs`
+Fields: `starts`, `tops`, `ends`, `height`, `xs`, `moved`
 
 
 ## `lcgf.text_lines` (src/text/layout/lines.zig)
@@ -7036,6 +7037,8 @@ Fields: `t`, `f`, `id`, `adv`, `lh`, `per`
 - `fn x(w: *const Wrap, l: Visual, at: u32) f32`: The x of byte `at` on line `l`, px from the line's left edge; its end, where a line breaks, is its right end.
 - `fn hit(w: *const Wrap, l: Visual, px: f32) u32`: The grapheme boundary on line `l` nearest to x `px`: on a line that does not end its line between newlines, not past its last grapheme (its end is the next line's start).
 - `fn move(w: *const Wrap, at: u32, code: u8, goal: *f32) u32`: The caret after Home, End, Up or Down (`code`) from `at`, keeping x `goal` px (NaN: from `at`'s) on Up and Down; `goal` is set for a run of them.
+- `fn guess(w: *const Wrap, hard: u32, bytes: []const u8) ?kept_mod.Guess`: The lines guessed for hard line `hard` (bytes `bytes`) when no run of it is kept: its bytes broken every `per`, as `Mono` breaks them; null when one is.
+- `fn moved(w: *const Wrap) bool`: Whether a line's kept run was broken otherwise than guessed the frame before: the view settles on the font's lines.
 - `fn scrollPx(w: *const Wrap, first: u32) f32`: The px a scroll of `first` whole visual lines moves the text up by.
 - `fn press(w: *const Wrap, px: f32, py: f32) u32`: The byte a press at (`px`, `py`) px from the text's top left hits.
 

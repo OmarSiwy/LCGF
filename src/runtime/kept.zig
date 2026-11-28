@@ -8,7 +8,10 @@
 //! the frame's end the stack lays the run out once more and leaves, under the widget's key, each
 //! line's first byte and top and each byte's x. The next frame reads them (`Frame.keptRun`) while
 //! the run's text is the same. A caret the widget asks for (`Frame.keepCaret`) is placed on the
-//! run as laid out in the same frame, so it never lags a frame behind an edit.
+//! run as laid out in the same frame, so it never lags a frame behind an edit. A widget that had
+//! no kept run for a line (its text just changed) says which lines it guessed (`Guess`); when
+//! the font broke the run otherwise, the run is kept `moved` and the frame asks for one more
+//! (`Context.waker`), in which the widget, now on the font's lines, settles its scroll.
 //!
 //! Caller-owned columns, carved once (`init`, sized by `requiredBytes`), handed to the context
 //! (`Context.enableKept`). Runs, lines or bytes past them are not kept, and the widget falls
@@ -32,11 +35,20 @@ pub const Laid = struct {
     size: [2][]f32,
 };
 
+/// The lines a widget laid a run out in without a kept one: `lines` of `per` bytes each (the
+/// last one shorter), as `Mono.wrap` breaks it.
+pub const Guess = struct { lines: u32, per: u32 };
+
 pub const Kept = struct {
-    /// Asked this frame: a key and the node of the run.
+    /// Asked this frame: a key, the node of the run, and the lines guessed for it (`per` 0:
+    /// none, the widget had the run kept).
     ask_key: []u64,
     ask_node: []u32,
+    ask_lines: []u32,
+    ask_per: []u32,
     ask_len: u32 = 0,
+    /// The last `record` kept a run the font broke otherwise than its widget guessed.
+    moved_any: bool = false,
     /// A caret asked this frame: its node, on the run under `caret_key`, at byte `caret_at`.
     caret_node: u32 = types.none,
     caret_key: u64 = 0,
@@ -45,6 +57,8 @@ pub const Kept = struct {
     /// and where its lines and bytes are in `starts`, `tops` and `xs`.
     key: []u64,
     hash: []u64,
+    /// The font broke the run otherwise than its widget guessed this frame.
+    moved: []bool,
     height: []f32,
     line_first: []u32,
     line_len: []u32,
@@ -68,6 +82,9 @@ pub const Kept = struct {
         ends: []const f32,
         height: f32,
         xs: []const f32,
+        /// Laid out otherwise than the widget guessed the frame before: its view may need to
+        /// settle on these lines.
+        moved: bool,
     };
 
     pub fn requiredBytes(runs: u32, lines: u32, bytes: u32) usize {
@@ -81,8 +98,11 @@ pub const Kept = struct {
         return .{
             .ask_key = carver.slice(u64, runs),
             .ask_node = carver.slice(u32, runs),
+            .ask_lines = carver.slice(u32, runs),
+            .ask_per = carver.slice(u32, runs),
             .key = carver.slice(u64, runs),
             .hash = carver.slice(u64, runs),
+            .moved = carver.slice(bool, runs),
             .height = carver.slice(f32, runs),
             .line_first = carver.slice(u32, runs),
             .line_len = carver.slice(u32, runs),
@@ -94,11 +114,14 @@ pub const Kept = struct {
         };
     }
 
-    /// Asks for the run of `node` under `key`, laid out at this frame's end.
-    pub fn ask(k: *Kept, key: u64, node: u32) void {
+    /// Asks for the run of `node` under `key`, laid out at this frame's end; `guess`, the lines
+    /// the widget laid it out in, when it had no kept run.
+    pub fn ask(k: *Kept, key: u64, node: u32, guess: ?Guess) void {
         if (k.ask_len == k.ask_key.len) return;
         k.ask_key[k.ask_len] = key;
         k.ask_node[k.ask_len] = node;
+        k.ask_lines[k.ask_len] = if (guess) |g| g.lines else 0;
+        k.ask_per[k.ask_len] = if (guess) |g| g.per else 0;
         k.ask_len += 1;
     }
 
@@ -115,6 +138,7 @@ pub const Kept = struct {
                 .ends = k.ends[l..][0..n],
                 .height = k.height[i],
                 .xs = k.xs[k.x_first[i]..][0 .. text.len + 1],
+                .moved = k.moved[i],
             };
         }
         return null;
@@ -132,9 +156,10 @@ pub const Kept = struct {
         var len: u32 = 0;
         var lines: u32 = 0;
         var bytes: u32 = 0;
+        k.moved_any = false;
         defer k.ask_len = 0;
         defer k.caret_node = types.none;
-        for (k.ask_key[0..k.ask_len], k.ask_node[0..k.ask_len]) |key, node| {
+        for (k.ask_key[0..k.ask_len], k.ask_node[0..k.ask_len], 0..) |key, node, a| {
             const row = text_of[node];
             if (row == types.none or !stack.serves(tx, row)) continue;
             const width = text_stack.breakWidth(tx, row);
@@ -147,6 +172,8 @@ pub const Kept = struct {
             const i = len;
             k.key[i] = key;
             k.hash[i] = std.hash.Wyhash.hash(0, text);
+            k.moved[i] = guessed(l, k.ask_lines[a], k.ask_per[a]);
+            k.moved_any = k.moved_any or k.moved[i];
             k.height[i] = @import("../text/layout/lines.zig").stackHeight(l);
             k.line_first[i] = lines;
             k.line_len[i] = l.len;
@@ -192,6 +219,7 @@ pub const Kept = struct {
             .ends = k.ends[k.line_first[i]..][0..k.line_len[i]],
             .height = k.height[i],
             .xs = k.xs[k.x_first[i]..][0 .. len + 1],
+            .moved = false,
         };
         const at = @min(k.caret_at, @as(u32, @intCast(len)));
         const line = lineOf(r.starts, at);
@@ -201,6 +229,14 @@ pub const Kept = struct {
         size[1][c] = lineHeight(r, line);
     }
 };
+
+/// Whether lines `l` differ from a guess of `lines` lines of `per` bytes (`per` 0: none made).
+fn guessed(l: *const @import("../text/layout/lines.zig").Lines, lines: u32, per: u32) bool {
+    if (per == 0) return false;
+    if (l.len != lines) return true;
+    for (l.start[0..l.len], 0..) |s, j| if (s != j * per) return true;
+    return false;
+}
 
 /// The line of `starts` (each line's first byte, ascending) holding byte `at`: the last that
 /// starts at or before it.

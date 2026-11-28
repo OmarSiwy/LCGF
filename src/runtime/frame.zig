@@ -202,10 +202,12 @@ pub const Frame = struct {
 
     /// Asks for text leaf `node`'s run as the shaper lays it out at this frame's end, kept
     /// under `key` for the next frame (`keptRun`), when the host keeps runs
-    /// (`Context.enableKept`) and draws with a shaper (`endText`).
-    pub fn keepText(f: *Frame, node: Node, key: u64) void {
+    /// (`Context.enableKept`) and draws with a shaper (`endText`). `guess`: the lines the
+    /// widget laid it out in without a kept run; when the shaper breaks it otherwise, the
+    /// frame asks for one more, for the widget to settle on the shaper's lines.
+    pub fn keepText(f: *Frame, node: Node, key: u64, guess: ?@import("kept.zig").Guess) void {
         const k = f.ctx.kept orelse return;
-        k.ask(key, node.ix());
+        k.ask(key, node.ix(), guess);
     }
 
     /// Asks for float leaf `node` (a caret) to be moved, at this frame's end, onto the run
@@ -815,6 +817,8 @@ pub const Frame = struct {
                 .size = t.c.size,
             };
             if (k.ask_len > 0) k.record(stack, laid);
+            // A widget guessed lines the font broke otherwise: one more frame, on the font's.
+            if (k.moved_any) f.ctx.waker.post();
         }
         tx.overflow = tx.overflow or stack.overflow;
     }
