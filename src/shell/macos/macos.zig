@@ -1,4 +1,5 @@
-//! The macOS shell: one NSWindow whose content view is drawn by the Metal back end, its events as
+//! The macOS shell: one NSWindow whose content view is drawn by the Metal back end's window
+//! (`metal.setup.Window`: a kept picture, redrawn inside each frame's damage), its events as
 //! `Events`. It meets the shell contract of src/shell/iface.zig and never owns the loop: `poll`
 //! drains AppKit's event queue without blocking and returns, `wait` is the only call that sleeps
 //! (no `[NSApp run]`).
@@ -458,10 +459,10 @@ pub const Macos = struct {
     window: Id,
     view: Id,
     t: translate.Translator = .{},
-    dev: metal.device.Device,
-    layer: metal.device.Layer,
-    gfx: metal.Renderer,
-    frames: metal.present.Frames,
+    /// The view's Metal: device, layer, renderer, frames and the picture the window keeps. A
+    /// host with its own GPU work drives it with `begin` and `present`; `present` below is
+    /// the one call for a host without.
+    gpu: metal.setup.Window,
     font: Mono = .{},
     glyphs: GlyphBuffers,
     /// What `present` clears to before drawing.
@@ -486,6 +487,9 @@ pub const Macos = struct {
         size: [2]u32 = .{ 800, 600 },
         /// False for a window that stays hidden (tests).
         show: bool = true,
+        /// Canvas rows the window's renderer keeps on the GPU (`metal.setup.Window.Canvas`);
+        /// none: canvases draw nothing.
+        canvas: metal.setup.Window.Canvas = .{},
     };
 
     /// Caller-owned storage: `text` and `events` hold two frames' typed text and key events,
@@ -510,21 +514,16 @@ pub const Macos = struct {
         try launch();
         const pool = objc.Pool.push();
         defer pool.pop();
-        var dev = try metal.device.Device.init();
-        errdefer dev.deinit();
-        var gfx = try metal.Renderer.init(dev.device, .{ .format = .bgra8_unorm });
-        errdefer gfx.deinit();
         const size: [2]f32 = .{ @floatFromInt(opt.size[0]), @floatFromInt(opt.size[1]) };
+        var gpu: metal.setup.Window = try .init(size, 1, opt.canvas);
+        errdefer gpu.deinit();
         const rect: NSRect = .{ .size = .{ .width = size[0], .height = size[1] } };
         const window = msg(?Id, msg(Id, objc.class("NSWindow"), "alloc", .{}), "initWithContentRect:styleMask:backing:defer:", .{ rect, @as(U, ns_window_style), @as(U, ns_backing_store_buffered), false }) orelse return error.CreateWindow;
         const view = msg(Id, msg(Id, view_class, "alloc", .{}), "initWithFrame:", .{rect});
         m.* = .{
             .window = window,
             .view = view,
-            .dev = dev,
-            .layer = .init(&dev, .{ .size = size, .scale = 1 }),
-            .gfx = gfx,
-            .frames = .init(dev.queue, gfx.desc.frames_in_flight),
+            .gpu = gpu,
             .t = .init(.{ .text = buf.text, .events = buf.events, .preedit = buf.preedit, .names = buf.names, .ends = buf.ends }),
             .glyphs = .{ .quads = buf.glyphs, .first = buf.first, .count = buf.count },
             // Attaching the view can synchronously deliver viewDidChangeEffectiveAppearance.
@@ -546,7 +545,7 @@ pub const Macos = struct {
         msg(void, view, "addTrackingArea:", .{area});
         objc.release(area);
         msg(void, view, "registerForDraggedTypes:", .{msg(Id, objc.class("NSArray"), "arrayWithObject:", .{pasteboard_file_url})});
-        m.layer.attach(view);
+        m.gpu.layer.attach(view);
         // The window has a display now; its scale may not be 1.
         m.t.setScale(msg(f64, window, "backingScaleFactor", .{}));
         m.start = metal.present.mediaTime();
@@ -563,16 +562,13 @@ pub const Macos = struct {
         const pool = objc.Pool.push();
         defer pool.pop();
         m.applyCursor(.arrow, false);
-        m.frames.deinit();
         msg(void, msg(Id, objc.class("NSNotificationCenter"), "defaultCenter", .{}), "removeObserver:", .{m.view});
         msg(void, m.window, "setDelegate:", .{@as(?Id, null)});
         msg(void, m.window, "close", .{});
         objc.release(m.window);
         if (m.effect_view) |effect| objc.release(effect);
         objc.release(m.view);
-        m.layer.deinit();
-        m.gfx.deinit();
-        m.dev.deinit();
+        m.gpu.deinit();
     }
 
     /// Drains AppKit's event queue without blocking; the view's methods translate each event.
@@ -647,7 +643,7 @@ pub const Macos = struct {
             msg(void, effect, "setEmphasized:", .{config.emphasized});
             msg(void, m.window, "setOpaque:", .{false});
             msg(void, m.window, "setBackgroundColor:", .{msg(Id, objc.class("NSColor"), "clearColor", .{})});
-            msg(void, m.layer.layer, "setOpaque:", .{false});
+            msg(void, m.gpu.layer.layer, "setOpaque:", .{false});
         } else if (m.effect_view) |effect| {
             msg(void, m.view, "removeFromSuperview", .{});
             msg(void, m.window, "setContentView:", .{m.view});
@@ -655,7 +651,7 @@ pub const Macos = struct {
             objc.release(effect);
             msg(void, m.window, "setOpaque:", .{true});
             msg(void, m.window, "setBackgroundColor:", .{msg(Id, objc.class("NSColor"), "windowBackgroundColor", .{})});
-            msg(void, m.layer.layer, "setOpaque:", .{true});
+            msg(void, m.gpu.layer.layer, "setOpaque:", .{true});
         }
         _ = msg(bool, m.window, "makeFirstResponder:", .{m.view});
     }
@@ -714,24 +710,32 @@ pub const Macos = struct {
         m.wake();
     }
 
-    /// Draws the frame with Metal into the view's layer and presents it.
+    /// Draws the frame with Metal into the window's picture, inside `out.draw.damage`, and
+    /// presents it. A window that is not shown (`shown`, or no drawable came) gives the frame
+    /// up, and the next frame presented draws all of the picture.
     pub fn present(m: *Macos, out: *const Output) void {
         const pool = objc.Pool.push();
         defer pool.pop();
-        const vp = m.t.in.viewport;
-        _ = m.layer.resize(vp, m.t.in.scale);
-        // After `begin` the slot's instances are free to rewrite.
-        const cmd = m.frames.begin();
+        if (!m.shown()) {
+            m.gpu.lost = true;
+            return;
+        }
         const g = m.glyphs;
         const n = m.font.quads(out.draw, g.quads, .{ .first = g.first, .count = g.count });
-        m.gfx.prepare({}, out.draw, .{ .quads = g.quads[0..n], .first = g.first, .count = g.count }, vp, m.t.in.scale);
-        const drawable = metal.present.nextDrawable(m.layer.layer) orelse return;
+        const glyphs: metal.renderer.Glyphs = .{ .quads = g.quads[0..n], .first = g.first, .count = g.count };
         const c = m.background;
-        const clear: [4]f64 = .{ @as(f64, @floatFromInt(c.r)) / 255, @as(f64, @floatFromInt(c.g)) / 255, @as(f64, @floatFromInt(c.b)) / 255, @as(f64, @floatFromInt(c.a)) / 255 };
-        const pass = metal.present.beginPass(cmd, metal.present.drawableTexture(drawable), clear);
-        m.gfx.render(pass, out.draw);
-        metal.present.endPass(pass);
-        m.frames.present(cmd, drawable, null);
+        const clear: [4]f32 = .{ unit(c.r), unit(c.g), unit(c.b), unit(c.a) };
+        m.gpu.draw(out.draw, glyphs, m.t.in.viewport, m.t.in.scale, clear) catch {
+            m.gpu.lost = true;
+        };
+    }
+
+    /// Whether AppKit shows any of the window (`occlusionState`): not when it is hidden,
+    /// minimised, on another Space or covered whole. A frame for a window not shown is given
+    /// up before the layer is asked for a drawable, which would wait a second for none.
+    pub fn shown(m: *const Macos) bool {
+        const visible: U = 1 << 1; // NSWindowOcclusionStateVisible
+        return msg(U, m.window, "occlusionState", .{}) & visible != 0;
     }
 
     /// Blocks until the next event or `seconds` pass (`inf`: until the next event); while
@@ -768,6 +772,10 @@ pub const Macos = struct {
 
 comptime {
     iface.check(Macos);
+}
+
+fn unit(v: u8) f32 {
+    return @as(f32, @floatFromInt(v)) / 255;
 }
 
 // ---- Tests: on macOS only (`zig build macos`) -----------------------------------------------
@@ -1032,6 +1040,22 @@ test "macos: a real window runs the example from posted events" {
     try testing.expectEqual(msg(Id, objc.class("NSCursor"), "arrowCursor", .{}), m.cursors[0]);
 }
 
+test "macos: a window that is not shown gives its frame up and owes all of it" {
+    var m: Macos = undefined;
+    try Fixture.open(&m); // never ordered in
+    defer m.deinit();
+    var ev: Events = .{};
+    _ = m.poll(&ev);
+    try testing.expect(!m.shown());
+    var ctx = try context.Context.init(&Fixture.ctx_buffer, example_limits);
+    var f = ctx.begin(&ev.in);
+    _ = f.leaf(.none, .{ .size = .{ .fill, .fill }, .fill = .rgb(0, 0, 255) });
+    const out = f.end(.{});
+    m.present(&out);
+    try testing.expect(m.gpu.lost);
+    try testing.expectEqual(null, m.gpu.gfx.list);
+}
+
 test "macos: a real material wraps the Metal view and can be removed" {
     var m: Macos = undefined;
     try Fixture.open(&m);
@@ -1042,7 +1066,7 @@ test "macos: a real material wraps the Metal view and can be removed" {
     try testing.expectEqual(@as(isize, 7), msg(isize, effect, "material", .{}));
     try testing.expectEqual(@as(isize, 1), msg(isize, effect, "state", .{}));
     try testing.expectEqual(effect, msg(Id, m.view, "superview", .{}));
-    try testing.expect(!msg(bool, m.layer.layer, "isOpaque", .{}));
+    try testing.expect(!msg(bool, m.gpu.layer.layer, "isOpaque", .{}));
     try testing.expectError(error.InvalidMaterial, m.setMaterial(.{ .material = .titlebar }));
     try m.setMaterial(null);
     try testing.expectEqual(@as(?Id, null), m.effect_view);

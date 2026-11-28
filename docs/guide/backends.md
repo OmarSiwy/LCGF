@@ -74,7 +74,7 @@ shells that use it:
 | Back end | Setup | Used by |
 |---|---|---|
 | `vk` | `vk.Setup` (loader, instance, device, renderer) and `vk.setup.Window` (surface, swapchain, frames and the kept picture: `begin` and `present`, or `draw` in one call; `rebuild`) | Android shell, the X11 GPU window (`src/shell/x11/gpu.zig`) and through it `lcgf_app` |
-| `metal` | `metal.Setup` over a `CAMetalLayer` (device, renderer, frames in flight, `draw`) | iOS shell |
+| `metal` | `metal.Setup` over a `CAMetalLayer` (device, renderer, frames in flight, `draw` of the whole frame), and `metal.setup.Window` (device, its own layer, frames and the kept picture: `begin` and `present`, or `draw` in one call) | iOS shell (`Setup`), macOS shell (`Window`) |
 | `sw` | `sw.Setup`: draw the list into a framebuffer that keeps the last frame, only inside its damage; you show the pixels | X11, Win32 and Wayland shells |
 
 Direct3D 12, GL ES, wgpu and web have no `Setup` yet, because no shell draws with them; their
