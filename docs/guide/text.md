@@ -202,6 +202,18 @@ the bitmap font, canvas glyphs sample the bundled font's cells (`Mono.canvasGlyp
 `bench/micro/canvastext.zig` measures the choice of distance images over rasterising again at
 each zoom.
 
+## Text in several styles
+
+A paragraph with bold, italic and code in it is one text leaf and a list of spans:
+`f.textSpans(str, style, &spans, leaf_style)`, each `protocol.Span` from its `start` byte on in
+its own `TextStyle` (size, colour, and `font`: in an `lcgf_app` window, file k of
+`Options.fonts`). The leaf wraps, aligns and measures as one paragraph. A host that collects
+them (`Context.enableSpans`, src/runtime/spanned.zig) ends the frame with the styled runs:
+`Frame.endTextStyled` with a shaper, `Frame.endParagraphs` with `MonoParagraphs` for the bundled
+font, which draws each span at its size and colour in its one face. `lcgf_app` does this for
+every window; a host that does not draws the leaf in its base style. A frame without spans
+ends as before.
+
 ## Editable text that wraps
 
 A text area given `textarea.Options` instead of a row count (`src/widgets/textarea.zig`) wraps

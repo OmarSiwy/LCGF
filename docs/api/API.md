@@ -3610,11 +3610,12 @@ Fields: `draw`, `tree`, `texts`, `platform`, `status`, `wake`, `pace`
 ### `Context` (struct)
 Everything that outlives a frame.
 
-Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`, `damage`, `damage_hook`, `redraw_all`, `last_view`, `canvas_hook`, `canvas_frame`, `kept`
+Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`, `damage`, `damage_hook`, `redraw_all`, `last_view`, `canvas_hook`, `canvas_frame`, `kept`, `spanned`
 
 - `needsFrame = scheduler.needsFrame`
 - `fn trackDamage(ctx: *Context) void`: From the next frame on, keeps in the draw list only the quads that reach what changed since the last frame, with `DrawList.damage` saying where: for a host that keeps last frame's pixels and redraws only that (`sw.Setup.draw`, the X11 and Wayland shells, the bare-metal flush).
 - `fn trackDamageWhole(ctx: *Context) void`: `trackDamage` without the cull: `DrawList.damage` says what changed and the list keeps every quad.
+- `fn enableSpans(ctx: *Context, s: *@import("spanned.zig").Spanned) void`: Collects, in `s`, the text leaves frames draw in several styles (`Frame.textSpans`), for the host to end each frame with (`Spanned.styled`, `Spanned.mono`).
 - `fn enableKept(ctx: *Context, k: *@import("kept.zig").Kept) void`: Keeps, in `k`, the runs widgets ask for (`Frame.keepText`) as a shaper lays them out (`Frame.endText`): an editable text that wraps follows the lines the font drew.
 - `fn enableCanvas(ctx: *Context, rows: []draw_list.CanvasDraw) void`: Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `2 * limits.customs` of them, the caller's, alive as long as the context) hold `DrawList.canvases`, one per custom row, in two generations as the customs are, so `Frame.reuse` can carry a canvas over from the last frame.
 - `fn canvasRows(ctx: *Context) [2][]draw_list.CanvasDraw`: This frame's canvas rows and last frame's.
@@ -3662,6 +3663,7 @@ Fields: `ctx`, `in`
 - `fn keepText(f: *Frame, node: Node, key: u64, guess: ?@import("kept.zig").Guess) void`: Asks for text leaf `node`'s run as the shaper lays it out at this frame's end, kept under `key` for the next frame (`keptRun`), when the host keeps runs (`Context.enableKept`) and draws with a shaper (`endText`).
 - `fn keepCaret(f: *Frame, node: Node, key: u64, at: u32) void`: Asks for float leaf `node` (a caret) to be moved, at this frame's end, onto the run asked under `key` at byte `at`, as laid out: at its x, on its line, that line tall.
 - `fn keptRun(f: *const Frame, key: u64, bytes: []const u8) ?@import("kept.zig").Kept.Run`: The run kept under `key` by the last frame (`keepText`), while its text is `bytes`.
+- `fn textSpans(f: *Frame, str: []const u8, ts: TextStyle, sp: []const Span_, s: Style) Node`: One text leaf in several styles: `str` in `ts`, and from each span's `start` on in its style (size, colour, font: `TextStyle.font` is the host's face).
 - `fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node`: `text` with full control over the leaf (padding, sizing, background).
 - `fn custom(f: *Frame, id: Id, style: Style, data: u64) Node`: Reserves a rect that the caller draws itself.
 - `fn customRow(f: *Frame, id: Id, row: anytype, data: u64) Node`: `custom` from a row (`openRow`).
@@ -3745,6 +3747,20 @@ One kept run: its lines' first bytes and tops, px from the run's top, its height
 
 Fields: `starts`, `tops`, `ends`, `height`, `xs`, `moved`
 
+
+## `lcgf.spanned` (src/runtime/spanned.zig)
+
+spanned: the text leaves of a frame drawn in several styles (`Frame.textSpans`).
+
+### `Spanned` (struct)
+
+Fields: `rows`, `styles`, `table`, `spans`, `len`, `overflow`
+
+- `fn requiredBytes(n: u32) usize`
+- `fn init(carver: *mem.Carver, n: u32) Spanned`
+- `fn add(s: *Spanned, row: u32, spans: []const protocol.Span) bool`: Text row `row` takes `spans` over its base style; false when there is no room.
+- `fn styled(s: *Spanned, p: Paragraph) protocol.Styled`: The frame's styled runs, every one with the paragraph `p` (the host's default).
+- `fn mono(s: *Spanned) protocol.MonoParagraphs`: The bundled font over the frame's styled runs (`Frame.endParagraphs`, and its `quads`).
 
 ## `lcgf.text_lines` (src/text/layout/lines.zig)
 

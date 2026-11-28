@@ -183,6 +183,9 @@ pub const Context = struct {
     /// Set by `enableKept`: text runs a shaper laid out, kept for the widgets that asked
     /// (src/runtime/kept.zig).
     kept: ?*@import("kept.zig").Kept = null,
+    /// Set by `enableSpans`: this frame's text leaves drawn in several styles
+    /// (src/runtime/spanned.zig).
+    spanned: ?*@import("spanned.zig").Spanned = null,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -245,6 +248,14 @@ pub const Context = struct {
         _ = ctx.damage.frame(t, tx, cu, strings);
         ctx.draw.damage = if (ctx.redraw_all) .everything else ctx.damage.region;
         ctx.redraw_all = false;
+    }
+
+    /// Collects, in `s`, the text leaves frames draw in several styles (`Frame.textSpans`),
+    /// for the host to end each frame with (`Spanned.styled`, `Spanned.mono`).
+    pub fn enableSpans(ctx: *Context, s: *@import("spanned.zig").Spanned) void {
+        std.debug.assert(s.rows.len > 0);
+        s.len = 0;
+        ctx.spanned = s;
     }
 
     /// Keeps, in `k`, the runs widgets ask for (`Frame.keepText`) as a shaper lays them out
@@ -397,6 +408,10 @@ pub const Context = struct {
         ctx.flips.overflow = false;
         ctx.frame +%= 1;
         ctx.memos.kept_len = 0;
+        if (ctx.spanned) |s| {
+            s.len = 0;
+            s.overflow = false;
+        }
 
         const prev = &ctx.trees[ctx.cur ^ 1];
         ctx.inter.stepWithHit(prev, in, node);

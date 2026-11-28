@@ -588,7 +588,7 @@ pub fn Gpu(comptime P: type) type {
                 gw.text_dirty = p;
                 return glyphs;
             }
-            var glyphs = font.glyphs(list, run.quads, run.first, run.count);
+            var glyphs = text.bitmapGlyphs(run.ctx, list, run.quads, run.first, run.count);
             glyphs.texture = @fromBackingInt(handle_font);
             return glyphs;
         }

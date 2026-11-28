@@ -28,6 +28,7 @@ const Spring = @import("../anim/anims.zig").Spring;
 const Ease = @import("../anim/tweens.zig").Ease;
 const values = @import("../anim/values.zig");
 const Span = @import("../core/strings.zig").Span;
+const Span_ = protocol.Span;
 const Transition = @import("../anim/tweens.zig").Transition;
 const keyframes = @import("../anim/keyframes.zig");
 const flip = @import("../anim/flip.zig");
@@ -223,6 +224,19 @@ pub const Frame = struct {
     pub fn keptRun(f: *const Frame, key: u64, bytes: []const u8) ?@import("kept.zig").Kept.Run {
         const k = f.ctx.kept orelse return null;
         return k.get(key, bytes);
+    }
+
+    /// One text leaf in several styles: `str` in `ts`, and from each span's `start` on in its
+    /// style (size, colour, font: `TextStyle.font` is the host's face). The spans `sp` are
+    /// sorted by `start` and outlive the frame; `s` lays the leaf out, as `textStyled`'s. A
+    /// host that collects them (`Context.enableSpans`) lays the leaf out and draws it so; any
+    /// other draws it in `ts`.
+    pub fn textSpans(f: *Frame, str: []const u8, ts: TextStyle, sp: []const Span_, s: Style) Node {
+        const n = f.textStyled(str, ts, s);
+        if (f.ctx.spanned) |k| if (sp.len > 0) {
+            _ = k.add(f.tree().c.text[n.ix()], sp);
+        };
+        return n;
     }
 
     /// `text` with full control over the leaf (padding, sizing, background).

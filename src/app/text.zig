@@ -93,6 +93,9 @@ pub const Options = struct {
     /// Points and contours of the most complex glyph outline.
     outline_points: u32 = 2048,
     outline_contours: u32 = 256,
+    /// Style spans of a frame's text leaves drawn in several styles (`Frame.textSpans`), all
+    /// leaves together; past them the leaves are drawn plain (`Stack.overflow`).
+    spans: u32 = 256,
 };
 
 /// A font file's bytes (`@embedFile`, or read from disk) and the face's index in it, non-zero
@@ -139,12 +142,35 @@ pub const can_discover = builtin.os.tag != .linux or builtin.link_libc;
 /// Canvas labels in these faces over a distance atlas (src/app/labels.zig).
 pub const labels = @import("labels.zig");
 
+/// The glyph quads of list `d` in the bundled bitmap font (`render_sw_font.glyphs`); a frame's
+/// leaves with spans (`Frame.textSpans`) in their spans' sizes and colours, as `Bitmap.end`
+/// laid them out, when `d` is `ctx`'s list of this frame.
+pub fn bitmapGlyphs(
+    ctx: *Context,
+    d: *const DrawList,
+    quads: []Quad,
+    first: []u32,
+    count: []u32,
+) lcgf.render_iface.Glyphs {
+    const font = lcgf.render_sw_font;
+    const s = ctx.spanned orelse return font.glyphs(d, quads, first, count);
+    if (s.len == 0 or d != &ctx.draw) return font.glyphs(d, quads, first, count);
+    var p = s.mono();
+    p.strings = d.strings;
+    const n = p.quads(d, &ctx.texts[ctx.cur], quads, .{ .first = first, .count = count });
+    return .{ .quads = quads[0..n], .first = first, .count = count, .texture = font.texture };
+}
+
 pub const Text = struct {
     /// Shapes, measures and wraps every run whose font is a face here, in logical pixels: the
     /// stack `Frame.endText` takes.
     stack: text_stack.Stack,
     /// One row per run: its first baseline, written by measure and wrap (`Frame.endText`).
     ascent: []f32,
+    /// The rows `Frame.endTextStyled` points the stack at for a frame's leaves with spans,
+    /// and its scratch for their decorations (`end`).
+    styled: text_stack.StyledRows,
+    rects: []lcgf.types.Rect,
     faces: []opentype.Face,
     shapers: []shape.Shaper,
     /// Chain f lists every face, f first; `order` holds the lists, `faces` rows each.
@@ -241,6 +267,19 @@ pub const Text = struct {
         std.debug.assert(t.stack.fallback.?.metrics.len >= n);
         // A run measured before may draw from this face now: no kept extent or run holds.
         t.extents.generation +%= 1;
+    }
+
+    /// Ends frame `f` with the service's stack: `Frame.endTextStyled` when the frame has
+    /// leaves with spans (`Frame.textSpans`, each span's `TextStyle.font` a face here), else
+    /// `Frame.endText`, the stack's styles of an earlier frame dropped.
+    pub fn end(t: *Text, f: *lcgf.frame.Frame) lcgf.context.Output {
+        if (f.ctx.spanned) |s| if (s.len > 0) {
+            const styled = s.styled(t.stack.default_paragraph);
+            return f.endTextStyled(&t.stack, t.ascent, styled, t.styled, t.rects);
+        };
+        t.stack.paragraphs = &.{};
+        t.stack.rich = &.{};
+        return f.endText(&t.stack, t.ascent);
     }
 
     /// The glyph quads of every text run `d` draws (draw-list run k is `tx` row k, as
@@ -627,7 +666,10 @@ pub const Bitmap = struct {
         return false;
     }
 
+    /// Ends frame `f` in the bundled font: its leaves with spans (`Frame.textSpans`) through
+    /// `MonoParagraphs`, in their spans' sizes and colours.
     pub fn end(_: *Bitmap, f: *lcgf.frame.Frame) lcgf.context.Output {
+        if (f.ctx.spanned) |s| if (s.len > 0) return f.endParagraphs(s.mono());
         return f.end(.{});
     }
 
@@ -699,11 +741,14 @@ pub const Window = struct {
         return if (w.text) |t| t.face_len > 0 else false;
     }
 
-    /// Ends frame `f`: `Frame.endText` through the service when `on`, else `Frame.end`.
+    /// Ends frame `f`: through the service when `on` (`Text.end`), else in the bundled font
+    /// (`Bitmap.end`).
     pub fn end(w: *Window, f: *lcgf.frame.Frame) lcgf.context.Output {
-        if (!w.on()) return f.end(.{});
-        const t = &w.text.?;
-        return f.endText(&t.stack, t.ascent);
+        if (!w.on()) {
+            var b: Bitmap = .{};
+            return b.end(f);
+        }
+        return w.text.?.end(f);
     }
 
     /// `Text.glyphs` of `out` at `scale`. When the atlas started again, or a character of the
@@ -789,6 +834,17 @@ fn carve(c: *mem.Carver, o: Options) Text {
     var t: Text = .{
         .stack = carveStack(c, o),
         .ascent = c.slice(f32, o.texts),
+        .styled = .{
+            .paragraphs = c.slice(text_stack.Paragraph, o.texts),
+            .rich = c.slice(?text_stack.Rich, o.texts),
+            .spans = c.slice(lcgf.text_spans.Spans, o.texts),
+            .start = c.slice(u32, o.spans + o.texts),
+            .font = c.slice(u16, o.spans + o.texts),
+            .px = c.slice(f32, o.spans + o.texts),
+            .color = c.slice(u32, o.spans + o.texts),
+            .metrics = c.slice(text_lines.Metrics, o.spans + 1),
+        },
+        .rects = c.slice(lcgf.types.Rect, o.run_glyphs),
         .faces = c.slice(opentype.Face, o.faces),
         .shapers = c.slice(shape.Shaper, o.faces),
         .chains = c.slice(fallback.Chain, o.faces),

@@ -198,6 +198,7 @@ pub fn runWith(app: anytype, recording: []const u8, comptime o: Options) !Run {
     defer tw.close();
     ctx.enableCanvas(&B.canvas_rows);
     if (serves) app_mod.openKept(&ctx, B.ao, &tw);
+    app_mod.openSpans(&ctx);
     if (serves) app_mod.openLabels(App, app, B.ao, &tw);
     const viewport: [2]f32 = .{ @floatFromInt(o.size[0]), @floatFromInt(o.size[1]) };
     var shell: Shell = .{
@@ -512,6 +513,97 @@ test "replay: a text area settles on the service's lines with no input after an 
     try testing.expectEqual(lines - 2, app.draft.scroll);
     try testing.expect(caret.y0 >= box.y0 and caret.y1 <= box.y1);
     try testing.expectApproxEqAbs(text_run.y1, caret.y1, 1);
+}
+
+/// A paragraph "plain **bold** *italic* `code`", its spans in faces 1, 2 and 3, wrapping in a
+/// column 110 px wide, and a paragraph without spans under it; white on black.
+const Spans = struct {
+    const Span = lcgf.protocol.Span;
+    const words = "plain bold italic code";
+    const base: lcgf.types.TextStyle = .{ .px = 15, .color = .white, .wrap = true };
+    const spans = [_]Span{
+        .{ .start = 6, .style = .{ .px = 15, .color = .white, .font = @fromBackingInt(1) } },
+        .{ .start = 11, .style = .{ .px = 15, .color = .white, .font = @fromBackingInt(2) } },
+        .{ .start = 18, .style = .{ .px = 15, .color = .white, .font = @fromBackingInt(3) } },
+    };
+    const files = [_]text.File{
+        .{ .bytes = @embedFile("layout.ttf") },
+        .{ .bytes = @embedFile("testdata/bold.ttf") },
+        .{ .bytes = @embedFile("testdata/oblique.ttf") },
+        .{ .bytes = @embedFile("testdata/mono.ttf") },
+    };
+    const size = [2]u32{ 200, 140 };
+    const options: Options = .{ .size = size, .fonts = &files };
+
+    pub fn build(_: *Spans, f: *lcgf.frame.Frame, _: *const Events) void {
+        _ = f.open(.none, .{ .dir = .y, .size = .{ .fill, .fill }, .pad = @splat(6), .gap = 4 });
+        _ = f.open(.none, .{ .dir = .y, .size = .{ .px(110), .fit } });
+        _ = f.textSpans(words, base, &spans, .{ .shrink = true });
+        _ = f.textStyled("plain again", base, .{ .shrink = true });
+        f.close();
+        f.close();
+    }
+};
+
+test "replay: a paragraph with spans wraps and draws each span in its face; one without, as ever" {
+    var app: Spans = .{};
+    const s = try runWith(&app, "frame\n", Spans.options);
+    // It wrapped: the spanned run is taller than the plain one under it.
+    const t_out = s.out.?.tree;
+    const para = t_out.rect(t_out.c.end[1] - 2);
+    const plain = t_out.rect(t_out.c.end[1] - 1);
+    try testing.expect(para.h() > 1.5 * plain.h());
+    // The reference: the same frame laid out by a service of its own through `Text.end`, its
+    // glyphs rasterised straight from each span's face (text.zig's golden reference).
+    const Ref = struct {
+        const limits = Spans.options.limits;
+        const app_o: app_mod.Options = .{
+            .fonts = &Spans.files,
+            .limits = limits,
+            .text = Spans.options.text,
+        };
+        const o = app_mod.textOptions(app_o);
+        var ctx: [context.Context.requiredBytes(limits)]u8 align(lcgf.mem.column_align) = undefined;
+        var service: [text.Text.requiredBytes(o)]u8 align(lcgf.mem.column_align) = undefined;
+        const spanned_n = lcgf.spanned.Spanned.requiredBytes(4);
+        var spanned_bytes: [spanned_n]u8 align(lcgf.mem.column_align) = undefined;
+        var img: [200 * 140]u8 = undefined;
+    };
+    var rctx = try context.Context.init(&Ref.ctx, Ref.limits);
+    var carver: lcgf.mem.Carver = .{ .buf = &Ref.spanned_bytes };
+    var spanned: lcgf.spanned.Spanned = .init(&carver, 4);
+    rctx.enableSpans(&spanned);
+    var t = try text.Text.init(&Ref.service, Ref.o, &Spans.files);
+    const in: Input = .{ .viewport = .{ 200, 140 } };
+    var f = rctx.begin(&in);
+    app.build(&f, &.{});
+    const ref = t.end(&f);
+    @memset(&Ref.img, 0);
+    const fallbacks = try text.drawReference(&t, ref, 1, &Ref.img, 200);
+    // Each span from its own face: three runs of glyphs outside the run's own font.
+    try testing.expect(fallbacks > 10);
+    var bad: u32 = 0;
+    var ink: u32 = 0;
+    for (0..140) |y| for (0..200) |x| {
+        const want: i32 = Ref.img[y * 200 + x];
+        const got = s.at(@intCast(x), @intCast(y));
+        ink += @intFromBool(want > 0);
+        bad += @intFromBool(@abs(@as(i32, got.r) - want) > 2);
+    };
+    errdefer std.debug.print("spans: {d} bad pixels of {d} inked\n", .{ bad, ink });
+    try testing.expectEqual(0, bad);
+    try testing.expect(ink > 300);
+}
+
+test "replay: spans in the bundled font take their sizes; without spans the run is as before" {
+    var app: Spans = .{};
+    const s = try runWith(&app, "frame\n", .{ .size = Spans.size });
+    const t = s.out.?.tree;
+    const para = t.rect(t.c.end[1] - 2);
+    const plain = t.rect(t.c.end[1] - 1);
+    // Mono at 15 px: 9 px a byte, 110 px of 12 bytes; the 22 bytes wrap into two lines.
+    try testing.expect(para.h() > 1.5 * plain.h());
+    try testing.expectApproxEqAbs(11 * 15 * 0.6, plain.w(), 0.5);
 }
 
 test "replay: draw paints a list as the replay drew it" {

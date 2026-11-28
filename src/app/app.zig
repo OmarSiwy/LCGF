@@ -333,6 +333,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     defer tw.close();
     ctx.enableCanvas(&B.canvas_rows);
     openKept(&ctx, options, &tw);
+    openSpans(&ctx);
     openLabels(App, app, options, &tw);
     if (has_gpu) switch (try runGpu(App, app, env, options, clock, &ctx, &tw)) {
         .done => return,
@@ -555,6 +556,22 @@ fn serves(comptime options: Options) bool {
 /// by `options.labels`, which the window then draws canvas glyphs from, when its text is the
 /// service's; else the field stays empty and canvas glyphs sample the bundled font. An App
 /// without the field carves nothing.
+/// Leaves a frame draws in several styles (`Frame.textSpans`): past them, plain.
+const spanned_rows = 64;
+
+/// Collects the frame's leaves with style spans (`Frame.textSpans`), for the window to lay
+/// out and draw in their spans' styles, in rows carved once per program.
+pub fn openSpans(ctx: *context.Context) void {
+    const Spanned = lcgf.spanned.Spanned;
+    const S = struct {
+        var bytes: [Spanned.requiredBytes(spanned_rows)]u8 align(lcgf.mem.column_align) = undefined;
+        var spanned: Spanned = undefined;
+    };
+    var carver: lcgf.mem.Carver = .{ .buf = &S.bytes };
+    S.spanned = .init(&carver, spanned_rows);
+    ctx.enableSpans(&S.spanned);
+}
+
 /// Runs a widget keeps (`lcgf.kept`: a text area that wraps follows the lines the service
 /// drew): runs, their lines and their bytes.
 // ponytail: fixed, about 75 KB beside the service's megabytes; an option if an App needs more.
@@ -668,12 +685,13 @@ const Textures = struct {
     /// for `images` (`damage` then draws what they changed).
     fn frame(
         t: *Textures,
+        ctx: *context.Context,
         images: []const Image,
         d: *const lcgf.draw_list.DrawList,
         glyphs: Glyphs,
     ) lcgf.render_iface.Glyphs {
         const rows = t.update(images);
-        var g = font.glyphs(d, glyphs.quads, glyphs.first, glyphs.count);
+        var g = text.bitmapGlyphs(ctx, d, glyphs.quads, glyphs.first, glyphs.count);
         g.texture = @fromBackingInt(@as(u16, @intCast(rows.len - 1)));
         return g;
     }
@@ -797,7 +815,7 @@ pub fn loop(
                 const g = if (tw.on())
                     textures.service(images, tw.glyphs(ctx, &out, ev.in.scale))
                 else
-                    textures.frame(images, out.draw, glyphs);
+                    textures.frame(ctx, images, out.draw, glyphs);
                 // An App with images keeps its list whole (`run`): culled here, with them.
                 if (@hasDecl(App, "images")) textures.damage(&ctx.draw);
                 shell.presentWith(&out, g, textures.shown(tw.on()));
@@ -853,7 +871,7 @@ fn composedFrame(
     const g = if (tw.on())
         textures.service(images, tw.glyphsOf(ctx, d, b.composed.texts, ev.in.scale))
     else
-        textures.frame(images, d, glyphs);
+        textures.frame(ctx, images, d, glyphs);
     textures.damage(d);
     shell.presentWith(&shown, g, textures.shown(tw.on()));
 }
