@@ -196,9 +196,6 @@ fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const
             cam.origin = .{ try std.fmt.parseInt(i64, f.next().?, 10), try std.fmt.parseInt(i64, f.next().?, 10) };
             cam.scale = try std.fmt.parseFloat(f32, f.next().?);
             cam.offset = .{ try std.fmt.parseFloat(f32, f.next().?), try std.fmt.parseFloat(f32, f.next().?) };
-            cam.zoom = try std.fmt.parseFloat(f32, f.next().?);
-        } else if (std.mem.eql(u8, key, "palette")) {
-            pal.zoom_scale = std.mem.eql(u8, f.next().?, "1");
         } else if (std.mem.eql(u8, key, "layer")) {
             try layers.append(gpa, .{
                 .stroke = try std.fmt.parseInt(u32, f.next().?, 10),
@@ -222,12 +219,12 @@ fn drawCanvas(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, cmds: []const
     const n: u32 = @intCast(rows.len / 32);
     const nv: u32 = @intCast(verts.len / 8);
     const A = comptime std.mem.Alignment.fromByteUnits(lcgf.mem.column_align);
-    // marks.bin, when there: a mark a row.
-    const marks = dir.readFileAlloc(io, "marks.bin", gpa, .limited(1 << 26)) catch &.{};
-    const o: canvas.Instances.Options = .{ .marks = marks.len != 0 };
+    // colors.bin, when there: a colour a row.
+    const colors = dir.readFileAlloc(io, "colors.bin", gpa, .limited(1 << 26)) catch &.{};
+    const o: canvas.Instances.Options = .{ .colors = colors.len != 0 };
     var carver: lcgf.mem.Carver = .{ .buf = try gpa.alignedAlloc(u8, A, canvas.Instances.requiredBytes(@max(n, 1), nv, 1, o)) };
     var s = canvas.Instances.init(&carver, @max(n, 1), nv, 1, o);
-    if (o.marks) @memcpy(std.mem.sliceAsBytes(s.marks[0..n]), marks[0 .. 4 * n]);
+    if (o.colors) @memcpy(std.mem.sliceAsBytes(s.colors[0..n]), colors[0 .. 4 * n]);
     for (0..n) |i| {
         const row = std.mem.bytesAsValue([8]u32, rows[i * 32 ..][0..32]).*;
         s.c.pos[i] = @bitCast(row[0..4].*);

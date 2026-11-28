@@ -8,65 +8,70 @@ It needs them in a few weeks. Sources: the research replies of 2026-11-26 (file:
 
 ## 1. The canvas
 
-### What it draws
-About 100,000 primitives per frame, at 120 fps while panning and zooming (Schemify budget D39):
-- line segments with width and caps;
-- rects;
-- arcs;
-- filled polygons;
-- glyphs.
+`lcgf.canvas` (src/draw/canvas.zig) draws many 2D primitives from caller-owned columns under a camera. A schematic, a plot or a map fills `Instances` once, or when it changes. Every frame, `Frame.canvas` puts one node in the tree with a `Camera`, an optional `Palette` and the `Range`s to draw. Panning, zooming and recolouring change a few numbers, not the rows; a GPU back end uploads only `Instances.dirty`.
 
-Coordinates are i32 milli-units, transformed by a camera. Output is premultiplied, clipped to the canvas node's rect, and identical on every back end, `sw` included (headless PNG export, pixel goldens in CI, machines without a GPU).
+`canvas.wgsl`, translated by naga, draws it on every GPU back end, and its Zig twin draws it in `sw` (src/render/sw/canvas.zig). The `canvas` golden holds the two to the same pixels. Output is premultiplied and clipped to the node's rect.
 
-### Design: an LCGF-owned primitive batch, not quads and not a WGSL executor
-- **Not a CPU executor for user WGSL** (Schemify's option a). That is a shader interpreter, out of place in Tier 0, and a restricted subset would drift from the real shaders.
-- **Not one `Quad` per primitive** (the research's first sketch). A `Quad` is 136 bytes, so 100k is about 13.6 MB written and uploaded every frame, and a camera move would re-emit all of it.
-- **Instead, a canvas batch.** The caller fills compact instance columns once, about 24 bytes per primitive. Panning and zooming change only a camera uniform. LCGF owns the shader, written once as `canvas.wgsl` and translated by naga to every GPU back end, and a Zig twin of it in `sw`. Goldens hold the two to the same pixels. This is the pattern `quad.wgsl` and `sw`'s shader loop already follow.
+### The row
+- **Size:** each instance is 32 bytes in two instance-step rows, `pos` (4 × i32) and `look` (4 × u32), plus a u32 colour column (`Instances.colors`, on by default, 4 bytes a row).
+- **Kinds:** `segment` (butt, square or round caps), `rect` (fill, stroke, corner radius), `arc` (a ring sector with caps; `circle` is a full one), `polygon` (any simple or self-crossing chain in the side column `verts`, nonzero rule) and `glyph` (an atlas cell, turned in quarter turns).
+- **Coordinates:** the application's own integer units (i32), whatever its document counts in. The camera's i64 origin is subtracted in wrapping i32 before any f32, so a pan far from 0 loses no precision.
+- **Colour:** a row's own colour, when it is not 0, is both its stroke and its fill. Otherwise the row takes its layer's. A range `Override` recolours a layer's rows (a selection, a diff); a row's own colour wins over both.
+- **Style:** a `Layer` (16 bytes; a palette is one uniform array of at most 256) holds stroke and fill colours, the stroke width in logical pixels, the dash's on and off lengths in logical pixels (to 1/16 px, below 2048), whether fills are drawn, and whether the layer is shown. An empty palette gives every row `Layer.default`: white, 1 px, solid.
+- **Width:** a stroke is its layer's width in logical pixels at any zoom (a hairline stays a hairline), or, per row, a width in world units that zooms with the drawing (`.width = n` on the builder).
+- **Dashes:** a dash runs along a segment chain from its start, and along an arc's centre line from its start angle.
+- **Glyphs:** this file knows no font. `protocol.Mono.canvasGlyphs` writes bitmap-font glyphs over a `protocol.Atlas` of cells. `lcgf_app`'s labels (src/app/labels.zig) write distance glyphs in real fonts. A window has one canvas atlas, so one `Instances` holds one kind of glyph; mixing them trips a debug assertion.
+- **Hit testing:** `canvas.hit` uses the same distance functions on the CPU, so what is selected is what is drawn.
 
-### Usage first (what a Schemify frame looks like)
+### Usage
+An application that colours rows itself (a plot, a map) needs no palette:
 
 ```zig
-// Once, or when the schematic changes: caller-owned, padded SoA columns (Tier 0, no allocator).
-var shapes: lcgf.canvas.Instances = .init(&storage, 100_000);
-const wire = shapes.segment(.{ 0, 0 }, .{ 25_400, 0 }, .{ .width = 150, .cap = .round, .color = net_color });
-_ = shapes.rect(.{ -5_000, -2_500 }, .{ 5_000, 2_500 }, .{ .fill = body, .stroke = edge, .width = 200 });
-_ = shapes.arc(.{ 0, 0 }, 1_270, .{ .start = 0, .sweep = std.math.pi, .width = 150, .color = edge });
-_ = shapes.polygon(&.{ .{ 0, 0 }, .{ 1_000, 500 }, .{ 0, 1_000 } }, .{ .fill = pin });
-_ = shapes.glyphs(run, .{ 2_000, 0 }, .{ .px = 1_270, .color = label });
-
-// Every frame: one node, the camera, the ranges to draw (layers, selection on top).
-const node = f.canvas(.from("schematic"), .{ .size = .{ .fill, .fill } }, &shapes, .{
-    .camera = .{ .origin = view.origin, .scale = view.px_per_milli },
-    .ranges = &.{ layers.wires, layers.symbols, layers.selection },
+var shapes: lcgf.canvas.Instances = .init(&carver, 100_000, 4_096, 64, .{});
+_ = shapes.segment(.{ 0, 0 }, .{ 25_400, 0 }, .{ .color = trace, .width = 150, .cap = .round });
+_ = shapes.circle(.{ 0, 0 }, 1_270, .{ .color = marker });
+_ = f.canvas(.from("plot"), .{ .size = .{ .fill, .fill } }, &shapes, .{
+    .camera = .{ .origin = view.origin, .scale = view.px_per_unit },
+    .ranges = &.{shapes.since(0)},
 });
-const r = f.interact(node, .{ .hover = true, .drag = true });   // pan, select: existing calls
 ```
 
-- **Instance kinds:** `segment` (capsule SDF, butt/square/round caps), `rect` (fill, stroke, radius), `circle`, `arc` (ring sector with caps), `polygon` (an edge range in a side column; winding evaluated per pixel inside its box), `glyph` (an atlas sample, through the existing glyph atlas).
-- **Coordinates:** `i32` milli-units. The camera takes an `i64` origin, so subtracting it on the host keeps f32 precision at any pan distance; the shader receives origin-relative i32 values plus scale and offset.
-- **Draw list:** one new command kind, `canvas`, carrying the node rect and clip, the instance buffer reference, the camera and the ranges. It sorts and damages like a custom node; a camera change damages the node.
-- **Hit testing:** `lcgf.canvas.hit(&shapes, camera, point) ?u32` uses the same SDFs on the CPU, so selection matches what is drawn. Optional: Schemify keeps its own object index.
+An application with layers (a schematic: theme, hidden layers, highlight at one uniform write) names a layer per row and passes its palette:
 
-### Schemify's answers (2026-11-26), which the layout follows
-- **Width in screen logical px:** weight (1..4) × palette width of the layer, optionally × clamp(zoom, 0.5, 4); a world-unit width as an option.
-- **Colour by palette:** an instance stores a layer index (u8, 40 layers) and style bits; a palette uniform holds colour, width and fill on/off per layer, so theme, hidden layers and highlight cost one uniform write.
-- **Recolour and overlay by row:** a per-draw colour override table keyed by row range, and a second batch with its own ranges on top.
-- **Incremental updates:** rows are killed in place and appended; the caller marks dirty row ranges, and only those upload.
-- **Fill and stroke** of one closed shape on one layer, fills under strokes.
-- **Polygons:** CSR chains of ≥2 points, simple, often non-convex, unbounded edge count, nonzero rule. Open polylines are chains of capped segments, no joins.
-- **Dashes:** dash n in 0..15 is dashes and gaps of 2n logical px in screen space, restarting at each chain's first edge.
-- **Glyphs:** from LCGF's shaper; size in world milli-units, rotation in quarter turns, anchored at a world point.
+```zig
+const layers = [_]lcgf.canvas.Layer{
+    .of(.{ .stroke = wire, .width = 1 }),                      // 0 wires
+    .of(.{ .stroke = edge, .fill = body, .width = 1.5 }),      // 1 symbols
+    .of(.{ .stroke = wire, .width = 1, .dash = .{ 4, 4 } }),   // 2 buses, dashed
+};
+_ = shapes.polyline(&net, .{ .layer = 0, .cap = .round });
+_ = shapes.rect(.{ -5_000, -2_500 }, .{ 5_000, 2_500 }, .{ .layer = 1, .radius = 200 });
+_ = font.canvasGlyphs(&shapes, "R1", .{ 2_000, 0 }, .{ .px = 1_270, .layer = 1 });
+shapes.setColor(picked_row, .rgb(255, 200, 0)); // one row, over its layer
+_ = f.canvas(.from("schematic"), style, &shapes, .{
+    .camera = camera,
+    .palette = &.{ .layers = &layers },
+    .ranges = &.{ wires, symbols, selection },
+    .overrides = &.{.{ .range = selection, .color = tint }},
+});
+```
 
-### Work packages, in order (each passes the gates; goldens at 0 bad pixels)
+### Limits
+- A polyline is segments with no joins: a translucent stroke doubles where two meet.
+- A polygon's distance tests every one of its edges per pixel (`polygonDist`): fine for a schematic's or a plot's small shapes, slow for a large filled area of many edges.
+- No curves and no gradients. An arbitrary path goes through src/draw/paths.zig into a quad.
+- A new kind lands only with its software twin, its shader code and a golden that holds the two to the same pixels.
 
-| WP | What | Where |
-|---|---|---|
-| C0 | GPU projection correctness the canvas depends on: GL ES `first_instance` emulated through the instance buffer offset (it is dropped silently in release builds today, `gles/gpu.zig:630-638`); `sint32x2`/`sint32x4` vertex formats; a `check.zig` case for instancing, instance-step buffers with offsets, first instance > 0 and integer attributes, run on every back end | `src/render/gpu/{desc,check}.zig`, the projections, `web/lcgf.js` |
-| C1 | `lcgf.canvas.Instances` (Tier 0 columns and builders), `Camera`, `hit` | `src/draw/canvas.zig` |
-| C2 | The `canvas` draw-list command and `Frame.canvas` | `src/draw/draw_list.zig`, `src/runtime/frame.zig` |
-| C3 | `sw`: the Zig shader for every kind, culled per band, clipped to the node, threaded and damage-aware like the quad loop | `src/render/sw/canvas.zig` |
-| C4 | `canvas.wgsl`, naga-translated (`src/render/shaders/translate.sh`), and an instanced pipeline in each GPU back end: vk, metal, d3d12, gles, wgpu, web | `src/render/shaders/`, each back end's renderer |
-| C5 | A `canvas` golden scene (every kind, caps, clipping, camera, glyphs) at 0 bad pixels, sw against GPU; a 100k-primitive pan/zoom benchmark against the 120 fps budget, with workload and conditions | `tools/golden/draw.zig`, `tools/golden/ref/draw/`, `bench/` |
+### Migrating from the first format
+| Schemify writes today | It writes after |
+|---|---|
+| `.layer = k` with a palette of 40 layers | The same. A row in its own colour writes `.color = c`, or `setColor(i, c)` later; an empty palette makes every row white, 1 px, unless coloured |
+| `.weight = w` (1 to 4 × the layer width) | A layer per width (`Layer.of(.{ .width = w × base })`), or `.width = units` for a world-unit width |
+| `Palette.zoom_scale` and `Camera.zoom` | Nothing: a layer width is logical pixels at every zoom. A width that zooms is a world-unit `.width` |
+| `.dash = n` (2n px on, 2n off) | A dashed layer, `Layer.of(.{ .dash = .{ 2n, 2n } })`, and `.layer` naming it |
+| `Instances.glyphs(text, at, .{ .px, .layer, .turns, .atlas })` | `(protocol.Mono{}).canvasGlyphs(&shapes, text, at, .{ .px, .layer, .turns, .atlas })`. In `lcgf_app`, the atlas is the bundled font's, `Mono.atlas` (the default); the example host's 16 × 14 `host.font.cells` belong to the example host only |
+| `.{ .marks = true }`, `mark(i, c)`, `s.marks` | Nothing to opt in: `setColor(i, c)` and `s.colors` (0 is the layer's) |
+| `View.of(cam, palette, …)` | `View.of(cam, …)` |
 
 ## 2. Run-time theme values in compiled pages
 

@@ -13,7 +13,7 @@ checks are unchanged.
 
 A `canvas` line (tools/golden/draw.zig `canvasScene`) draws canvas.bin and verts.bin with
 canvas.wgsl as src/render/gpu/canvas.zig does: rows from two instance buffers, a third of row
-indices and a fourth of marks (marks.bin, or zeros), the uniforms of src/render/shaders/canvas.zig `Uniforms`, one draw per `range`.
+indices and a fourth of colours (colors.bin, or zeros), the uniforms of src/render/shaders/canvas.zig `Uniforms`, one draw per `range`.
 """
 import math, struct, sys
 from pathlib import Path
@@ -127,7 +127,6 @@ for l in lines:
         rp.set_scissor_rect(0, 0, W, H)
 def f32(x): return struct.unpack("<f", struct.pack("<f", x))[0]
 if any(l[0] == "canvas" for l in lines):
-    zoom_scale = int([l for l in lines if l[0] == "palette"][0][1])
     layers = [l[1:] for l in lines if l[0] == "layer"]
     # One command per `canvas` line, with the camera, range and override lines after it.
     cmds = []
@@ -165,8 +164,8 @@ if any(l[0] == "canvas" for l in lines):
     V = wgpu.BufferUsage.VERTEX
     pos_buf, look_buf = buf(pos, V), buf(look, V)
     row_buf = buf(struct.pack(f"<{n}I", *range(n)), V)
-    marks_path = d / "marks.bin"
-    mark_buf = buf(marks_path.read_bytes() if marks_path.exists() else bytes(4 * n), V)
+    colors_path = d / "colors.bin"
+    mark_buf = buf(colors_path.read_bytes() if colors_path.exists() else bytes(4 * n), V)
     vert_buf = buf(verts, wgpu.BufferUsage.STORAGE)
     # A `canvas-atlas` line (draw.zig's `labels`): the canvas glyphs' own atlas, alpha bytes,
     # as white texels at that alpha (the glyph atlas contract); else the stand-in atlas.
@@ -182,8 +181,7 @@ if any(l[0] == "canvas" for l in lines):
         node, cam, marks = c["node"], c["cam"], c["marks"]
         # canvas.zig `View.of` at scale S, then shaders/canvas.zig `fill` (`Uniforms`).
         origin = [int(cam[0]) & 0xffffffff, int(cam[1]) & 0xffffffff]
-        scale, ox, oy, zoom = f32(float(cam[2])), float(cam[3]), float(cam[4]), float(cam[5])
-        line = f32(f32(min(max(zoom, 0.5), 4) if zoom_scale else 1.0) * S)
+        scale, ox, oy = f32(float(cam[2])), float(cam[3]), float(cam[4])
         a, b, cc, dd, tx, ty = [f32(v) for v in node[9:15]]
         det = f32(f32(a * dd) - f32(b * cc))
         if det == 0: continue
@@ -191,7 +189,7 @@ if any(l[0] == "canvas" for l in lines):
         inv_t = [f32(f32(f32(-f32(f32(dd * tx) - f32(cc * ty))) * S) / det), f32(f32(f32(-f32(f32(a * ty) - f32(b * tx))) * S) / det)]
         radii = node[15:19]
         clip = node[4:8]
-        u = struct.pack("<2I2f3fI", origin[0], origin[1], f32(f32(node[0] + ox) * S), f32(f32(node[1] + oy) * S), f32(scale * S), line, S, zoom_scale)
+        u = struct.pack("<2I2f3fI", origin[0], origin[1], f32(f32(node[0] + ox) * S), f32(f32(node[1] + oy) * S), f32(scale * S), S, 0, 0)
         u += struct.pack("<4f4f2ff5I", *[f32(v * S) for v in node[0:4]], *[f32(v * S) for v in clip], W, H, node[8], 0, 0, len(verts) // 8, len(marks), len(layers))
         u += struct.pack("<4f2f2f4f4f4f2fII", *inv, *inv_t, f32(tx * S), f32(ty * S), a, b, cc, dd, *radii,
                          f32(f32(clip[0] + clip[2]) * 0.5), f32(f32(clip[1] + clip[3]) * 0.5), f32(f32(clip[2] - clip[0]) * 0.5), f32(f32(clip[3] - clip[1]) * 0.5),

@@ -103,10 +103,11 @@ fn prep(list: *const DrawList, k: u32, scale: f32, scissor: [4]u32) ?Prep {
     const hi = @min(node_hi, @floor(clip - half) + @as(@Vector(4, f32), @splat(1)));
     const area = clampBox(pixels(.{ lo[0], lo[1], hi[2], hi[3] }), scissor);
     if (area[0] >= area[2] or area[1] >= area[3]) return null;
-    const v = canvas.View.of(c.camera, c.palette, .{ node.rect[0], node.rect[1] }, scale);
-    var widest: f32 = 0;
+    const v = canvas.View.of(c.camera, .{ node.rect[0], node.rect[1] }, scale);
+    // How far past its world box a row's layer width reaches (`canvas.reach` leaves it out).
+    var widest: f32 = if (c.palette.layers.len == 0) canvas.Layer.default.width else 0;
     for (c.palette.layers) |l| widest = @max(widest, l.width);
-    const slop = widest * 4 * v.line + 2;
+    const slop = widest * v.px + 2;
     const limit: f32 = 2e9;
     // The culled area in the node's own space: the area itself, or under a transform the
     // node's rect (every band then culls against the whole node).
@@ -554,12 +555,14 @@ const testing = std.testing;
 const Color = @import("../../core/types.zig").Color;
 
 /// Layers of the tests: 0 red 4 px, 1 white fill and blue stroke 2 px, 2 translucent blue
-/// fill, 3 hidden.
+/// fill, 3 hidden, 4 and 5 red 4 px dashed 2 on 2 off and 4 on 4 off.
 const palette: canvas.Palette = .{ .layers = &.{
     .of(.{ .stroke = .rgb(255, 0, 0), .width = 4 }),
     .of(.{ .stroke = .rgb(0, 0, 255), .fill = .white, .width = 2 }),
     .of(.{ .fill = .rgba(0, 0, 255, 128), .width = 0 }),
     .of(.{ .stroke = .white, .visible = false }),
+    .of(.{ .stroke = .rgb(255, 0, 0), .width = 4, .dash = .{ 2, 2 } }),
+    .of(.{ .stroke = .rgb(255, 0, 0), .width = 4, .dash = .{ 4, 4 } }),
 } };
 
 /// A 64 x 32 framebuffer, one canvas node covering `rect` clipped to `clip`, and its instances.
@@ -673,13 +676,14 @@ test "sw canvas: a distance glyph's edge is a pixel wide at camera scales 1 to 8
 test "sw canvas: a dashed chain runs on across its joints; a turned glyph samples its texels" {
     var sc: Scene(8) = .{};
     sc.init(.{ 0, 0, 64, 32 }, .{ 0, 0, 64, 32 });
-    // Dash 1: 2 px on, 2 off. The second segment starts 6 along the chain, so in the dash's
+    // Layer 4: 2 px on, 2 off. The second segment starts 6 along the chain, so in the dash's
     // second half: its first two pixels are off.
-    _ = sc.shapes.polyline(&.{ .{ 0, 2 }, .{ 6, 2 }, .{ 20, 2 } }, .{ .dash = 1 });
+    _ = sc.shapes.polyline(&.{ .{ 0, 2 }, .{ 6, 2 }, .{ 20, 2 } }, .{ .layer = 4 });
     // A 2 x 1 atlas, left texel 255, right 0, on a 4 x 2 glyph turned a quarter: its x axis runs
     // down the screen from the anchor (40, 10), so rows 10..11 are lit and 12..13 not.
     const texels = [_]u8{ 255, 0 };
-    _ = sc.shapes.glyph(.{ 40, 10 }, .{ 4, 2 }, .{ 0, 0, 1, 1 }, .{ .turns = 1 });
+    const red: canvas.Instances.Glyph = .{ .turns = 1, .color = .rgb(255, 0, 0) };
+    _ = sc.shapes.glyph(.{ 40, 10 }, .{ 4, 2 }, .{ 0, 0, 1, 1 }, red);
     const fb = sc.frame(.{}, .{ 0, 0, 64, 32 }, .{ .width = 2, .height = 1, .alpha8 = &texels });
     try testing.expectEqual(Color.rgb(255, 0, 0), fb.at(0, 2));
     try testing.expectEqual(Color.rgb(255, 0, 0), fb.at(1, 2));
@@ -698,8 +702,8 @@ test "sw canvas: a dashed chain runs on across its joints; a turned glyph sample
 test "sw canvas: a dashed arc runs its dash along its centre line from its start" {
     var sc: Scene(2) = .{};
     sc.init(.{ 0, 0, 64, 32 }, .{ 0, 0, 64, 32 });
-    // Radius 12 around (32, 16), 4 px wide, dash 2: 4 px on, 4 off, from angle 0.
-    _ = sc.shapes.arc(.{ 32, 16 }, 12, .{ .dash = 2 });
+    // Radius 12 around (32, 16), 4 px wide, layer 5: 4 px on, 4 off, from angle 0.
+    _ = sc.shapes.arc(.{ 32, 16 }, 12, .{ .layer = 5 });
     const fb = sc.frame(.{}, .{ 0, 0, 64, 32 }, sw.Image.white);
     const at = struct {
         fn px(f: *const sw.Framebuffer, along: f32) Color {
@@ -737,7 +741,7 @@ test "sw canvas: bands drawn separately give the whole frame" {
     sc.init(.{ 0, 0, 64, 32 }, .{ 0, 0, 64, 32 });
     _ = sc.shapes.arc(.{ 32, 16 }, 12, .{ .start = 0.3, .sweep = 4, .cap = .round, .layer = 1 });
     _ = sc.shapes.polygon(&.{ .{ 4, 4 }, .{ 28, 8 }, .{ 10, 28 } }, .{ .layer = 1, .stroke = true });
-    _ = sc.shapes.segment(.{ 40, 30 }, .{ 60, 3 }, .{ .cap = .square, .dash = 2 });
+    _ = sc.shapes.segment(.{ 40, 30 }, .{ 60, 3 }, .{ .cap = .square, .layer = 5 });
     const whole = sc.frame(.{}, .{ 0, 0, 64, 32 }, sw.Image.white);
     var expect: [sw.Framebuffer.len(64, 32)]u32 = undefined;
     @memcpy(&expect, whole.pixels);

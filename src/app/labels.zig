@@ -235,7 +235,7 @@ pub const Labels = struct {
 /// service and label atlas, which `lcgf_app.run` gives an App with a field
 /// `labels: lcgf_app.Labels` before its first `build`, and which the window draws canvas
 /// glyphs from. Empty when the window draws the bitmap font: `label` then fails with
-/// `error.Unavailable`, and bitmap canvas labels (`Instances.glyphs`) draw as before.
+/// `error.Unavailable`, and bitmap canvas labels (`protocol.Mono.canvasGlyphs`) draw as before.
 ///
 /// Make a label once and keep its rows while `generation` stays what it was when it was made.
 /// When the atlas fills, `label` fails with `error.Full` and `generation` moves on: the rows
@@ -334,7 +334,7 @@ const Img = sw.Image;
 const text_mod = @import("text.zig");
 
 const scales = [_]f32{ 0.5, 1, 2, 4, 8 };
-/// World units per logical pixel at camera scale 1 (Schemify's milli-units are finer still).
+/// World units per logical pixel at camera scale 1.
 const per_px = 100;
 const words = "R1 10k Vout";
 
@@ -526,7 +526,8 @@ pub const BitmapApp = struct {
     pub fn build(a: *BitmapApp, f: *lcgf.frame.Frame, _: *const lcgf.shell_iface.Events) void {
         std.debug.assert(a.shapes.cap >= 32);
         if (a.shapes.len == 0) for (lines, 0..) |line, k| {
-            _ = a.shapes.glyphs(line, .{ 0, @intCast(k * 2000) }, .{ .px = 13 * per_px });
+            const at: [2]i32 = .{ 0, @intCast(k * 2000) };
+            _ = (lcgf.protocol.Mono{}).canvasGlyphs(a.shapes, line, at, .{ .px = 13 * per_px });
         };
         a.ranges = .{a.shapes.since(0)};
         _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ground });

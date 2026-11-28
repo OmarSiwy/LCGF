@@ -90,11 +90,11 @@ pub fn main(init: std.process.Init) !void {
         for (0..frames) |f| {
             const t: f32 = @floatFromInt(f);
             const cam: canvas.Camera = if (std.mem.eql(u8, scenario, "pan-4x"))
-                .{ .origin = .{ 600_000 + @as(i64, @intFromFloat(t * 1_000)), 600_000 }, .scale = 4 * fit, .zoom = 4 }
+                .{ .origin = .{ 600_000 + @as(i64, @intFromFloat(t * 1_000)), 600_000 }, .scale = 4 * fit }
             else if (std.mem.eql(u8, scenario, "zoom"))
                 bench.zoomed(fit * std.math.pow(f32, 8, t / @as(f32, @floatFromInt(frames))), wf, hf, world_w)
             else
-                .{ .origin = .{ @intFromFloat(t * 2_000), 0 }, .scale = fit, .zoom = 1 };
+                .{ .origin = .{ @intFromFloat(t * 2_000), 0 }, .scale = fit };
             if (std.mem.eql(u8, scenario, "edit-100")) {
                 // 100 rows rewritten in place (moved by a unit), as an edit marks them.
                 const first: u32 = @intCast((f * 997) % (bench.count - 100));

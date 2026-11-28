@@ -259,10 +259,10 @@ var canvas_storage: lcgf.render_conformance.CanvasStorage = undefined;
 
 /// Writes the canvas scene (conformance.CanvasStorage): canvas.bin (pos then look, 32 bytes a
 /// row, interleaved), verts.bin, canvas.wgsl (the GPU back ends' canvas shader), quad.wgsl and
-/// its layout (gpu.py needs them), and in cmds.txt the palette (`palette` zoom_scale, then a
+/// its layout (gpu.py needs them), colors.bin (a colour a row), and in cmds.txt the palette (a
 /// `layer` stroke fill width flags line per layer, colours as rgba8 u32), then per canvas
 /// command its node (`canvas` rect clip opacity xform radii), camera (origin as two i64s,
-/// scale, offset, zoom), ranges and overrides.
+/// scale, offset), ranges and overrides.
 fn canvasScene(io: std.Io, out_path: []const u8, scale: f32) !void {
     const sc = lcgf.render_conformance.canvas_scene;
     const st = &canvas_storage;
@@ -276,7 +276,7 @@ fn canvasScene(io: std.Io, out_path: []const u8, scale: f32) !void {
     for (0..s.len) |i| rows[i] = @as([4]u32, @bitCast(s.c.pos[i])) ++ s.c.look[i];
     try dir.writeFile(io, .{ .sub_path = "canvas.bin", .data = std.mem.sliceAsBytes(rows[0..s.len]) });
     try dir.writeFile(io, .{ .sub_path = "verts.bin", .data = std.mem.sliceAsBytes(s.verts[0..@max(s.vert_len, 1)]) });
-    try dir.writeFile(io, .{ .sub_path = "marks.bin", .data = std.mem.sliceAsBytes(s.marks[0..s.len]) });
+    try dir.writeFile(io, .{ .sub_path = "colors.bin", .data = std.mem.sliceAsBytes(s.colors[0..s.len]) });
     try dir.writeFile(io, .{ .sub_path = "canvas.wgsl", .data = lcgf.canvas_shader.wgsl });
     try dir.writeFile(io, .{ .sub_path = "quad.wgsl", .data = gfx.wgsl });
     // No quads or text; one zero row each, because gpu.py cannot upload an empty buffer.
@@ -286,7 +286,6 @@ fn canvasScene(io: std.Io, out_path: []const u8, scale: f32) !void {
     var t = std.Io.Writer.fixed(&text);
     try t.print("stride {d}\nscale {d}\n", .{ gfx.stride, scale });
     for (gfx.attrs) |a| try t.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
-    try t.print("palette {d}\n", .{@intFromBool(sc.palette.zoom_scale)});
     for (sc.palette.layers) |l| try t.print("layer {d} {d} {d} {d}\n", .{ l.stroke, l.fill, l.width, l.flags });
     for (0..st.draw.cmd_len) |i| {
         const k = st.draw.command(@intCast(i)).canvas;
@@ -296,7 +295,7 @@ fn canvasScene(io: std.Io, out_path: []const u8, scale: f32) !void {
         for (n.rect ++ n.clip ++ [1]f32{n.opacity} ++ n.xform ++ n.clip_radii) |x| try t.print(" {d}", .{x});
         try t.print("\n", .{});
         const cam = c.camera;
-        try t.print("camera {d} {d} {d} {d} {d} {d}\n", .{ cam.origin[0], cam.origin[1], cam.scale, cam.offset[0], cam.offset[1], cam.zoom });
+        try t.print("camera {d} {d} {d} {d} {d}\n", .{ cam.origin[0], cam.origin[1], cam.scale, cam.offset[0], cam.offset[1] });
         for (c.ranges) |r| try t.print("range {d} {d}\n", .{ r.first, r.count });
         for (c.overrides) |o| try t.print("override {d} {d} {d}\n", .{ o.range.first, o.range.count, o.color });
     }
@@ -342,12 +341,12 @@ fn labelScene(io: std.Io, out_path: []const u8, scale: f32) !void {
     for (gfx.attrs) |a| try w.print("attr {d} {d} {s}\n", .{ a.location, a.offset, a.format });
     try w.print("canvas-atlas {d} {d} canvas-atlas.bin\n", .{ labels.atlas.w, labels.atlas.h });
     const white: u32 = @bitCast(Color.white);
-    try w.print("palette 0\nlayer {d} 0 1 2\n", .{white});
+    try w.print("layer {d} 0 1 2\n", .{white});
     var top: f32 = 4;
     for ([_]f32{ 0.5, 1, 2, 4, 8 }) |zoom| {
         const h = 13 * zoom * 1.4 + 4;
         try w.print("canvas 4 {d} 796 {d} 4 {d} 796 {d} 1 1 0 0 1 0 0 0 0 0 0\n", .{ top, top + h, top, top + h });
-        try w.print("camera 0 0 {d} 4 {d} 1\n", .{ zoom / 100, 13 * zoom + 2 });
+        try w.print("camera 0 0 {d} 4 {d}\n", .{ zoom / 100, 13 * zoom + 2 });
         try w.print("range 0 {d}\n", .{s.len});
         top += h + 4;
     }

@@ -1,11 +1,12 @@
-//! canvas: many 2D primitives in caller-owned columns, drawn under a camera with a palette.
-//! Tier 0: no allocator, no OS, no GPU. A schematic, a plot or a map fills `Instances` once
-//! (or when it changes); every frame `Frame.canvas` puts one node in the tree with a `Camera`,
-//! a `Palette` and the `Range`s to draw, so panning, zooming and recolouring change a few
+//! canvas: many 2D primitives in caller-owned columns, drawn under a camera. Tier 0: no
+//! allocator, no OS, no GPU. A schematic, a plot or a map fills `Instances` once (or when it
+//! changes); every frame `Frame.canvas` puts one node in the tree with a `Camera`, a
+//! `Palette` and the `Range`s to draw, so panning, zooming and recolouring change a few
 //! numbers, not the instances. A GPU back end uploads only `Instances.dirty`.
 //!
-//! Coordinates are i32 world units (milli-units for Schemify). The camera maps a world point w
-//! to logical pixels inside the node as
+//! Coordinates are the application's integer units (i32): a pixel, a micrometre, a thousandth
+//! of a grid step, whatever its document counts in. The camera maps a world point w to logical
+//! pixels inside the node as
 //!
 //!     node top-left + offset + f32(w -% origin) * scale
 //!
@@ -17,17 +18,15 @@
 //! ## Instance layout (the GPU contract)
 //!
 //! Each instance is two rows, `pos` (4 x i32, `sint32x4`) and `look` (4 x u32, `uint32x4`), 32
-//! bytes, two instance-step vertex buffers. `look[0]` holds the style bits:
+//! bytes, two instance-step vertex buffers, and a colour (`Instances.colors`, a third, u32).
+//! `look[0]` holds the shape bits:
 //!
 //!   bits  0-3  kind          (segment 0, rect 1, arc 2, polygon 3, glyph 4)
 //!   bits  4-5  cap           (butt 0, square 1, round 2)
-//!   bit   6    filled        (rect, polygon: fill inside, in the layer's fill colour)
+//!   bit   6    filled        (rect, polygon: fill inside)
 //!   bit   7    stroked       (rect, polygon: stroke the outline; segments and arcs always are)
-//!   bit   8    world width   (the width is look[3] world units, not the palette's)
+//!   bit   8    world width   (the width is look[3] world units, not the layer's pixels)
 //!   bit   9    dead          (drawn and hit as nothing)
-//!   bits 10-13 dash n        (0: solid; else 2n logical px on, 2n off, from the chain start;
-//!                            along an arc's centre line from its start)
-//!   bits 14-15 weight - 1    (weight 1..4)
 //!   bits 16-17 quarter turns (glyph rotation, clockwise on screen)
 //!   bit   18   distance      (glyph: the texels are distances, `distance_spread`, not coverage)
 //!   bits 24-31 layer         (row of the palette)
@@ -39,34 +38,51 @@
 //!   polygon  bounding box             first vertex         vertex count     world width
 //!   glyph    anchor.x anchor.y w h    u0 | v0              u1 | v1          0
 //!
-//! Distances, radii and widths are world units. Angles are radians from +x toward +y: `start`
-//! a u16 fraction of a turn, `sweep` a u16 where 65535 is a full turn. uv are unorm16. A glyph
-//! is the box `w` x `h` from its anchor, turned about it. Polygon vertices are the side column
-//! `verts` (CSR by first and count), any shape, filled by the nonzero rule.
+//! Distances, radii and world widths are world units. Angles are radians from +x toward +y:
+//! `start` a u16 fraction of a turn, `sweep` a u16 where 65535 is a full turn. uv are unorm16.
+//! A glyph is the box `w` x `h` from its anchor, turned about it. Polygon vertices are the
+//! side column `verts` (CSR by first and count), any shape, filled by the nonzero rule.
 //!
-//! A glyph samples the glyph atlas (`iface.Glyphs.canvasTexture`) nearest, as its colour times
-//! the stroke colour (a coverage atlas: white at the texel's alpha). A distance glyph instead
-//! reads the alpha channel as a signed distance (src/text/raster/sdf.zig: 128 at the edge, 127
-//! levels per `distance_spread` texels), bilinearly from the four nearest texels, and covers a
-//! pixel by `clamp(d * k + 0.5, 0, 1)`, `k` its physical pixels per texel (at least
-//! 0.5 / `distance_spread`, so a label smaller than its image keeps a solid inside): an edge
-//! a pixel wide at any camera scale.
+//! ## Colour, width and dashes
 //!
-//! ## Width and colour
+//! A row's colour is its `colors` entry when that is not 0: it is both the stroke and the fill.
+//! Else the colour comes from its layer: the `Palette` row named by look[0]'s top byte, which
+//! also holds the stroke width (logical pixels) and the dash, and whether fills are drawn and
+//! the layer is shown. An application that never thinks in layers passes an empty palette:
+//! every row then has `Layer.default` (white, 1 px, solid) and draws in its own colour. A range
+//! `Override` replaces the layer's colours of the rows it holds (the last match wins); a row's
+//! own colour wins over both. A layer past a non-empty palette draws nothing.
 //!
-//! An instance's screen width in logical pixels is `weight * layer.width * z`, z being
-//! `clamp(camera.zoom, 0.5, 4)` when `Palette.zoom_scale` and 1 otherwise; with the world-width
-//! bit it is `look[3] * camera.scale` instead. Strokes are centred on the outline. Segments,
-//! arcs, strokes and glyphs take the layer's stroke colour, fills its fill colour; an override
-//! whose range holds the instance replaces both (`Frame.canvas`, the last match wins). A layer
-//! that is not visible, or past the palette, draws nothing.
+//! A stroke's width is the layer's, in logical pixels whatever the camera (a hairline stays a
+//! hairline), or, with the world-width bit, look[3] world units, which grow and shrink with the
+//! zoom. Strokes are centred on the outline. A dashed layer is on and off for its own lengths
+//! in logical pixels along a segment chain from its start, along an arc's centre line from its
+//! start angle.
+//!
+//! Glyphs sample the window's canvas atlas (`iface.Glyphs.canvasTexture`) as their colour times
+//! the stroke colour: nearest for a coverage atlas (white at the texel's alpha), and, for a
+//! distance glyph, the alpha channel read as a signed distance (src/text/raster/sdf.zig: 128 at
+//! the edge, 127 levels per `distance_spread` texels) bilinearly from the four nearest texels,
+//! a pixel covered by `clamp(d * k + 0.5, 0, 1)`, `k` its physical pixels per texel (at least
+//! 0.5 / `distance_spread`): an edge a pixel wide at any camera scale. This file knows no font:
+//! `protocol.Mono.canvasGlyphs` writes bitmap-font glyphs, the window layer's labels
+//! (src/app/labels.zig) distance glyphs. One canvas atlas serves a window, so one `Instances`
+//! holds one kind of glyph (asserted in `glyph`), and a window draws one kind.
+//!
+//! ## Limits
+//!
+//! - A polyline is segments with no joins: a translucent stroke doubles where two meet.
+//! - A polygon's distance tests every one of its edges per pixel (`polygonDist`): fine for the
+//!   small shapes of a schematic or a plot, slow for a large filled area of many edges.
+//! - No curves and no gradients. An arbitrary path goes through src/draw/paths.zig into a quad.
+//!
+//! A new kind lands only with its software twin (src/render/sw/canvas.zig), its shader code
+//! (src/render/shaders/canvas.wgsl) and a golden that holds the two to the same pixels.
 
 const std = @import("std");
 const mem = @import("../core/mem.zig");
 const simd = @import("../core/simd.zig");
 const types = @import("../core/types.zig");
-const Mono = @import("../text/protocol.zig").Mono;
-const Atlas = @import("../text/protocol.zig").Atlas;
 const Color = types.Color;
 
 pub const Kind = enum(u4) { segment, rect, arc, polygon, glyph };
@@ -92,25 +108,50 @@ pub const Range = extern struct { first: u32, count: u32 };
 /// Instances of `range` drawn in `color` instead of their layer's (a selection, a diff tint).
 pub const Override = extern struct { range: Range, color: u32 };
 
-/// One palette row; 16 bytes, so a palette is one GPU uniform array of `vec4u`.
+/// One palette row: a style rows share. 16 bytes, so a palette is one GPU uniform array of
+/// `vec4u`.
 pub const Layer = extern struct {
     stroke: u32,
     fill: u32,
-    /// Stroke width at weight 1, logical pixels.
+    /// Stroke width, logical pixels (a world-width row takes its own).
     width: f32,
-    /// bit 0: fills drawn; bit 1: visible.
+    /// bit 0: fills drawn; bit 1: shown; bits 2-16 and 17-31: the dash's on and off lengths
+    /// in 16ths of a logical pixel (`of`, `dashLengths`), 0 on for a solid line.
     flags: u32,
 
-    pub fn of(o: struct { stroke: Color = .black, fill: Color = .transparent, width: f32 = 1, fill_on: bool = true, visible: bool = true }) Layer {
-        return .{ .stroke = @bitCast(o.stroke), .fill = @bitCast(o.fill), .width = o.width, .flags = @as(u32, @intFromBool(o.fill_on)) | (@as(u32, @intFromBool(o.visible)) << 1) };
+    /// Every row's layer when the palette is empty: white, 1 px, solid, fills drawn.
+    pub const default: Layer = .of(.{ .stroke = .white, .fill = .white });
+
+    pub const Style = struct {
+        stroke: Color = .black,
+        fill: Color = .transparent,
+        width: f32 = 1,
+        fill_on: bool = true,
+        visible: bool = true,
+        /// On and off, logical pixels, each below 2048 and kept to a 16th; on 0: solid.
+        dash: [2]f32 = .{ 0, 0 },
+    };
+
+    pub fn of(o: Style) Layer {
+        std.debug.assert(o.dash[0] >= 0);
+        std.debug.assert(o.dash[1] >= 0);
+        const on: u32 = @intFromFloat(@round(@min(o.dash[0] * 16, 32767)));
+        const off: u32 = @intFromFloat(@round(@min(o.dash[1] * 16, 32767)));
+        const shown_bits = @as(u32, @intFromBool(o.fill_on)) | (@as(u32, @intFromBool(o.visible)) << 1);
+        return .{ .stroke = @bitCast(o.stroke), .fill = @bitCast(o.fill), .width = o.width, .flags = shown_bits | (on << 2) | (off << 17) };
+    }
+
+    /// The dash's on and off lengths, logical pixels.
+    pub fn dashLengths(l: Layer) [2]f32 {
+        return .{ @as(f32, @floatFromInt((l.flags >> 2) & 32767)) / 16, @as(f32, @floatFromInt(l.flags >> 17)) / 16 };
     }
 };
 
-/// Caller-owned colours and widths per layer (at most 256).
+/// Caller-owned styles, at most 256; empty: every row has `Layer.default`.
 pub const Palette = struct {
-    layers: []const Layer,
-    /// Widths grow with `Camera.zoom`, clamped to [0.5, 4].
-    zoom_scale: bool = false,
+    layers: []const Layer = &.{},
+
+    pub const none: Palette = .{};
 };
 
 /// Where the world sits in the node. `origin` is i64 so a host may pan anywhere; instances are
@@ -122,31 +163,25 @@ pub const Camera = struct {
     scale: f32 = 1,
     /// Logical pixels from the node's top-left corner to `origin`.
     offset: [2]f32 = .{ 0, 0 },
-    /// The host's zoom level (1 = 100 %), which widths follow under `Palette.zoom_scale`.
-    zoom: f32 = 1,
 };
 
 /// World to pixels for one node, as a GPU uniform: `base + f32(w -% origin) * scale`, in
-/// physical pixels; `line` turns a palette width (logical pixels) into physical ones.
+/// physical pixels.
 pub const View = extern struct {
     origin: [2]i32,
     base: [2]f32,
     scale: f32,
-    line: f32,
-    /// Physical pixels per logical pixel (dash lengths).
+    /// Physical pixels per logical pixel: what a layer's width and dash are multiplied by.
     px: f32,
-    zoom_scale: u32,
+    _pad: [2]u32 = .{ 0, 0 },
 
     /// `cam` inside a node whose top-left corner is at `corner`, `px` pixels per logical pixel.
-    pub fn of(cam: Camera, pal: *const Palette, corner: [2]f32, px: f32) View {
-        const z = if (pal.zoom_scale) std.math.clamp(cam.zoom, 0.5, 4) else 1;
+    pub fn of(cam: Camera, corner: [2]f32, px: f32) View {
         return .{
             .origin = .{ @truncate(cam.origin[0]), @truncate(cam.origin[1]) },
             .base = .{ (corner[0] + cam.offset[0]) * px, (corner[1] + cam.offset[1]) * px },
             .scale = cam.scale * px,
-            .line = z * px,
             .px = px,
-            .zoom_scale = @intFromBool(pal.zoom_scale),
         };
     }
 
@@ -181,13 +216,17 @@ pub const Instances = struct {
     c: Columns,
     /// Polygon vertices, world units.
     verts: [][2]i32,
-    /// Per-row override colours (`Options.marks`, else empty): 0 for none, else an rgba8
-    /// colour that replaces the row's stroke and fill, over any range override. For selections
-    /// and diff tints too scattered for `Override` ranges. Set with `mark`.
-    marks: []u32 = &.{},
+    /// Each row's own colour (`Options.colors`, else empty): 0 for its layer's, else an rgba8
+    /// colour (`Color` bits) that is its stroke and its fill, over any layer and range override.
+    /// The builders write it (`color`); `setColor` changes it.
+    colors: []u32 = &.{},
+    /// Which kind of glyph the rows hold, set by the first: a window's canvas atlas holds one.
+    glyph_atlas: GlyphAtlas = .none,
 
     /// What `init` carves besides the rows.
-    pub const Options = struct { marks: bool = false };
+    pub const Options = struct { colors: bool = true };
+
+    pub const GlyphAtlas = enum(u2) { none, coverage, distance };
 
     pub const Columns = struct {
         pos: [][4]i32,
@@ -195,7 +234,7 @@ pub const Instances = struct {
     };
 
     /// Carves `simd.rows(cap)` instance rows, `verts` polygon vertices, `dirty` dirty ranges
-    /// and, with `o.marks`, a mark per row from `carver`; a counting carver sizes the buffer
+    /// and, with `o.colors`, a colour per row from `carver`; a counting carver sizes the buffer
     /// instead (`requiredBytes`).
     pub fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32, o: Options) Instances {
         std.debug.assert(cap > 0);
@@ -205,7 +244,7 @@ pub const Instances = struct {
             .c = carver.columns(Columns, simd.rows(cap)),
             .verts = carver.slice([2]i32, @max(verts, 1)),
             .dirty = carver.slice(Range, @max(dirty, 1)),
-            .marks = if (o.marks) carver.slice(u32, cap) else &.{},
+            .colors = if (o.colors) carver.slice(u32, cap) else &.{},
         };
     }
 
@@ -215,10 +254,11 @@ pub const Instances = struct {
         return counter.off;
     }
 
-    /// Row `i` drawn in `color` (rgba8) from now on, over its layer and any range override; 0
-    /// takes the mark off. Needs `Options.marks`.
-    pub fn mark(s: *Instances, i: u32, color: u32) void {
-        s.marks[i] = color;
+    /// Row `i` drawn in `color` from now on, over its layer and any range override;
+    /// `.transparent` (0) gives it its layer's again. Needs `Options.colors`.
+    pub fn setColor(s: *Instances, i: u32, color: Color) void {
+        std.debug.assert(i < s.len);
+        s.colors[i] = color.bitsOf();
         s.markDirty(.{ .first = i, .count = 1 });
     }
 
@@ -230,6 +270,7 @@ pub const Instances = struct {
         s.revision +%= 1;
         s.dirty_len = 0;
         s.dirty_all = true;
+        s.glyph_atlas = .none;
     }
 
     /// The instances added since `len` was `first`.
@@ -272,29 +313,27 @@ pub const Instances = struct {
         s.markDirty(.{ .first = i, .count = 1 });
     }
 
-    /// Appends one row and returns its index.
-    fn push(s: *Instances, pos: [4]i32, look: [4]u32) u32 {
+    /// Appends one row in `color` (0: its layer's) and returns its index.
+    fn push(s: *Instances, pos: [4]i32, look: [4]u32, color: Color) u32 {
         const k = @min(s.len, s.cap - 1);
         s.overflow = simd.orB(s.overflow, s.len >= s.cap);
         s.len = k + 1;
         s.c.pos[k] = pos;
         s.c.look[k] = look;
-        if (s.marks.len != 0) s.marks[k] = 0;
+        if (s.colors.len != 0) s.colors[k] = color.bitsOf();
         s.markDirty(.{ .first = k, .count = 1 });
         return k;
     }
 
-    /// What every stroked builder takes. `width`, when set, is in world units and replaces the
-    /// palette's width.
-    pub const Line = struct { layer: u8 = 0, weight: u8 = 1, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null };
-    pub const Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null };
-    pub const Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null };
-    pub const Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null };
+    /// What every stroked builder takes. `color`, when not `.transparent`, is the row's own
+    /// (stroke and fill, over the layer's); `width`, when set, is in world units and replaces
+    /// the layer's pixels.
+    pub const Line = struct { layer: u8 = 0, color: Color = .transparent, cap: Cap = .butt, width: ?u32 = null };
+    pub const Box = struct { layer: u8 = 0, color: Color = .transparent, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null };
+    pub const Arc = struct { layer: u8 = 0, color: Color = .transparent, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, width: ?u32 = null };
+    pub const Area = struct { layer: u8 = 0, color: Color = .transparent, fill: bool = true, stroke: bool = false, width: ?u32 = null };
     /// `distance`: the atlas image holds distances (`bit.distance`), not coverage.
-    pub const Glyph = struct { layer: u8 = 0, turns: u2 = 0, distance: bool = false };
-    /// `atlas` is where the glyph texture keeps each byte (a host's font says: the example
-    /// font's `cells`); the default is `Mono`'s 16 x 16 byte grid.
-    pub const Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{}, atlas: Atlas = .{} };
+    pub const Glyph = struct { layer: u8 = 0, color: Color = .transparent, turns: u2 = 0, distance: bool = false };
 
     /// A line from `a` to `b`.
     pub fn segment(s: *Instances, a: [2]i32, b: [2]i32, o: Line) u32 {
@@ -302,7 +341,8 @@ pub const Instances = struct {
     }
 
     fn segmentAt(s: *Instances, a: [2]i32, b: [2]i32, o: Line, chain: u32) u32 {
-        return s.push(.{ a[0], a[1], b[0], b[1] }, .{ head(.segment, o.layer, o.weight, o.cap, o.width != null, 0) | (@as(u32, o.dash) << 10), chain, 0, o.width orelse 0 });
+        const h = head(.segment, o.layer, o.cap, o.width != null, 0);
+        return s.push(.{ a[0], a[1], b[0], b[1] }, .{ h, chain, 0, o.width orelse 0 }, o.color);
     }
 
     /// One segment per edge of the open chain through `points`, each with the chain's caps and
@@ -323,7 +363,8 @@ pub const Instances = struct {
     /// by `radius` (capped at half the shorter side).
     pub fn rect(s: *Instances, lo: [2]i32, hi: [2]i32, o: Box) u32 {
         const flags = (bit.filled * @intFromBool(o.fill)) | (bit.stroked * @intFromBool(o.stroke));
-        return s.push(.{ lo[0], lo[1], hi[0], hi[1] }, .{ head(.rect, o.layer, o.weight, .butt, o.width != null, 0) | flags, o.radius, 0, o.width orelse 0 });
+        const h = head(.rect, o.layer, .butt, o.width != null, 0) | flags;
+        return s.push(.{ lo[0], lo[1], hi[0], hi[1] }, .{ h, o.radius, 0, o.width orelse 0 }, o.color);
     }
 
     /// A disc of radius `r` around `c`: a rect rounded by its half side.
@@ -342,7 +383,8 @@ pub const Instances = struct {
         const frac = @mod(start / std.math.tau, 1);
         const a = @as(u32, @intFromFloat(@round(frac * 65536))) & 0xffff;
         const b: u32 = @intFromFloat(@round(sweep / std.math.tau * 65535));
-        return s.push(.{ c[0], c[1], @intCast(r), 0 }, .{ head(.arc, o.layer, o.weight, o.cap, o.width != null, 0) | (@as(u32, o.dash) << 10), 0, a | (b << 16), o.width orelse 0 });
+        const h = head(.arc, o.layer, o.cap, o.width != null, 0);
+        return s.push(.{ c[0], c[1], @intCast(r), 0 }, .{ h, 0, a | (b << 16), o.width orelse 0 }, o.color);
     }
 
     /// The closed polygon through `points`, any shape, filled by the nonzero rule, its outline
@@ -364,42 +406,29 @@ pub const Instances = struct {
         }
         hi = @max(lo, hi);
         const flags = (bit.filled * @intFromBool(o.fill)) | (bit.stroked * @intFromBool(o.stroke));
-        return s.push(.{ lo[0], lo[1], hi[0], hi[1] }, .{ head(.polygon, o.layer, o.weight, .butt, o.width != null, 0) | flags, first, count, o.width orelse 0 });
+        const h = head(.polygon, o.layer, .butt, o.width != null, 0) | flags;
+        return s.push(.{ lo[0], lo[1], hi[0], hi[1] }, .{ h, first, count, o.width orelse 0 }, o.color);
     }
 
     /// Atlas `uv` (u0, v0, u1, v1, 0..1) on the box `size` world units from `anchor`, turned
-    /// about it by `o.turns` quarter turns; the atlas is the glyph atlas the renderer was given
-    /// (`iface.Glyphs.texture`), tinted by the layer's stroke colour.
+    /// about it by `o.turns` quarter turns; the atlas is the window's canvas atlas
+    /// (`iface.Glyphs.canvasTexture`), tinted by the row's stroke colour. Asserts every glyph
+    /// of these rows is of one kind (`o.distance` or not): a window's canvas atlas holds one.
     pub fn glyph(s: *Instances, anchor: [2]i32, size: [2]u32, uv: [4]f32, o: Glyph) u32 {
+        const kind: GlyphAtlas = if (o.distance) .distance else .coverage;
+        std.debug.assert(s.glyph_atlas == .none or s.glyph_atlas == kind); // bitmap and distance glyphs mixed
+        s.glyph_atlas = kind;
         const distance = bit.distance * @intFromBool(o.distance);
-        const h = head(.glyph, o.layer, 1, .butt, false, o.turns) | distance;
+        const h = head(.glyph, o.layer, .butt, false, o.turns) | distance;
         const from = unorm16(uv[0]) | (unorm16(uv[1]) << 16);
         const to = unorm16(uv[2]) | (unorm16(uv[3]) << 16);
-        return s.push(.{ anchor[0], anchor[1], @intCast(size[0]), @intCast(size[1]) }, .{ h, from, to, 0 });
-    }
-
-    /// `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall
-    /// and turned with it, with `o.font`'s metrics and each byte's cell of `o.atlas`. A
-    /// shaper of your own calls `glyph`.
-    pub fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range {
-        const first = s.len;
-        const px: f32 = @floatFromInt(o.px);
-        const adv = px * o.font.advance;
-        const c, const sn = turn(o.turns);
-        for (bytes, 0..) |byte, j| {
-            const x0: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j))));
-            const x1: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j + 1))));
-            const at = [2]i32{ origin[0] + @as(i32, @intFromFloat(c)) * x0, origin[1] + @as(i32, @intFromFloat(sn)) * x0 };
-            _ = s.glyph(at, .{ @intCast(x1 - x0), @intFromFloat(@round(px * o.font.line)) }, o.atlas.uv(byte), .{ .layer = o.layer, .turns = o.turns });
-        }
-        return s.since(first);
+        return s.push(.{ anchor[0], anchor[1], @intCast(size[0]), @intCast(size[1]) }, .{ h, from, to, 0 }, o.color);
     }
 };
 
-fn head(k: Kind, layer: u8, weight: u8, cap: Cap, world: bool, turns: u2) u32 {
-    const w: u32 = std.math.clamp(weight, 1, 4) - 1;
+fn head(k: Kind, layer: u8, cap: Cap, world: bool, turns: u2) u32 {
     return @as(u32, @backingInt(k)) | (@as(u32, @backingInt(cap)) << 4) | (bit.world_width * @intFromBool(world)) |
-        (w << 14) | (@as(u32, turns) << 16) | (@as(u32, layer) << 24);
+        (@as(u32, turns) << 16) | (@as(u32, layer) << 24);
 }
 
 fn unorm16(v: f32) u32 {
@@ -477,10 +506,12 @@ pub const Shape = struct {
         const kind = kindOf(look);
         const h = look[0];
         const cap: Cap = @fromBackingInt(@intCast(@as(u2, @truncate(h >> 4))));
-        const weight: f32 = @floatFromInt(((h >> 14) & 3) + 1);
-        const width = if (h & bit.world_width != 0) v.len(look[3]) else weight * layer.width * v.line;
+        const width = if (h & bit.world_width != 0) v.len(look[3]) else layer.width * v.px;
         const corner = [4]f32{ v.x(pos[0]), v.y(pos[1]), v.x(pos[2]), v.y(pos[3]) };
-        const dash: f32 = @floatFromInt((h >> 10) & 15);
+        // The dash: on, and the period (0: solid), physical pixels.
+        const lengths = layer.dashLengths();
+        const on = lengths[0] * v.px;
+        const period = simd.selF(lengths[0] > 0 and lengths[1] > 0, on + lengths[1] * v.px, 0);
         var sh: Shape = .{
             .kind = kind,
             .p = corner,
@@ -497,8 +528,8 @@ pub const Shape = struct {
                 // Only a square cap's corners reach past half the width on an axis.
                 grow = sh.half * (1 + (std.math.sqrt2 - 1) * sh.square);
                 sh.chain = v.len(look[1]);
-                sh.dash = 2 * dash * v.px;
-                sh.period = 2 * sh.dash;
+                sh.dash = on;
+                sh.period = period;
             },
             .rect, .polygon => {},
             .arc => {
@@ -509,8 +540,8 @@ pub const Shape = struct {
                 sh.radius = r;
                 sh.half_sweep = sweep / 2;
                 sh.chain = v.len(look[1]);
-                sh.dash = 2 * dash * v.px;
-                sh.period = 2 * sh.dash;
+                sh.dash = on;
+                sh.period = period;
                 sh.mid = .{ @cos(m), @sin(m) };
                 // sin of a half aperture in [0, pi] is never negative; rounding at pi must not
                 // make the far side of a full ring "past its end".
@@ -548,8 +579,9 @@ pub const Shape = struct {
     }
 };
 
-/// Palette row `layer`, or an invisible one past the palette.
+/// Palette row `layer`: `Layer.default` for an empty palette, an invisible one past a palette.
 pub fn layerRow(pal: *const Palette, layer: u8) Layer {
+    if (pal.layers.len == 0) return .default;
     if (layer >= pal.layers.len) return .{ .stroke = 0, .fill = 0, .width = 0, .flags = 0 };
     return pal.layers[layer];
 }
@@ -559,11 +591,10 @@ pub inline fn shown(look: [4]u32, layer: Layer) bool {
     return look[0] & bit.dead == 0 and layer.flags & 2 != 0;
 }
 
-/// The colour override for instance `i`, if any: the last of `overrides` whose range holds it.
-/// The colour that replaces row `i`'s stroke and fill, if any: its mark, else the last of
-/// `overrides` whose range holds it.
+/// The colour that replaces row `i`'s stroke and fill, if any: its own (`colors`), else the
+/// last of `overrides` whose range holds it.
 pub fn inkOf(s: *const Instances, overrides: []const Override, i: u32) ?u32 {
-    if (s.marks.len != 0 and s.marks[i] != 0) return s.marks[i];
+    if (s.colors.len != 0 and s.colors[i] != 0) return s.colors[i];
     return overrideOf(overrides, i);
 }
 
@@ -735,7 +766,7 @@ pub inline fn coverage(comptime V: type, d: V) V {
 /// nothing, and only the ranges the node draws are searched.
 pub fn hit(s: *const Instances, pal: *const Palette, cam: Camera, ranges: []const Range, point: [2]f32, slop: f32) ?u32 {
     const V1 = @Vector(1, f32);
-    const v = View.of(cam, pal, .{ 0, 0 }, 1);
+    const v = View.of(cam, .{ 0, 0 }, 1);
     const px: V1 = @splat(point[0]);
     const py: V1 = @splat(point[1]);
     var found: ?u32 = null;
@@ -781,24 +812,22 @@ test "builders: one 32-byte row per primitive, the layout the table documents" {
     var s = fx.instances();
     try testing.expectEqual(16, @sizeOf(Layer));
     try testing.expectEqual(32, @sizeOf(View));
-    try testing.expectEqual(0, s.segment(.{ 0, 0 }, .{ 25_400, 0 }, .{ .layer = 3, .weight = 2, .cap = .round, .dash = 5 }));
+    try testing.expectEqual(0, s.segment(.{ 0, 0 }, .{ 25_400, 0 }, .{ .layer = 3, .cap = .round, .color = .rgb(1, 2, 3) }));
     _ = s.rect(.{ -5_000, -2_500 }, .{ 5_000, 2_500 }, .{ .layer = 1, .radius = 300, .width = 200 });
     _ = s.arc(.{ 0, 0 }, 1_270, .{ .start = 0, .sweep = std.math.pi });
     _ = s.polygon(&.{ .{ 0, 0 }, .{ 1_000, 500 }, .{ 0, 1_000 } }, .{ .stroke = true });
-    const label = s.glyphs("AB", .{ 2_000, 0 }, .{ .px = 1_000, .layer = 7, .turns = 1 });
-    try testing.expectEqual(Range{ .first = 4, .count = 2 }, label);
-    try testing.expectEqual(6, s.len);
-    try testing.expectEqualSlices(Kind, &.{ .segment, .rect, .arc, .polygon, .glyph, .glyph }, &.{ kindOf(s.c.look[0]), kindOf(s.c.look[1]), kindOf(s.c.look[2]), kindOf(s.c.look[3]), kindOf(s.c.look[4]), kindOf(s.c.look[5]) });
-    try testing.expectEqual([4]u32{ (2 << 4) | (5 << 10) | (1 << 14) | (3 << 24), 0, 0, 0 }, s.c.look[0]);
+    _ = s.glyph(.{ 2_000, 0 }, .{ 600, 1_250 }, .{ 1.0 / 16.0, 4.0 / 16.0, 2.0 / 16.0, 5.0 / 16.0 }, .{ .layer = 7, .turns = 1 });
+    try testing.expectEqual(5, s.len);
+    try testing.expectEqualSlices(Kind, &.{ .segment, .rect, .arc, .polygon, .glyph }, &.{ kindOf(s.c.look[0]), kindOf(s.c.look[1]), kindOf(s.c.look[2]), kindOf(s.c.look[3]), kindOf(s.c.look[4]) });
+    try testing.expectEqual([4]u32{ (2 << 4) | (3 << 24), 0, 0, 0 }, s.c.look[0]);
+    // The row's own colour, and its layer's (0) for the others.
+    try testing.expectEqualSlices(u32, &.{ Color.rgb(1, 2, 3).bitsOf(), 0, 0, 0, 0 }, s.colors[0..5]);
     try testing.expectEqual([4]u32{ 1 | bit.filled | bit.stroked | bit.world_width | (1 << 24), 300, 0, 200 }, s.c.look[1]);
     // Half a turn from 0: start 0, sweep 65535 / 2.
     try testing.expectEqual(@as(u32, 32768) << 16, s.c.look[2][2]);
     try testing.expectEqual([4]i32{ 0, 0, 1_000, 1_000 }, s.c.pos[3]);
     try testing.expectEqual([4]u32{ 3 | bit.filled | bit.stroked, 0, 3, 0 }, s.c.look[3]);
-    // 'A' is 0x41: cell (1, 4) of the 16 x 16 atlas, 600 wide; 'B' a quarter turn on, so its
-    // anchor is 600 down the screen.
     try testing.expectEqual([4]i32{ 2_000, 0, 600, 1_250 }, s.c.pos[4]);
-    try testing.expectEqual([4]i32{ 2_000, 600, 600, 1_250 }, s.c.pos[5]);
     try testing.expectEqual(unorm16(1.0 / 16.0) | (unorm16(4.0 / 16.0) << 16), s.c.look[4][1]);
     try testing.expectEqual(4 | (1 << 16) | (7 << 24), s.c.look[4][0]);
 }
@@ -820,7 +849,7 @@ test "reach: every kind's box holds its geometry, the world width included" {
 test "polyline: one segment per edge, each with its distance along the chain" {
     var fx: Fixture(8, 0) = .{};
     var s = fx.instances();
-    const r = s.polyline(&.{ .{ 0, 0 }, .{ 300, 400 }, .{ 300, 1_400 }, .{ 0, 1_400 } }, .{ .dash = 2 });
+    const r = s.polyline(&.{ .{ 0, 0 }, .{ 300, 400 }, .{ 300, 1_400 }, .{ 0, 1_400 } }, .{});
     try testing.expectEqual(Range{ .first = 0, .count = 3 }, r);
     try testing.expectEqualSlices(u32, &.{ 0, 500, 1_500 }, &.{ s.c.look[0][1], s.c.look[1][1], s.c.look[2][1] });
     try testing.expectEqual([4]i32{ 300, 400, 300, 1_400 }, s.c.pos[1]);
@@ -865,19 +894,23 @@ test "builders: overflow overwrites the last row, a polygon that does not fit is
     try testing.expect(!s.overflow and s.len == 0);
 }
 
-test "camera: a far origin keeps the distance from it exact; widths follow the zoom" {
+test "camera: a far origin keeps the distance from it exact; widths are what was written" {
     const far: i64 = 2_000_000_000;
-    const pal: Palette = .{ .layers = &.{.of(.{ .width = 1.5 })}, .zoom_scale = true };
-    const v = View.of(.{ .origin = .{ far, -far }, .scale = 0.01, .offset = .{ 5, 6 }, .zoom = 8 }, &pal, .{ 100, 200 }, 2);
+    const pal: Palette = .{ .layers = &.{.of(.{ .width = 1.5 })} };
+    const v = View.of(.{ .origin = .{ far, -far }, .scale = 0.01, .offset = .{ 5, 6 } }, .{ 100, 200 }, 2);
     try testing.expectEqual(@as(f32, 210 + 2 * 0.01 * 100), v.x(@intCast(far + 100)));
     try testing.expectEqual(@as(f32, 412 - 2 * 0.01 * 300), v.y(@intCast(-far - 300)));
-    // Weight 3 at width 1.5, zoom clamped to 4, 2 physical pixels per logical: 36 wide.
+    // The layer's 1.5 logical px at 2 physical a logical, whatever the camera: 3 wide; 150
+    // world units at 0.02 physical px a unit: 3 wide too.
     var fx: Fixture(2, 0) = .{};
     var s = fx.instances();
-    _ = s.segment(.{ 0, 0 }, .{ 1, 0 }, .{ .weight = 3 });
-    _ = s.segment(.{ 0, 0 }, .{ 1, 0 }, .{ .weight = 3, .width = 150 });
-    try testing.expectEqual(@as(f32, 18), Shape.of(v, s.c.pos[0], s.c.look[0], pal.layers[0]).half);
+    _ = s.segment(.{ 0, 0 }, .{ 1, 0 }, .{});
+    _ = s.segment(.{ 0, 0 }, .{ 1, 0 }, .{ .width = 150 });
+    try testing.expectEqual(@as(f32, 1.5), Shape.of(v, s.c.pos[0], s.c.look[0], pal.layers[0]).half);
     try testing.expectEqual(@as(f32, 1.5), Shape.of(v, s.c.pos[1], s.c.look[1], pal.layers[0]).half);
+    // An empty palette: every row the default layer, 1 px.
+    try testing.expectEqual(Layer.default, layerRow(&.none, 9));
+    try testing.expectEqual(@as(f32, 1), Shape.of(v, s.c.pos[0], s.c.look[0], layerRow(&.none, 0)).half);
 }
 
 test "hit: every kind, inside, outside and within the slop; the topmost wins" {
@@ -917,28 +950,34 @@ test "hit: every kind, inside, outside and within the slop; the topmost wins" {
 
 test "distances: caps, a full turn with no seam, dashes and overrides" {
     const V1 = @Vector(1, f32);
-    const pal: Palette = .{ .layers = &.{.of(.{ .width = 10 })} };
-    const v = View.of(.{}, &pal, .{ 0, 0 }, 1);
+    const pal: Palette = .{ .layers = &.{
+        .of(.{ .width = 10 }),
+        .of(.{ .width = 10, .dash = .{ 4, 4 } }),
+        .of(.{ .width = 10, .dash = .{ 10, 30 } }),
+    } };
+    const v = View.of(.{}, .{ 0, 0 }, 1);
     inline for (.{ .{ Cap.butt, 0 }, .{ Cap.square, -5 }, .{ Cap.round, -5 } }) |c| {
-        const sh = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.segment, 0, 1, c[0], false, 0), 0, 0, 0 }, pal.layers[0]);
+        const sh = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.segment, 0, c[0], false, 0), 0, 0, 0 }, pal.layers[0]);
         try testing.expectApproxEqAbs(@as(f32, c[1]), segmentDist(V1, @splat(100), @splat(0), &sh)[0][0], 1e-4);
     }
-    const sh = Shape.of(v, .{ 0, 0, 50, 0 }, .{ head(.arc, 0, 1, .butt, false, 0), 0, 0xffff << 16, 0 }, pal.layers[0]);
+    const sh = Shape.of(v, .{ 0, 0, 50, 0 }, .{ head(.arc, 0, .butt, false, 0), 0, 0xffff << 16, 0 }, pal.layers[0]);
     for ([_]f32{ 0, 1, 2, 3, 4, 5, 6 }) |a| {
         try testing.expect(arcDist(V1, @splat(50 * @cos(a)), @splat(50 * @sin(a)), &sh)[0] < -4.9);
     }
-    // Dash 2: 4 px on, 4 off, from the chain start (here 6 px before a).
-    const dashed = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.segment, 0, 1, .butt, false, 0) | (2 << 10), 6, 0, 0 }, pal.layers[0]);
+    // Layer 1: 4 px on, 4 off, from the chain start (here 6 px before a).
+    const dashed = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.segment, 1, .butt, false, 0), 6, 0, 0 }, pal.layers[1]);
     try testing.expectEqual(@as(f32, 1), dashCover(V1, segmentDist(V1, @splat(3.5), @splat(0), &dashed)[1], &dashed)[0]);
     try testing.expectEqual(@as(f32, 0), dashCover(V1, segmentDist(V1, @splat(0), @splat(0), &dashed)[1], &dashed)[0]);
-    // A dashed half ring of radius 100 from angle 0: dash 5 is 10 px on, 10 off along it.
-    const ring = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.arc, 0, 1, .butt, false, 0) | (5 << 10), 0, 32767 << 16, 0 }, pal.layers[0]);
+    // A dashed half ring of radius 100 from angle 0: layer 2 is 10 px on, 30 off along it.
+    const ring = Shape.of(v, .{ 0, 0, 100, 0 }, .{ head(.arc, 2, .butt, false, 0), 0, 32767 << 16, 0 }, pal.layers[2]);
     for ([_]f32{ 0.05, 0.25, 1.0, 2.5 }) |angle| {
         const along = arcAlong(V1, @splat(100 * @cos(angle)), @splat(100 * @sin(angle)), &ring)[0];
         try testing.expectApproxEqAbs(angle * 100, along, 2e-3);
     }
     try testing.expectEqual(@as(f32, 1), dashCover(V1, @splat(5), &ring)[0]);
-    try testing.expectEqual(@as(f32, 0), dashCover(V1, @splat(15), &ring)[0]);
+    try testing.expectEqual(@as(f32, 0), dashCover(V1, @splat(25), &ring)[0]);
+    try testing.expectEqual(@as(f32, 1), dashCover(V1, @splat(45), &ring)[0]);
+    try testing.expectEqual([2]f32{ 10, 30 }, pal.layers[2].dashLengths());
     for (0..64) |k| {
         const a = -std.math.pi + @as(f32, @floatFromInt(k)) * std.math.tau / 64.0 + 0.01;
         try testing.expectApproxEqAbs(std.math.atan2(@sin(a), @cos(a)), atan2(V1, @splat(@sin(a)), @splat(@cos(a)))[0], 2e-5);
@@ -949,19 +988,32 @@ test "distances: caps, a full turn with no seam, dashes and overrides" {
     try testing.expectEqual(@as(?u32, null), overrideOf(&marks, 10));
 }
 
-test "marks: a row's mark wins over range overrides; a new row starts unmarked" {
-    var buf: [Instances.requiredBytes(4, 0, 4, .{ .marks = true })]u8 align(mem.column_align) = undefined;
+test "colours: a row's own colour wins over range overrides; a new row takes what it was given" {
+    var buf: [Instances.requiredBytes(4, 0, 4, .{})]u8 align(mem.column_align) = undefined;
     var carver: mem.Carver = .{ .buf = &buf };
-    var s = Instances.init(&carver, 4, 0, 4, .{ .marks = true });
+    var s = Instances.init(&carver, 4, 0, 4, .{});
     for (0..3) |_| _ = s.segment(.{ 0, 0 }, .{ 1, 1 }, .{});
     s.clearDirty();
-    s.mark(1, 0xff0000ff);
+    const red: Color = .rgb(255, 0, 0);
+    s.setColor(1, red);
     try testing.expectEqualSlices(Range, &.{.{ .first = 1, .count = 1 }}, s.dirty[0..s.dirty_len]);
     const picked = [_]Override{.{ .range = .{ .first = 0, .count = 3 }, .color = 7 }};
     try testing.expectEqual(@as(?u32, 7), inkOf(&s, &picked, 0));
-    try testing.expectEqual(@as(?u32, 0xff0000ff), inkOf(&s, &picked, 1));
+    try testing.expectEqual(@as(?u32, red.bitsOf()), inkOf(&s, &picked, 1));
     try testing.expectEqual(@as(?u32, null), inkOf(&s, &.{}, 2));
-    s.marks[3] = 9; // stale memory under a row not yet written
+    s.colors[3] = 9; // stale memory under a row not yet written
     try testing.expectEqual(3, s.segment(.{ 0, 0 }, .{ 1, 1 }, .{}));
-    try testing.expectEqual(0, s.marks[3]);
+    try testing.expectEqual(0, s.colors[3]);
+    _ = s.rect(.{ 0, 0 }, .{ 1, 1 }, .{ .color = red });
+    try testing.expectEqual(red.bitsOf(), s.colors[3]); // the last row, overwritten: overflow
+}
+
+test "glyphs: one kind per batch; a reset starts it again" {
+    var fx: Fixture(4, 0) = .{};
+    var s = fx.instances();
+    _ = s.glyph(.{ 0, 0 }, .{ 1, 1 }, .{ 0, 0, 1, 1 }, .{ .distance = true });
+    try testing.expectEqual(Instances.GlyphAtlas.distance, s.glyph_atlas);
+    s.reset();
+    _ = s.glyph(.{ 0, 0 }, .{ 1, 1 }, .{ 0, 0, 1, 1 }, .{});
+    try testing.expectEqual(Instances.GlyphAtlas.coverage, s.glyph_atlas);
 }

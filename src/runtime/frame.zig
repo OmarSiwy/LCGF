@@ -52,7 +52,8 @@ const canvas_mod = @import("../draw/canvas.zig");
 /// selection on top) and the colour overrides (the last whose range holds an instance wins).
 pub const CanvasOptions = struct {
     camera: canvas_mod.Camera = .{},
-    palette: *const canvas_mod.Palette,
+    /// Styles the rows name; none: every row the default layer, in its own colour.
+    palette: *const canvas_mod.Palette = &.none,
     ranges: []const canvas_mod.Range,
     overrides: []const canvas_mod.Override = &.{},
 };
@@ -240,12 +241,10 @@ pub const Frame = struct {
     pub fn canvas(f: *Frame, id: Id, style: Style, shapes: *const canvas_mod.Instances, o: CanvasOptions) Node {
         const ctx = f.ctx;
         std.debug.assert(ctx.canvas_hook != null);
-        const view = extern struct { origin: [2]i64, scale: f32, offset: [2]f32, zoom: f32, revision: u32, len: u32, verts: u32, zoom_scale: u32 }{
+        const view = extern struct { origin: [2]i64, scale: f32, offset: [2]f32, revision: u32, len: u32, verts: u32 }{
             .origin = o.camera.origin,
             .scale = o.camera.scale,
             .offset = o.camera.offset,
-            .zoom = o.camera.zoom,
-            .zoom_scale = @intFromBool(o.palette.zoom_scale),
             .revision = shapes.revision,
             .len = shapes.len,
             .verts = shapes.vert_len,

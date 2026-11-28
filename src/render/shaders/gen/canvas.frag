@@ -7,9 +7,9 @@ struct Draw {
     ivec2 origin;
     vec2 base;
     float scale;
-    float line;
     float px;
-    uint zoom_scale;
+    uint pad0_;
+    uint pad1_;
     vec4 rect;
     vec4 clip;
     vec2 size;
@@ -208,10 +208,10 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
     float ax = 0.0;
     float ay = 0.0;
     uint j_1 = 0u;
-    bool local_16 = false;
-    bool local_17 = false;
     bool local_18 = false;
     bool local_19 = false;
+    bool local_20 = false;
+    bool local_21 = false;
     uint _e6 = _group_0_binding_0_fs.vert_len;
     uint f = min(first, _e6);
     uint _e10 = _group_0_binding_0_fs.vert_len;
@@ -259,30 +259,30 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
             float left_1 = ((ex * oy) - (ey * ox));
             float _e84 = ay;
             if ((_e84 <= py_1)) {
-                local_16 = (_e48 > py_1);
-            } else {
-                local_16 = false;
-            }
-            bool _e90 = local_16;
-            if (_e90) {
-                local_17 = (left_1 > 0.0);
-            } else {
-                local_17 = false;
-            }
-            bool up = local_17;
-            float _e97 = ay;
-            if ((_e97 > py_1)) {
-                local_18 = (_e48 <= py_1);
+                local_18 = (_e48 > py_1);
             } else {
                 local_18 = false;
             }
-            bool _e103 = local_18;
-            if (_e103) {
-                local_19 = (left_1 < 0.0);
+            bool _e90 = local_18;
+            if (_e90) {
+                local_19 = (left_1 > 0.0);
             } else {
                 local_19 = false;
             }
-            bool down = local_19;
+            bool up = local_19;
+            float _e97 = ay;
+            if ((_e97 > py_1)) {
+                local_20 = (_e48 <= py_1);
+            } else {
+                local_20 = false;
+            }
+            bool _e103 = local_20;
+            if (_e103) {
+                local_21 = (left_1 < 0.0);
+            } else {
+                local_21 = false;
+            }
+            bool down = local_21;
             int _e110 = winding;
             winding = (_e110 + (int(up) - int(down)));
             ax = _e46;
@@ -297,21 +297,21 @@ float polygon_dist(float px_1, float py_1, uint first, uint count) {
 
 void main() {
     Frag in_ = Frag(gl_FragCoord, _vs2fs_location0, _vs2fs_location1, _vs2fs_location2, _vs2fs_location3, _vs2fs_location4, _vs2fs_location5, _vs2fs_location6, _vs2fs_location7, _vs2fs_location8);
-    bool local_5 = false;
-    bool local_6 = false;
     bool local_7 = false;
     bool local_8 = false;
     bool local_9 = false;
     bool local_10 = false;
     bool local_11 = false;
+    bool local_12 = false;
+    bool local_13 = false;
     float keep = 0.0;
     vec4 colour = vec4(0.0);
     float alpha = 0.0;
-    bool local_12 = false;
-    float d = 0.0;
-    bool local_13 = false;
     bool local_14 = false;
+    float d = 0.0;
     bool local_15 = false;
+    bool local_16 = false;
+    bool local_17 = false;
     float sx = in_.position.x;
     float sy = in_.position.y;
     float _e8 = _group_0_binding_0_fs.inv.x;
@@ -325,53 +325,53 @@ void main() {
     float _e40 = _group_0_binding_0_fs.rect.x;
     if ((px_2 >= _e40)) {
         float _e47 = _group_0_binding_0_fs.rect.z;
-        local_5 = (px_2 < _e47);
-    } else {
-        local_5 = false;
-    }
-    bool _e50 = local_5;
-    if (_e50) {
-        float _e56 = _group_0_binding_0_fs.rect.y;
-        local_6 = (py_2 >= _e56);
-    } else {
-        local_6 = false;
-    }
-    bool _e59 = local_6;
-    if (_e59) {
-        float _e65 = _group_0_binding_0_fs.rect.w;
-        local_7 = (py_2 < _e65);
+        local_7 = (px_2 < _e47);
     } else {
         local_7 = false;
     }
-    bool _e68 = local_7;
-    if (_e68) {
-        float _e74 = _group_0_binding_0_fs.clip.x;
-        local_8 = (sx >= _e74);
+    bool _e50 = local_7;
+    if (_e50) {
+        float _e56 = _group_0_binding_0_fs.rect.y;
+        local_8 = (py_2 >= _e56);
     } else {
         local_8 = false;
     }
-    bool _e77 = local_8;
-    if (_e77) {
-        float _e83 = _group_0_binding_0_fs.clip.z;
-        local_9 = (sx <= _e83);
+    bool _e59 = local_8;
+    if (_e59) {
+        float _e65 = _group_0_binding_0_fs.rect.w;
+        local_9 = (py_2 < _e65);
     } else {
         local_9 = false;
     }
-    bool _e86 = local_9;
-    if (_e86) {
-        float _e92 = _group_0_binding_0_fs.clip.y;
-        local_10 = (sy >= _e92);
+    bool _e68 = local_9;
+    if (_e68) {
+        float _e74 = _group_0_binding_0_fs.clip.x;
+        local_10 = (sx >= _e74);
     } else {
         local_10 = false;
     }
-    bool _e95 = local_10;
-    if (_e95) {
-        float _e101 = _group_0_binding_0_fs.clip.w;
-        local_11 = (sy <= _e101);
+    bool _e77 = local_10;
+    if (_e77) {
+        float _e83 = _group_0_binding_0_fs.clip.z;
+        local_11 = (sx <= _e83);
     } else {
         local_11 = false;
     }
-    bool inside = local_11;
+    bool _e86 = local_11;
+    if (_e86) {
+        float _e92 = _group_0_binding_0_fs.clip.y;
+        local_12 = (sy >= _e92);
+    } else {
+        local_12 = false;
+    }
+    bool _e95 = local_12;
+    if (_e95) {
+        float _e101 = _group_0_binding_0_fs.clip.w;
+        local_13 = (sy <= _e101);
+    } else {
+        local_13 = false;
+    }
+    bool inside = local_13;
     keep = float(inside);
     uint _e109 = _group_0_binding_0_fs.rounded;
     if ((_e109 != 0u)) {
@@ -435,11 +435,11 @@ void main() {
             alpha = (_e278 * _e283);
         } else {
             if (!((kind == 1u))) {
-                local_12 = (kind == 3u);
+                local_14 = (kind == 3u);
             } else {
-                local_12 = true;
+                local_14 = true;
             }
-            bool _e293 = local_12;
+            bool _e293 = local_14;
             if (_e293) {
                 if ((kind == 1u)) {
                     float _e298 = rect_dist(px_2, py_2, in_);
@@ -463,23 +463,23 @@ void main() {
                 float lx_1 = ((c_1 * dx_1) + (s * dy_1));
                 float ly_1 = ((c_1 * dy_1) - (s * dx_1));
                 if ((lx_1 >= 0.0)) {
-                    local_13 = (lx_1 < in_.p.z);
-                } else {
-                    local_13 = false;
-                }
-                bool _e345 = local_13;
-                if (_e345) {
-                    local_14 = (ly_1 >= 0.0);
-                } else {
-                    local_14 = false;
-                }
-                bool _e351 = local_14;
-                if (_e351) {
-                    local_15 = (ly_1 < in_.p.w);
+                    local_15 = (lx_1 < in_.p.z);
                 } else {
                     local_15 = false;
                 }
-                bool hit = local_15;
+                bool _e345 = local_15;
+                if (_e345) {
+                    local_16 = (ly_1 >= 0.0);
+                } else {
+                    local_16 = false;
+                }
+                bool _e351 = local_16;
+                if (_e351) {
+                    local_17 = (ly_1 < in_.p.w);
+                } else {
+                    local_17 = false;
+                }
+                bool hit = local_17;
                 vec2 n_2 = vec2(uvec2(textureSize(_group_1_binding_0_fs, 0).xy));
                 float tu = (in_.uv.x + (lx_1 * in_.m3_.x));
                 float tv = (in_.uv.y + (ly_1 * in_.m3_.y));

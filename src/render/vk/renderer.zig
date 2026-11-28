@@ -657,15 +657,17 @@ test "renderer: a canvas batch that no longer fits starts the buffers over with 
     const all: []const canvas.Range = &.{.{ .first = 0, .count = 40 }};
     const uniforms = lcgf.canvas_shader.Uniforms.headBytes(1);
     const cv = &r.canvas.?;
+    // A row uploads its 32 bytes and its colour's 4 (`Instances.colors`).
+    const row = 32 + 4;
     rows = .{ .{ .instances = &a.s, .ranges = all, .palette = &pal, .camera = .{} }, .{ .instances = &b.s, .ranges = all, .palette = &pal, .camera = .{} } };
     r.prepare(0, &list, .{}, .{ 16, 16 }, 1);
-    try testing.expectEqual(2 * (32 * 30 + uniforms), cv.uploaded);
+    try testing.expectEqual(2 * (row * 30 + uniforms), cv.uploaded);
     a.s.clearDirty();
     b.s.clearDirty();
     // 30 + 40 rows still fit after `a` once `b` is gone, but not after both: start over.
     rows[1].instances = &big.s;
     r.prepare(0, &list, .{}, .{ 16, 16 }, 1);
-    try testing.expectEqual(32 * 30 + 32 * 40 + 2 * uniforms, cv.uploaded);
+    try testing.expectEqual(row * 30 + row * 40 + 2 * uniforms, cv.uploaded);
     try testing.expectEqual(@as(u32, 30), cv.batches[cv.find(&big.s).?].row_base);
     try testing.expectEqual(@as(?u32, null), cv.find(&b.s));
     a.s.clearDirty();

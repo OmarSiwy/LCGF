@@ -32,6 +32,9 @@ const Quad = draw_list.Quad;
 const Paragraph = @import("layout/stack.zig").Paragraph;
 const Decoration = @import("layout/decorations.zig").Style;
 const paint = @import("../draw/paint.zig");
+const canvas = @import("../draw/canvas.zig");
+const Instances = canvas.Instances;
+const Range = canvas.Range;
 const types = @import("../core/types.zig");
 
 const W = simd.lanes;
@@ -157,6 +160,44 @@ pub const Mono = struct {
         var n: u32 = 0;
         for (0..d.run_len) |k| n = try font.appendRun(Grid, d, @intCast(k), out, glyphs, n);
         return n;
+    }
+
+    /// How `canvasGlyphs` lays a line out: `px` world units tall, in `layer` or `color`, turned
+    /// `turns` quarter turns, each byte's cell of `atlas` (the host's font descriptor; the
+    /// default is the full 16 x 16 grid).
+    pub const Label = struct {
+        px: u32,
+        layer: u8 = 0,
+        color: types.Color = .transparent,
+        turns: u2 = 0,
+        atlas: Atlas = .{},
+    };
+
+    /// `text`'s bytes on one line of canvas glyph rows from `at` (the first glyph's anchor), in
+    /// this font's metrics and a bitmap-font atlas (coverage glyphs: an `Instances` that holds
+    /// these holds no distance glyph). Returns the rows.
+    pub fn canvasGlyphs(font: Mono, s: *Instances, text: []const u8, at: [2]i32, o: Label) Range {
+        std.debug.assert(o.px > 0);
+        const first = s.len;
+        const px: f32 = @floatFromInt(o.px);
+        const adv = px * font.advance;
+        const c, const sn = canvas.turn(o.turns);
+        for (text, 0..) |byte, j| {
+            const x0: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j))));
+            const x1: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j + 1))));
+            const dx: i32 = @intFromFloat(c);
+            const dy: i32 = @intFromFloat(sn);
+            const anchor = [2]i32{ at[0] + dx * x0, at[1] + dy * x0 };
+            const size = [2]u32{ @intCast(x1 - x0), @intFromFloat(@round(px * font.line)) };
+            const look: canvas.Instances.Glyph = .{
+                .layer = o.layer,
+                .color = o.color,
+                .turns = o.turns,
+            };
+            _ = s.glyph(anchor, size, o.atlas.uv(byte), look);
+        }
+        std.debug.assert(s.len >= first);
+        return s.since(first);
     }
 
     /// Expands only runs referenced by text commands. Run indices stay unchanged; a
@@ -602,7 +643,7 @@ const FullGrid = struct {
 /// `cell` of the texture in UV, holding the bytes from `first` to `last` in order, row by row.
 /// Another byte shows `missing`'s cell, or the space's when it is a control byte and the atlas
 /// has a space: a tab or a newline in a line of text is blank. A host passes its font's
-/// descriptor to whatever maps bytes to cells (`canvas.Instances.glyphs`); the default is
+/// descriptor to whatever maps bytes to cells (`Mono.canvasGlyphs`); the default is
 /// `Mono`'s full 16 x 16 grid.
 pub const Atlas = struct {
     columns: u8 = 16,
@@ -1327,4 +1368,23 @@ test "MonoParagraphs.quads: a run in a tall box keeps the one line it was measur
     _ = font.quads(&d, &tx, &out, .{ .first = &first, .count = &count });
     for (out[0..4], 0..) |q, j| try testing.expectEqual(@as(f32, @floatFromInt(j)) * 6, q.rect[0]);
     for (out[0..4]) |q| try testing.expectEqual(@as(f32, 0), q.rect[1]);
+}
+
+test "canvasGlyphs: a byte a cell, turned with the line" {
+    const fx = struct {
+        const n = canvas.Instances.requiredBytes(4, 0, 1, .{});
+        var buf: [n]u8 align(mem.column_align) = undefined;
+    };
+    var carver: mem.Carver = .{ .buf = &fx.buf };
+    var s = canvas.Instances.init(&carver, 4, 0, 1, .{});
+    const font: Mono = .{};
+    const o: Mono.Label = .{ .px = 1_000, .layer = 7, .turns = 1 };
+    const label = font.canvasGlyphs(&s, "AB", .{ 2_000, 0 }, o);
+    try std.testing.expectEqual(canvas.Range{ .first = 0, .count = 2 }, label);
+    // 'A' is 0x41: cell (1, 4) of the 16 x 16 atlas, 600 wide; 'B' a quarter turn on, so its
+    // anchor is 600 down the screen.
+    try std.testing.expectEqual([4]i32{ 2_000, 0, 600, 1_250 }, s.c.pos[0]);
+    try std.testing.expectEqual([4]i32{ 2_000, 600, 600, 1_250 }, s.c.pos[1]);
+    try std.testing.expectEqual(4 | (1 << 16) | (7 << 24), s.c.look[0][0]);
+    try std.testing.expectEqual(canvas.Instances.GlyphAtlas.coverage, s.glyph_atlas);
 }

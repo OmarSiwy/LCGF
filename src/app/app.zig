@@ -49,7 +49,7 @@
 //!             _ = app.labels.label(&app.shapes, n.name, o) catch |e| switch (e) {
 //!                 // A new atlas: `generation` moved on, the next frame makes all again.
 //!                 error.Full => return,
-//!                 error.Unavailable => {}, // the bitmap font: `Instances.glyphs`
+//!                 error.Unavailable => {}, // the bitmap font: `Mono.canvasGlyphs`
 //!                 error.NoSpace => {}, // more rows than `shapes` holds
 //!             };
 //!         }

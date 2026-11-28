@@ -1161,7 +1161,14 @@ Fields: `advance`, `line`
 - `fn wrap(font: Mono, tx: *Texts) void`: SIMD.
 - `fn quads(font: Mono, d: *const DrawList, out: []Quad, glyphs: Glyphs) u32`: Expands the draw list's text runs into glyph quads for a 16x16 byte-indexed atlas: byte b samples cell (b & 15, b >> 4).
 - `fn quadsFor(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: The same metrics and geometry, with UVs from a static atlas subset.
+- `fn canvasGlyphs(font: Mono, s: *Instances, text: []const u8, at: [2]i32, o: Label) Range`: `text`'s bytes on one line of canvas glyph rows from `at` (the first glyph's anchor), in this font's metrics and a bitmap-font atlas (coverage glyphs: an `Instances` that holds these holds no distance glyph).
 - `fn quadsForCommands(font: Mono, comptime Grid: type, d: *const DrawList, out: []Quad, glyphs: Glyphs) error{GlyphOutsideSubset}!u32`: Expands only runs referenced by text commands.
+
+### `Mono.Label` (struct)
+How `canvasGlyphs` lays a line out: `px` world units tall, in `layer` or `color`, turned `turns` quarter turns, each byte's cell of `atlas` (the host's font descriptor; the default is the full 16 x 16 grid).
+
+Fields: `px`, `layer`, `color`, `turns`, `atlas`
+
 
 ### `Styled` (struct)
 Styled runs of a frame, for any font: run `rows[i]` of `Texts` takes `table[styles[i]]`, and `decorations` and `spans`, when not empty, have one row per `table` row.
@@ -2299,7 +2306,7 @@ Typed styling as independently callable operations.
 
 ## `lcgf.canvas` (src/draw/canvas.zig)
 
-canvas: many 2D primitives in caller-owned columns, drawn under a camera with a palette.
+canvas: many 2D primitives in caller-owned columns, drawn under a camera.
 
 ### Top level
 
@@ -2312,9 +2319,9 @@ canvas: many 2D primitives in caller-owned columns, drawn under a camera with a 
 - `fn kindOf(look: [4]u32) Kind`
 - `fn layerOf(look: [4]u32) u8`
 - `fn reach(pos: [4]i32, look: [4]u32, origin: [2]i32) [4]i32`: The box instance `pos`, `look` can touch, in world units from `origin` (wrapping), widened by its world width but not by a palette width: integers only, so a renderer can cull most rows of a big batch before decoding them (`Shape.of`).
-- `fn layerRow(pal: *const Palette, layer: u8) Layer`: Palette row `layer`, or an invisible one past the palette.
+- `fn layerRow(pal: *const Palette, layer: u8) Layer`: Palette row `layer`: `Layer.default` for an empty palette, an invisible one past a palette.
 - `fn shown(look: [4]u32, layer: Layer) bool`: Whether instance `look` on `layer` draws at all: alive and on a visible layer.
-- `fn inkOf(s: *const Instances, overrides: []const Override, i: u32) ?u32`: The colour override for instance `i`, if any: the last of `overrides` whose range holds it.
+- `fn inkOf(s: *const Instances, overrides: []const Override, i: u32) ?u32`: The colour that replaces row `i`'s stroke and fill, if any: its own (`colors`), else the last of `overrides` whose range holds it.
 - `fn overrideOf(overrides: []const Override, i: u32) ?u32`
 - `fn segmentDist(comptime V: type, px: V, py: V, sh: *const Shape) [2]V`: The segment `sh` (a to b, `half` either side, its caps).
 - `fn dashCover(comptime V: type, at: V, sh: *const Shape) V`: How much of a dash is on at chain distance `at` (pixels): 1 for a solid line.
@@ -2337,48 +2344,56 @@ The `look[0]` bits, as the module doc lays them out.
 - `distance: u32 = 1 << 18`
 
 ### `Layer` (struct)
-One palette row; 16 bytes, so a palette is one GPU uniform array of `vec4u`.
+One palette row: a style rows share.
 
 Fields: `stroke`, `fill`, `width`, `flags`
 
-- `fn of(o: struct { stroke: Color = .black, fill: Color = .transparent, width: f32 = 1, fill_on: bool = true, visible: bool = true }) Layer`
+- `default: Layer = .of(.{ .stroke = .white, .fill = .white })`: Every row's layer when the palette is empty: white, 1 px, solid, fills drawn.
+- `fn of(o: Style) Layer`
+- `fn dashLengths(l: Layer) [2]f32`: The dash's on and off lengths, logical pixels.
+
+### `Layer.Style` (struct)
+
+Fields: `stroke`, `fill`, `width`, `fill_on`, `visible`, `dash`
+
 
 ### `Palette` (struct)
-Caller-owned colours and widths per layer (at most 256).
+Caller-owned styles, at most 256; empty: every row has `Layer.default`.
 
-Fields: `layers`, `zoom_scale`
+Fields: `layers`
 
+- `none: Palette = .{}`
 
 ### `Camera` (struct)
 Where the world sits in the node.
 
-Fields: `origin`, `scale`, `offset`, `zoom`
+Fields: `origin`, `scale`, `offset`
 
 
 ### `View` (struct)
-World to pixels for one node, as a GPU uniform: `base + f32(w -% origin) * scale`, in physical pixels; `line` turns a palette width (logical pixels) into physical ones.
+World to pixels for one node, as a GPU uniform: `base + f32(w -% origin) * scale`, in physical pixels.
 
-Fields: `origin`, `base`, `scale`, `line`, `px`, `zoom_scale`
+Fields: `origin`, `base`, `scale`, `px`, `_pad`
 
-- `fn of(cam: Camera, pal: *const Palette, corner: [2]f32, px: f32) View`: `cam` inside a node whose top-left corner is at `corner`, `px` pixels per logical pixel.
+- `fn of(cam: Camera, corner: [2]f32, px: f32) View`: `cam` inside a node whose top-left corner is at `corner`, `px` pixels per logical pixel.
 - `fn x(v: View, w: i32) f32`
 - `fn y(v: View, w: i32) f32`
 - `fn len(v: View, w: u32) f32`: A length (radius, distance) in world units, in pixels.
 
 ### `Instances` (struct)
 
-Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `dirty_len`, `dirty_all`, `c`, `verts`, `marks`
+Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `dirty_len`, `dirty_all`, `c`, `verts`, `colors`, `glyph_atlas`
 
-- `Options = struct { marks: bool = false }`: What `init` carves besides the rows.
-- `Line = struct { layer: u8 = 0, weight: u8 = 1, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`: What every stroked builder takes.
-- `Box = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null }`
-- `Arc = struct { layer: u8 = 0, weight: u8 = 1, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, dash: u4 = 0, width: ?u32 = null }`
-- `Area = struct { layer: u8 = 0, weight: u8 = 1, fill: bool = true, stroke: bool = false, width: ?u32 = null }`
-- `Glyph = struct { layer: u8 = 0, turns: u2 = 0, distance: bool = false }`: `distance`: the atlas image holds distances (`bit.distance`), not coverage.
-- `Text = struct { px: u32, layer: u8 = 0, turns: u2 = 0, font: Mono = .{}, atlas: Atlas = .{} }`: `atlas` is where the glyph texture keeps each byte (a host's font says: the example font's `cells`); the default is `Mono`'s 16 x 16 byte grid.
-- `fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32, o: Options) Instances`: Carves `simd.rows(cap)` instance rows, `verts` polygon vertices, `dirty` dirty ranges and, with `o.marks`, a mark per row from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
+- `Options = struct { colors: bool = true }`: What `init` carves besides the rows.
+- `GlyphAtlas = enum(u2) { none, coverage, distance }`
+- `Line = struct { layer: u8 = 0, color: Color = .transparent, cap: Cap = .butt, width: ?u32 = null }`: What every stroked builder takes.
+- `Box = struct { layer: u8 = 0, color: Color = .transparent, fill: bool = true, stroke: bool = true, radius: u32 = 0, width: ?u32 = null }`
+- `Arc = struct { layer: u8 = 0, color: Color = .transparent, start: f32 = 0, sweep: f32 = std.math.tau, cap: Cap = .butt, width: ?u32 = null }`
+- `Area = struct { layer: u8 = 0, color: Color = .transparent, fill: bool = true, stroke: bool = false, width: ?u32 = null }`
+- `Glyph = struct { layer: u8 = 0, color: Color = .transparent, turns: u2 = 0, distance: bool = false }`: `distance`: the atlas image holds distances (`bit.distance`), not coverage.
+- `fn init(carver: *mem.Carver, cap: u32, verts: u32, dirty: u32, o: Options) Instances`: Carves `simd.rows(cap)` instance rows, `verts` polygon vertices, `dirty` dirty ranges and, with `o.colors`, a colour per row from `carver`; a counting carver sizes the buffer instead (`requiredBytes`).
 - `fn requiredBytes(cap: u32, verts: u32, dirty: u32, o: Options) usize`
-- `fn mark(s: *Instances, i: u32, color: u32) void`: Row `i` drawn in `color` (rgba8) from now on, over its layer and any range override; 0 takes the mark off.
+- `fn setColor(s: *Instances, i: u32, color: Color) void`: Row `i` drawn in `color` from now on, over its layer and any range override; `.transparent` (0) gives it its layer's again.
 - `fn reset(s: *Instances) void`: Empties the batch; everything is dirty.
 - `fn since(s: *const Instances, first: u32) Range`: The instances added since `len` was `first`.
 - `fn markDirty(s: *Instances, r: Range) void`: Records `r` as written: merged into the last dirty range when they touch (builders append in order, so a batch is one range), else appended; past capacity, everything.
@@ -2390,8 +2405,7 @@ Fields: `len`, `cap`, `vert_len`, `vert_cap`, `overflow`, `revision`, `dirty`, `
 - `fn circle(s: *Instances, c: [2]i32, r: u32, o: Box) u32`: A disc of radius `r` around `c`: a rect rounded by its half side.
 - `fn arc(s: *Instances, c: [2]i32, r: u32, o: Arc) u32`: The circle of radius `r` around `c` from angle `start` through `sweep` (a negative sweep runs the other way); a dash runs along its centre line from `start`.
 - `fn polygon(s: *Instances, points: []const [2]i32, o: Area) u32`: The closed polygon through `points`, any shape, filled by the nonzero rule, its outline stroked over the fill when `o.stroke`.
-- `fn glyph(s: *Instances, anchor: [2]i32, size: [2]u32, uv: [4]f32, o: Glyph) u32`: Atlas `uv` (u0, v0, u1, v1, 0..1) on the box `size` world units from `anchor`, turned about it by `o.turns` quarter turns; the atlas is the glyph atlas the renderer was given (`iface.Glyphs.texture`), tinted by the layer's stroke colour.
-- `fn glyphs(s: *Instances, bytes: []const u8, origin: [2]i32, o: Text) Range`: `bytes` on one line from `origin` (the first glyph's anchor), `o.px` world units tall and turned with it, with `o.font`'s metrics and each byte's cell of `o.atlas`.
+- `fn glyph(s: *Instances, anchor: [2]i32, size: [2]u32, uv: [4]f32, o: Glyph) u32`: Atlas `uv` (u0, v0, u1, v1, 0..1) on the box `size` world units from `anchor`, turned about it by `o.turns` quarter turns; the atlas is the window's canvas atlas (`iface.Glyphs.canvasTexture`), tinted by the row's stroke colour.
 
 ### `Instances.Columns` (struct)
 
@@ -3154,14 +3168,13 @@ Fields: `name`, `viewport`, `quads`, `runs`, `customs`, `strings`, `cmds`, `draw
 
 
 ### `canvas_scene` (struct)
-The canvas batch (lcgf.canvas): every kind and cap, fills, strokes, dashes across a chain, a non-convex polygon, glyphs turned 0 and 1 quarter turns, an override, a dead row and a hidden layer, under a camera that pans (a far i64 origin), zooms (zoom-scaled widths) and offsets, in a node clipped by its parent.
+The canvas batch (lcgf.canvas): every kind and cap, fills, strokes in a layer's pixels and in world units, dashes across a chain, a non-convex polygon, glyphs turned 0 and 1 quarter turns, an override, rows in their own colours, a dead row and a hidden layer, under a camera that pans (a far i64 origin) and offsets, in a node clipped by its parent.
 
 - `node = [4]f32{ 20, 20, 780, 580 }`: Logical pixels: the node, and the clip its parent gives it.
 - `clip = [4]f32{ 40, 30, 760, 570 }`
 - `far: i64 = 2_000_000_000`: Twenty world units per pixel, centred on a point two billion units out.
-- `camera: canvas.Camera = .{ .origin = .{ far, -far }, .scale = 0.05, .offset = .{ 10, 5 }, .zoom = 2 }`
-- `palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true }`
-- `marked = [_]i32{ 1, 6, 17, 40, -1 }`: Rows marked (`Instances.mark`), -1 for the selection's first, and their colours.
+- `palette: canvas.Palette = .{ .layers = &layers }`
+- `marked = [_]i32{ 1, 6, 17, 40, -1 }`: Rows in their own colours (`Instances.setColor`), -1 for the selection's first.
 - `mark_colors = [_]Color{ .rgb(255, 60, 60), .rgb(60, 255, 255), .rgb(255, 0, 200), .rgb(255, 160, 0), .rgb(255, 255, 255) }`
 - `viewport = [2]f32{ 800, 600 }`
 - `clear = Color.rgb(13, 13, 15)`: What the golden is drawn over (sw-play's 0d0d0f).
@@ -3178,7 +3191,6 @@ A second canvas node over the first, under its parents' turn of 0.3 rad about it
 - `clip = [4]f32{ 550, 370, 750, 550 }`
 - `radii = [4]f32{ 30, 10, 40, 0 }`
 - `xform = [6]f32{ ca, sa, -sa, ca, cx - (ca * cx - sa * cy), cy - (sa * cx + ca * cy) }`
-- `camera: canvas.Camera = .{ .origin = .{ far + 380 * 20, -far + 20 * 20 }, .scale = 0.05, .zoom = 2 }`
 
 ### `CanvasStorage` (struct)
 The canvas scene as a draw list of one canvas command, in caller-owned memory.

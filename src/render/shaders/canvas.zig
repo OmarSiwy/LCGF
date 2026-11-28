@@ -98,7 +98,7 @@ pub fn fill(u: *Uniforms, list: *const draw_list.DrawList, k: u32, scale: f32, t
     const s: @Vector(4, f32) = @splat(scale);
     const layers: u32 = @intCast(@min(c.palette.layers.len, max_layers));
     const marks = c.overrides[0..@min(c.overrides.len, max_overrides)];
-    u.view = canvas.View.of(c.camera, c.palette, .{ node.rect[0], node.rect[1] }, scale);
+    u.view = canvas.View.of(c.camera, .{ node.rect[0], node.rect[1] }, scale);
     u.rect = @as(@Vector(4, f32), node.rect) * s;
     u.clip = @as(@Vector(4, f32), node.clip) * s;
     u.size = target;

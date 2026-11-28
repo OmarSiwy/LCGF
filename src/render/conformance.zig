@@ -171,10 +171,10 @@ pub const scenes = [_]Scene{
     },
 };
 
-/// The canvas batch (lcgf.canvas): every kind and cap, fills, strokes, dashes across a chain,
-/// a non-convex polygon, glyphs turned 0 and 1 quarter turns, an override, a dead row and a
-/// hidden layer, under a camera that pans (a far i64 origin), zooms (zoom-scaled widths) and
-/// offsets, in a node clipped by its parent. Not a tree scene: `canvasScene` dumps the
+/// The canvas batch (lcgf.canvas): every kind and cap, fills, strokes in a layer's pixels and
+/// in world units, dashes across a chain, a non-convex polygon, glyphs turned 0 and 1 quarter
+/// turns, an override, rows in their own colours, a dead row and a hidden layer, under a camera
+/// that pans (a far i64 origin) and offsets, in a node clipped by its parent. Not a tree scene: `canvasScene` dumps the
 /// instances, the palette and the command for sw-play and gpu.py; each GPU back end's player
 /// draws it from `CanvasStorage`. Its golden is tools/golden/ref/draw/canvas.png.
 pub const canvas_scene = struct {
@@ -183,16 +183,21 @@ pub const canvas_scene = struct {
     pub const clip = [4]f32{ 40, 30, 760, 570 };
     /// Twenty world units per pixel, centred on a point two billion units out.
     pub const far: i64 = 2_000_000_000;
-    pub const camera: canvas.Camera = .{ .origin = .{ far, -far }, .scale = 0.05, .offset = .{ 10, 5 }, .zoom = 2 };
-    pub const layers = [_]canvas.Layer{
-        .of(.{ .stroke = .rgb(230, 230, 230), .width = 1 }), // 0 wires
-        .of(.{ .stroke = .rgb(90, 200, 255), .fill = .rgba(40, 90, 160, 180), .width = 1.5 }), // 1 symbols
-        .of(.{ .stroke = .rgb(255, 120, 60), .fill = .rgb(255, 200, 60), .width = 2 }), // 2 pins
-        .of(.{ .stroke = .rgb(250, 250, 120), .width = 1 }), // 3 labels
-        .of(.{ .stroke = .rgb(255, 0, 255), .fill = .rgb(255, 0, 255), .width = 8, .visible = false }), // 4 hidden
-        .of(.{ .stroke = .rgb(160, 255, 160), .fill = .rgb(60, 160, 60), .width = 1, .fill_on = false }), // 5 outlines only
+    pub const camera: canvas.Camera = .{
+        .origin = .{ far, -far },
+        .scale = 0.05,
+        .offset = .{ 10, 5 },
     };
-    pub const palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true };
+    pub const layers = [_]canvas.Layer{
+        .of(.{ .stroke = .rgb(230, 230, 230), .width = 2 }), // 0 wires
+        .of(.{ .stroke = .rgb(90, 200, 255), .fill = .rgba(40, 90, 160, 180), .width = 3 }), // 1 symbols
+        .of(.{ .stroke = .rgb(255, 120, 60), .fill = .rgb(255, 200, 60), .width = 4 }), // 2 pins
+        .of(.{ .stroke = .rgb(250, 250, 120), .width = 2 }), // 3 labels
+        .of(.{ .stroke = .rgb(255, 0, 255), .fill = .rgb(255, 0, 255), .width = 16, .visible = false }), // 4 hidden
+        .of(.{ .stroke = .rgb(160, 255, 160), .fill = .rgb(60, 160, 60), .width = 2, .fill_on = false }), // 5 outlines only
+        .of(.{ .stroke = .rgb(230, 230, 230), .width = 2, .dash = .{ 4, 4 } }), // 6 wires, dashed
+    };
+    pub const palette: canvas.Palette = .{ .layers = &layers };
 
     /// World point at logical (x, y) from the camera's origin.
     pub fn w(x: i32, y: i32) [2]i32 {
@@ -200,47 +205,48 @@ pub const canvas_scene = struct {
     }
 
     pub fn build(s: *canvas.Instances) [2]canvas.Range {
-        // Caps: butt, square, round at weights 1..4 (2x zoom-scaled widths: 2 to 8 px).
+        // Caps: butt, square, round, 2 to 8 px wide (world widths: 20 units a pixel).
         const caps = [_]canvas.Cap{ .butt, .square, .round };
         for (caps, 0..) |c, k| for (0..4) |wt| {
             const y: i32 = @intCast(20 + 30 * k * 4 + 30 * wt);
-            _ = s.segment(w(20, y), w(160, y + 10), .{ .weight = @intCast(wt + 1), .cap = c });
+            _ = s.segment(w(20, y), w(160, y + 10), .{ .width = @intCast(40 * (wt + 1)), .cap = c });
         };
-        // A dashed chain with joints, and a world-width wire (200 units: 10 px).
-        _ = s.polyline(&.{ w(200, 30), w(300, 30), w(340, 110), w(260, 160), w(200, 120) }, .{ .weight = 2, .dash = 2, .cap = .round });
+        // A dashed chain with joints (4 px on, 4 off), and a world-width wire (200 units: 10 px).
+        _ = s.polyline(&.{ w(200, 30), w(300, 30), w(340, 110), w(260, 160), w(200, 120) }, .{ .layer = 6, .width = 80, .cap = .round });
         _ = s.segment(w(200, 200), w(340, 260), .{ .width = 200, .cap = .round });
         // Rects: filled and stroked, rounded, stroke only, fill only; circles.
         _ = s.rect(w(380, 20), w(480, 90), .{ .layer = 1 });
-        _ = s.rect(w(500, 20), w(620, 90), .{ .layer = 1, .radius = 20 * 20, .weight = 3 });
+        _ = s.rect(w(500, 20), w(620, 90), .{ .layer = 1, .radius = 20 * 20, .width = 180 });
         _ = s.rect(w(380, 110), w(480, 170), .{ .layer = 5, .radius = 8 * 20 });
         _ = s.rect(w(500, 110), w(620, 170), .{ .layer = 2, .stroke = false });
         _ = s.circle(w(660, 60), 40 * 20, .{ .layer = 2 });
-        _ = s.circle(w(660, 150), 25 * 20, .{ .layer = 1, .fill = false, .weight = 2 });
+        _ = s.circle(w(660, 150), 25 * 20, .{ .layer = 1, .fill = false, .width = 120 });
         // Arcs: each cap, a negative sweep, a full ring.
-        for (caps, 0..) |c, k| _ = s.arc(w(@intCast(420 + 90 * k), 250), 35 * 20, .{ .layer = 1, .weight = 3, .start = 0.4, .sweep = 4.2, .cap = c });
-        _ = s.arc(w(690, 250), 30 * 20, .{ .layer = 2, .weight = 2, .start = 0, .sweep = -2.5, .cap = .round });
-        _ = s.arc(w(690, 250), 12 * 20, .{ .layer = 0, .weight = 2 });
+        for (caps, 0..) |c, k| _ = s.arc(w(@intCast(420 + 90 * k), 250), 35 * 20, .{ .layer = 1, .width = 180, .start = 0.4, .sweep = 4.2, .cap = c });
+        _ = s.arc(w(690, 250), 30 * 20, .{ .layer = 2, .width = 160, .start = 0, .sweep = -2.5, .cap = .round });
+        _ = s.arc(w(690, 250), 12 * 20, .{ .layer = 0, .width = 80 });
         // A dashed arc, round caps continuing the pattern.
-        _ = s.arc(w(705, 195), 16 * 20, .{ .layer = 0, .weight = 2, .start = 0.2, .sweep = 5.5, .cap = .round, .dash = 2 });
+        _ = s.arc(w(705, 195), 16 * 20, .{ .layer = 6, .width = 80, .start = 0.2, .sweep = 5.5, .cap = .round });
         // Polygons: a pin triangle, a concave arrow stroked, a self-crossing star (nonzero).
         _ = s.polygon(&.{ w(40, 420), w(110, 450), w(40, 480) }, .{ .layer = 2 });
-        _ = s.polygon(&.{ w(140, 400), w(260, 400), w(260, 430), w(200, 430), w(230, 500), w(170, 500), w(170, 430), w(140, 430) }, .{ .layer = 1, .stroke = true, .weight = 2 });
+        _ = s.polygon(&.{ w(140, 400), w(260, 400), w(260, 430), w(200, 430), w(230, 500), w(170, 500), w(170, 430), w(140, 430) }, .{ .layer = 1, .stroke = true, .width = 120 });
         var star: [5][2]i32 = undefined;
         for (&star, 0..) |*p, k| {
             const a = -std.math.pi / 2.0 + @as(f32, @floatFromInt(k)) * 4 * std.math.pi / 5.0;
             p.* = w(@intFromFloat(@round(340 + 60 * @cos(a))), @intFromFloat(@round(450 + 60 * @sin(a))));
         }
         _ = s.polygon(&star, .{ .layer = 1, .stroke = true });
-        // Glyphs: a label along x and one turned a quarter, 16 px tall.
-        _ = s.glyphs("LCGF canvas 0123", w(420, 330), .{ .px = 16 * 20, .layer = 3 });
-        _ = s.glyphs("turned", w(720, 300), .{ .px = 16 * 20, .layer = 3, .turns = 1 });
+        // Glyphs in the bitmap font: a label along x and one turned a quarter, 16 px tall.
+        const bitmap: Mono = .{};
+        _ = bitmap.canvasGlyphs(s, "LCGF canvas 0123", w(420, 330), .{ .px = 16 * 20, .layer = 3 });
+        _ = bitmap.canvasGlyphs(s, "turned", w(720, 300), .{ .px = 16 * 20, .layer = 3, .turns = 1 });
         // A dead row and a hidden layer draw nothing; a wire past the clip is cut by it.
-        s.kill(s.segment(w(420, 400), w(700, 520), .{ .weight = 4 }));
+        s.kill(s.segment(w(420, 400), w(700, 520), .{ .width = 160 }));
         _ = s.rect(w(420, 400), w(700, 520), .{ .layer = 4 });
-        _ = s.segment(w(400, 540), w(900, 580), .{ .weight = 4, .cap = .round });
+        _ = s.segment(w(400, 540), w(900, 580), .{ .width = 160, .cap = .round });
         // The selection: the second dashed edge's chain tinted, drawn as a second range.
         const selection_first = s.len;
-        _ = s.polyline(&.{ w(420, 440), w(560, 520), w(700, 440) }, .{ .weight = 3, .cap = .square });
+        _ = s.polyline(&.{ w(420, 440), w(560, 520), w(700, 440) }, .{ .width = 120, .cap = .square });
         return .{ .{ .first = 0, .count = selection_first }, s.since(selection_first) };
     }
 
@@ -256,10 +262,13 @@ pub const canvas_scene = struct {
         const ca = @cos(turn);
         const sa = @sin(turn);
         pub const xform = [6]f32{ ca, sa, -sa, ca, cx - (ca * cx - sa * cy), cy - (sa * cx + ca * cy) };
-        pub const camera: canvas.Camera = .{ .origin = .{ far + 380 * 20, -far + 20 * 20 }, .scale = 0.05, .zoom = 2 };
+        pub const camera: canvas.Camera = .{
+            .origin = .{ far + 380 * 20, -far + 20 * 20 },
+            .scale = 0.05,
+        };
     };
 
-    /// Rows marked (`Instances.mark`), -1 for the selection's first, and their colours.
+    /// Rows in their own colours (`Instances.setColor`), -1 for the selection's first.
     pub const marked = [_]i32{ 1, 6, 17, 40, -1 };
     pub const mark_colors = [_]Color{ .rgb(255, 60, 60), .rgb(60, 255, 255), .rgb(255, 0, 200), .rgb(255, 160, 0), .rgb(255, 255, 255) };
 
@@ -275,7 +284,7 @@ pub const canvas_scene = struct {
 /// The canvas scene as a draw list of one canvas command, in caller-owned memory.
 pub const CanvasStorage = struct {
     list_buf: [list_bytes]u8 align(mem.column_align) = undefined,
-    shape_buf: [canvas.Instances.requiredBytes(canvas_scene.rows, canvas_scene.verts, 4, .{ .marks = true })]u8 align(mem.column_align) = undefined,
+    shape_buf: [shape_bytes]u8 align(mem.column_align) = undefined,
     draw: DrawList = undefined,
     shapes: canvas.Instances = undefined,
     ranges: [2]canvas.Range = undefined,
@@ -283,6 +292,7 @@ pub const CanvasStorage = struct {
     overrides: [1]canvas.Override = undefined,
     rows: [2]draw_list.CanvasDraw = undefined,
 
+    const shape_bytes = canvas.Instances.requiredBytes(canvas_scene.rows, canvas_scene.verts, 4, .{});
     const list_bytes = blk: {
         var counter: mem.Carver = .{ .buf = null };
         _ = DrawList.init(&counter, 1, 1, 2);
@@ -295,11 +305,13 @@ pub const CanvasStorage = struct {
         var a: mem.Carver = .{ .buf = &st.list_buf };
         st.draw = DrawList.init(&a, 1, 1, 2);
         var b: mem.Carver = .{ .buf = &st.shape_buf };
-        st.shapes = canvas.Instances.init(&b, sc.rows, sc.verts, 4, .{ .marks = true });
+        st.shapes = canvas.Instances.init(&b, sc.rows, sc.verts, 4, .{});
         st.ranges = sc.build(&st.shapes);
-        // Marked rows: two caps' segments, a rect, a glyph, and a selection row whose mark wins
-        // over the selection's override.
-        for (sc.marked, sc.mark_colors) |i, color| st.shapes.mark(if (i < 0) st.ranges[1].first else @intCast(i), @bitCast(color));
+        // Rows in their own colours: two caps' segments, a rect, a glyph, and a selection row
+        // whose colour wins over the selection's override.
+        for (sc.marked, sc.mark_colors) |i, color| {
+            st.shapes.setColor(if (i < 0) st.ranges[1].first else @intCast(i), color);
+        }
         st.overrides = .{.{ .range = st.ranges[1], .color = @bitCast(sc.tint) }};
         st.inset_ranges = .{st.ranges[0]};
         st.rows = .{

@@ -113,8 +113,8 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
         const Slot = struct {
             pos: gpu.Buffer,
             look: gpu.Buffer,
-            /// Rows' marks, for batches that have them (`Instances.marks`).
-            marks: gpu.Buffer,
+            /// Rows' own colours, for batches that have them (`Instances.colors`).
+            colors: gpu.Buffer,
             verts: if (es) gpu.Texture else gpu.Buffer,
             uniforms: [max_draws]gpu.Buffer,
             groups: [max_draws]gpu.BindGroup(Shader, 0),
@@ -127,7 +127,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
         cap: Capacity,
         slots: [max_frames]Slot,
         row: gpu.Buffer,
-        /// Zeros, bound as the marks of a batch without them: one buffer, written once.
+        /// Zeros, bound as the colours of a batch without them: one buffer, written once.
         zeros: gpu.Buffer,
         row_written: bool = false,
         atlas: [4]struct { key: u64, group: gpu.BindGroup(Shader, 1) } = undefined,
@@ -177,8 +177,8 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             cv.row = try dev.createBuffer(&cv.arena, .{ .size = 4 * rows, .usage = vb });
             cv.zeros = try dev.createBuffer(&cv.arena, .{ .size = 4 * rows, .usage = vb });
             for (cv.slots[0..cap.frames]) |*s| {
-                s.* = .{ .pos = undefined, .look = undefined, .marks = undefined, .verts = undefined, .uniforms = undefined, .groups = undefined };
-                s.marks = try dev.createBuffer(&cv.arena, .{ .size = 4 * rows, .usage = vb });
+                s.* = .{ .pos = undefined, .look = undefined, .colors = undefined, .verts = undefined, .uniforms = undefined, .groups = undefined };
+                s.colors = try dev.createBuffer(&cv.arena, .{ .size = 4 * rows, .usage = vb });
                 s.pos = try dev.createBuffer(&cv.arena, .{ .size = 16 * rows, .usage = vb });
                 s.look = try dev.createBuffer(&cv.arena, .{ .size = 16 * rows, .usage = vb });
                 s.verts = if (es)
@@ -201,7 +201,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             for (cv.slots[0..cv.cap.frames]) |s| {
                 for (s.uniforms[0..cv.cap.draws]) |b| dev.destroyBuffer(b);
                 if (es) dev.destroyTexture(s.verts) else dev.destroyBuffer(s.verts);
-                dev.destroyBuffer(s.marks);
+                dev.destroyBuffer(s.colors);
                 dev.destroyBuffer(s.look);
                 dev.destroyBuffer(s.pos);
             }
@@ -304,7 +304,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             pass.setVertexBuffer(0, s.pos, 0);
             pass.setVertexBuffer(1, s.look, 0);
             pass.setVertexBuffer(2, cv.row, 0);
-            pass.setVertexBuffer(3, if (shapes.marks.len != 0) s.marks else cv.zeros, 0);
+            pass.setVertexBuffer(3, if (shapes.colors.len != 0) s.colors else cv.zeros, 0);
             const len = @min(shapes.len, batch.rows);
             for (list.canvases[k].ranges) |r| {
                 const end = @min(r.first +| r.count, len);
@@ -473,7 +473,7 @@ pub fn Canvas(comptime gpu: type, comptime source: type) type {
             const at = 16 * @as(u64, batch.row_base + first);
             cv.write(up, s.pos, at, std.mem.sliceAsBytes(shapes.c.pos[first..end]));
             cv.write(up, s.look, at, std.mem.sliceAsBytes(shapes.c.look[first..end]));
-            if (shapes.marks.len != 0) cv.write(up, s.marks, 4 * @as(u64, batch.row_base + first), std.mem.sliceAsBytes(shapes.marks[first..end]));
+            if (shapes.colors.len != 0) cv.write(up, s.colors, 4 * @as(u64, batch.row_base + first), std.mem.sliceAsBytes(shapes.colors[first..end]));
         }
 
         fn writeVerts(cv: *C, up: ?*gpu.Upload, s: *const Slot, batch: *const Batch, shapes: *const Instances, from: u32, to: u32) void {

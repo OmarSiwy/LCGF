@@ -18,9 +18,7 @@ const App = struct {
     buf: [canvas.Instances.requiredBytes(8, 0, 1, .{})]u8 align(lcgf.mem.column_align) = undefined,
     shapes: canvas.Instances = undefined,
     ready: bool = false,
-    layers: [1]canvas.Layer = .{.of(.{ .stroke = .white })},
     // The canvas command reads these when the host draws, after `build`: the app's, not temporaries.
-    palette: canvas.Palette = undefined,
     ranges: [1]canvas.Range = undefined,
 
     pub fn build(app: *App, f: *Frame, _: *const Events) void {
@@ -28,13 +26,14 @@ const App = struct {
             f.ctx.enableCanvas(&app.rows);
             var carver: lcgf.mem.Carver = .{ .buf = &app.buf };
             app.shapes = .init(&carver, 8, 0, 1, .{});
-            app.ranges = .{app.shapes.glyphs(text, .{ 0, 0 }, .{ .px = px, .atlas = host.font.cells })};
-            app.palette = .{ .layers = &app.layers };
+            // The host's font: Mono's metrics, and where its atlas keeps each byte. No palette:
+            // every row the default layer, white.
+            const o: lcgf.protocol.Mono.Label = .{ .px = px, .atlas = host.font.cells };
+            app.ranges = .{(lcgf.protocol.Mono{}).canvasGlyphs(&app.shapes, text, .{ 0, 0 }, o)};
             app.ready = true;
         }
         _ = f.open(.none, .{ .size = .{ .fill, .fill } });
         _ = f.canvas(.from("label"), .{ .float = true, .offset = label_at, .size = .{ .px(100), .px(40) } }, &app.shapes, .{
-            .palette = &app.palette,
             .ranges = &app.ranges,
         });
         _ = f.textStyled(text, .{ .px = px, .color = .white }, .{ .float = true, .offset = run_at });

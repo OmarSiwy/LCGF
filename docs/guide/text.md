@@ -198,6 +198,6 @@ glyph's image made once. A back end reads that atlas through `Glyphs.canvas`. In
 `lcgf_app` window, give the `App` a field `labels: lcgf_app.Labels` and the window hands it the
 service and an atlas (`Options.labels`) before the first `build`, and draws the canvas glyphs
 from that atlas ([runtime.md](runtime.md), "A window in one call"). Without the field, or on
-the bitmap font, canvas glyphs sample the bundled font's cells (`Instances.glyphs`).
+the bitmap font, canvas glyphs sample the bundled font's cells (`Mono.canvasGlyphs`).
 `bench/micro/canvastext.zig` measures the choice of distance images over rasterising again at
 each zoom.

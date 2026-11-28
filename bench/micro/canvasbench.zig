@@ -36,8 +36,10 @@ const layers = [_]canvas.Layer{
     .of(.{ .stroke = .rgb(90, 200, 255), .fill = .rgba(40, 90, 160, 180), .width = 1 }),
     .of(.{ .stroke = .rgb(255, 120, 60), .fill = .rgb(255, 200, 60), .width = 1 }),
     .of(.{ .stroke = .rgb(250, 250, 120), .width = 1 }),
+    .of(.{ .stroke = .rgb(230, 230, 230), .width = 2 }),
+    .of(.{ .stroke = .rgb(230, 230, 230), .width = 1, .dash = .{ 4, 4 } }),
 };
-pub const palette: canvas.Palette = .{ .layers = &layers, .zoom_scale = true };
+pub const palette: canvas.Palette = .{ .layers = &layers };
 
 /// Wires (30 %, a tenth of them dashed), rects (20 %), circles (10 %), arcs (10 %),
 /// triangles (10 %) and glyphs (20 %), each inside its cell.
@@ -47,7 +49,7 @@ pub fn build(s: *canvas.Instances) void {
         const x: i32 = @intCast((i % cols) * cell);
         const y: i32 = @intCast((i / cols) * cell);
         switch (i % 10) {
-            0, 1, 2 => _ = s.segment(.{ x, y + 1_000 }, .{ x + 5_000, y + 1_000 + @as(i32, @intCast(i % 3)) * 1_500 }, .{ .weight = @intCast(1 + i % 2), .dash = if (i % 30 == 0) 2 else 0, .cap = .round }),
+            0, 1, 2 => _ = s.segment(.{ x, y + 1_000 }, .{ x + 5_000, y + 1_000 + @as(i32, @intCast(i % 3)) * 1_500 }, .{ .layer = if (i % 30 == 0) 5 else if (i % 2 == 1) 4 else 0, .cap = .round }),
             3, 4 => _ = s.rect(.{ x + 500, y + 500 }, .{ x + 5_000, y + 4_000 }, .{ .layer = 1, .radius = 400 }),
             5 => _ = s.circle(.{ x + 3_000, y + 3_000 }, 2_000, .{ .layer = 2, .stroke = false }),
             6 => _ = s.arc(.{ x + 3_000, y + 3_000 }, 2_200, .{ .layer = 1, .start = 0.5, .sweep = 3, .cap = .round }),
@@ -112,12 +114,12 @@ pub fn main(init: std.process.Init) !void {
         for (0..frames) |f| {
             const t: f32 = @floatFromInt(f);
             const cam: canvas.Camera = if (std.mem.eql(u8, scenario, "pan-all"))
-                .{ .origin = .{ @intFromFloat(t * 2_000), 0 }, .scale = fit, .zoom = 1 }
+                .{ .origin = .{ @intFromFloat(t * 2_000), 0 }, .scale = fit }
             else if (std.mem.eql(u8, scenario, "pan-4x"))
-                .{ .origin = .{ 600_000 + @as(i64, @intFromFloat(t * 1_000)), 600_000 }, .scale = 4 * fit, .zoom = 4 }
+                .{ .origin = .{ 600_000 + @as(i64, @intFromFloat(t * 1_000)), 600_000 }, .scale = 4 * fit }
             else if (std.mem.eql(u8, scenario, "empty"))
                 // Beside the batch: every row is culled, what each band pays to skip them all.
-                .{ .origin = .{ -10_000_000 - @as(i64, @intFromFloat(t * 1_000)), 0 }, .scale = 4 * fit, .zoom = 4 }
+                .{ .origin = .{ -10_000_000 - @as(i64, @intFromFloat(t * 1_000)), 0 }, .scale = 4 * fit }
             else
                 // From all of it to 8x, geometrically, about the centre.
                 zoomed(fit * std.math.pow(f32, 8, t / @as(f32, @floatFromInt(frames))), wf, hf, world_w);
@@ -148,7 +150,8 @@ pub fn main(init: std.process.Init) !void {
 pub fn zoomed(scale: f32, wf: f32, hf: f32, world_w: f32) canvas.Camera {
     const cx = world_w / 2 - wf / 2 / scale;
     const cy = world_w / 2 - hf / 2 / scale;
-    return .{ .origin = .{ @intFromFloat(cx), @intFromFloat(cy) }, .scale = scale, .zoom = scale * world_w / wf };
+    std.debug.assert(scale > 0);
+    return .{ .origin = .{ @intFromFloat(cx), @intFromFloat(cy) }, .scale = scale };
 }
 
 /// Instructions retired by the drawing threads this frame.

@@ -8,7 +8,7 @@
 // Rows come from two instance-step buffers, `pos` (sint32x4) and `look` (uint32x4), a third
 // that holds each row's own index (uint32), so overrides find the row without
 // @builtin(instance_index) (docs/guide/gpu.md: GL ES emulates the first instance by offsetting
-// the buffers), and a fourth of marks (uint32; zeros for a batch without). Polygon vertices
+// the buffers), and a fourth of colours (uint32; zeros for a batch without). Polygon vertices
 // are read by `vert`, which canvas.zig `shader` appends: from a storage buffer, or on GL ES 3.0
 // (no storage buffers in the fragment stage) from an r32uint texture of two texels a vertex.
 
@@ -18,9 +18,9 @@ struct Draw {
     origin: vec2i,
     base: vec2f,
     scale: f32,
-    line: f32,
     px: f32,
-    zoom_scale: u32,
+    pad0: u32,
+    pad1: u32,
     // The node's rect and clip in physical pixels: a pixel is drawn when its centre is in the
     // half-open rect and in the closed clip, as sw's `draw` decides.
     rect: vec4f,
@@ -61,7 +61,7 @@ struct Row {
     @location(0) pos: vec4i,
     @location(1) look: vec4u,
     @location(2) row: u32,
-    // The row's mark (canvas.zig `Instances.marks`): 0, or a colour over everything else.
+    // The row's own colour (canvas.zig `Instances.colors`): 0, or a colour over everything else.
     @location(3) mark: u32,
 }
 
@@ -124,18 +124,23 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
     var out: Frag;
     let h = r.look.x;
     let layer = h >> 24u;
-    let row = u.palette[min(layer, 255u)];
+    // An empty palette: every row has `Layer.default` (white, 1 px, solid, fills drawn).
+    let none = vec4u(0xffffffffu, 0xffffffffu, bitcast<u32>(1.0), 3u);
+    let row = select(u.palette[min(layer, 255u)], none, u.layers == 0u);
     out.position = vec4f(-2.0, -2.0, 0.0, 1.0);
     // Dead, on a hidden layer or past the palette: no pixels (canvas.zig `shown`).
-    if ((h & 512u) != 0u || layer >= u.layers || (row.w & 2u) == 0u) {
+    if ((h & 512u) != 0u || (layer >= u.layers && u.layers != 0u) || (row.w & 2u) == 0u) {
         return out;
     }
     let kind = h & 15u;
     let cap = (h >> 4u) & 3u;
-    let weight = f32(((h >> 14u) & 3u) + 1u);
-    let width = select(weight * bitcast<f32>(row.z) * u.line, f32(r.look.w) * u.scale, (h & 256u) != 0u);
+    let width = select(bitcast<f32>(row.z) * u.px, f32(r.look.w) * u.scale, (h & 256u) != 0u);
     let corner = vec4f(wx(r.pos.x), wy(r.pos.y), wx(r.pos.z), wy(r.pos.w));
-    let dash = f32((h >> 10u) & 15u);
+    // The layer's dash (canvas.zig `Layer.dashLengths`): on, and the period (0: solid).
+    let dash_on = f32((row.w >> 2u) & 32767u) / 16.0;
+    let dash_off = f32(row.w >> 17u) / 16.0;
+    let on = dash_on * u.px;
+    let period = select(0.0, on + dash_off * u.px, dash_on > 0.0 && dash_off > 0.0);
     let half = width * 0.5;
     let stroked = (h & 128u) != 0u || kind == 0u || kind == 2u;
     var p = corner;
@@ -150,8 +155,7 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
         // Segment: the constants of `segmentDist`.
         grow = half * sqrt2;
         chain = f32(r.look.y) * u.scale;
-        let on = 2.0 * dash * u.px;
-        m1 = vec4f(on, 2.0 * on, 1.0, 0.0);
+        m1 = vec4f(on, period, 1.0, 0.0);
         let dx = corner.z - corner.x;
         let dy = corner.w - corner.y;
         let l = sqrt(dx * dx + dy * dy);
@@ -165,8 +169,7 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
         let m = start / 65536.0 * tau + sweep / 2.0;
         radius = rr;
         chain = f32(r.look.y) * u.scale;
-        let on = 2.0 * dash * u.px;
-        m1 = vec4f(on, 2.0 * on, cos(m), sin(m));
+        m1 = vec4f(on, period, cos(m), sin(m));
         m3 = vec4f(sweep / 2.0, 0.0, 0.0, 0.0);
         m2 = vec4f(max(sin(sweep / 2.0), 0.0), cos(sweep / 2.0), f32((r.look.z >> 16u) == 0xffffu), 0.0);
         p = vec4f(corner.x, corner.y, 0.0, 0.0);
@@ -196,9 +199,9 @@ fn vs(@builtin(vertex_index) vi: u32, r: Row) -> Frag {
         box = vec4f(min(corner.x, corner.z) - grow - 1.0, min(corner.y, corner.w) - grow - 1.0,
                     max(corner.x, corner.z) + grow + 1.0, max(corner.y, corner.w) + grow + 1.0);
     }
-    let marked = r.mark != 0u;
-    let colour = select(override_of(r.row - u.row_base, row.x), r.mark, marked);
-    let fill = select(override_of(r.row - u.row_base, row.y), r.mark, marked);
+    let own = r.mark != 0u;
+    let colour = select(override_of(r.row - u.row_base, row.x), r.mark, own);
+    let fill = select(override_of(r.row - u.row_base, row.y), r.mark, own);
     let filled = (h & 64u) != 0u && (row.w & 1u) != 0u;
     out.stroke = rgba(colour);
     out.base = select(vec4f(out.stroke.rgb, 0.0), rgba(fill), filled);
