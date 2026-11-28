@@ -869,6 +869,8 @@ const Color = lcgf.types.Color;
 const Fixture = struct {
     conn: x11.Connection,
     w: x11.Window,
+    /// The window size the test asked for.
+    size: [2]u32,
     gw: Window,
     ctx: context.Context,
     tw: text.Window,
@@ -932,8 +934,9 @@ const Fixture = struct {
             .first = &first,
             .count = &count,
         };
-        try fx.w.open(&fx.conn, w, h, "lcgf app gpu", bufs);
+        try page.openTestWindow(&fx.w, &fx.conn, w, h, "lcgf app gpu", bufs);
         errdefer fx.w.close();
+        fx.size = .{ w, h };
         try fx.gw.open(&fx.w, display, o);
         errdefer fx.gw.close();
         fx.ctx = try .init(&ctx_buffer, limits);
@@ -961,6 +964,8 @@ const Fixture = struct {
             .count = &count,
         };
         try loop(@TypeOf(app.*), app, &fx.gw, r, clock);
+        // What the tests then read is drawn for the size they asked for.
+        try page.skipResized(&fx.w, fx.size, true);
     }
 };
 
@@ -1964,7 +1969,8 @@ test "gpu frame cost at 2560 x 1440 (LCGF_APP_GPU_BENCH)" {
     };
     const done: Done = .{ .a = &app };
     const unfinished = "; unfinished {d}, not shown {d}\n";
-    note(fd, "device {s}, {d} frames a mode\n", .{ fx.gw.x.setup.device.name(), frames });
+    const device = .{ fx.gw.x.setup.device.name(), fx.w.width, fx.w.height, frames };
+    note(fd, "device {s}, window {d} x {d}, {d} frames a mode\n", device);
 
     var builds = app.builds;
     var draws = app.draws;
@@ -2040,7 +2046,8 @@ test "gpu canvas of 100,000 rows at 2560 x 1440, the camera moving (LCGF_APP_GPU
     const shown_n = fx.gw.stats.presents - presents;
     const us = t.per(shown_n);
     const per_frame = (fx.gw.stats.canvas_bytes - bytes) / @max(shown_n, 1);
-    note(fd, "device {s}\n", .{fx.gw.x.setup.device.name()});
+    const device = .{ fx.gw.x.setup.device.name(), fx.w.width, fx.w.height };
+    note(fd, "device {s}, window {d} x {d}\n", device);
     const line = "canvas 100k rows, camera moving: {d} frames, wall {d:.1} us, " ++
         "thread cpu {d:.1} us, {d} canvas bytes uploaded a frame; builds {d}; " ++
         "unfinished {d}, not shown {d}\n";

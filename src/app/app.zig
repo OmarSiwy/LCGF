@@ -1042,7 +1042,7 @@ test "a surface App in the software window runs: not live, no draw, its node's f
         .first = &B.first,
         .count = &B.count,
     };
-    try w.open(conn, 100, 80, "lcgf app no gpu", bufs);
+    try page.openTestWindow(&w, conn, 100, 80, "lcgf app no gpu", bufs);
     defer w.close();
     var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = gpa };
     const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
@@ -1076,7 +1076,7 @@ test "a custom node in the window is said once, in a debug build" {
         .first = &B.first,
         .count = &B.count,
     };
-    try w.open(conn, 100, 80, "lcgf app custom", bufs);
+    try page.openTestWindow(&w, conn, 100, 80, "lcgf app custom", bufs);
     defer w.close();
     var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = gpa };
     const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
@@ -1168,7 +1168,7 @@ test "app on X11: a new generation draws and sends only the nodes that show the 
         .first = &B.first,
         .count = &B.count,
     };
-    try w.open(conn, 200, 100, "lcgf app image damage", bufs);
+    try page.openTestWindow(&w, conn, 200, 100, "lcgf app image damage", bufs);
     defer w.close();
     var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
     var ctx = try context.Context.init(&B.ctx, limitsOf(options));
@@ -1214,7 +1214,8 @@ test "app on X11: the app's image and text in the bundled font draw; an idle sec
     var pixels: std.ArrayList(u32) = .empty;
     defer pixels.deinit(testing.allocator);
     var w: x11.Window = undefined;
-    try w.open(
+    try page.openTestWindow(
+        &w,
         conn,
         200,
         100,
@@ -1294,7 +1295,7 @@ test "app on X11 with a font file: text as the reference draws it, a change send
             .first = &B.first,
             .count = &B.count,
         };
-        try w.open(conn, 200 * k, 100 * k, "lcgf app text", bufs);
+        try page.openTestWindow(&w, conn, 200 * k, 100 * k, "lcgf app text", bufs);
         defer w.close();
         var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
         var ctx = try context.Context.init(&B.ctx, limitsOf(font_options));
@@ -1360,6 +1361,7 @@ fn expectText(w: anytype, app: *FontApp, s: f32) !void {
         var service: [service_bytes]u8 align(lcgf.mem.column_align) = undefined;
         var img: [400 * 200]u8 = undefined;
     };
+    try page.skipResized(w, null, @as(usize, w.width) * w.height <= Reference.img.len);
     const pw: u32 = w.width;
     const ph: u32 = w.height;
     var rctx = try context.Context.init(&Reference.ctx, limitsOf(font_options));
@@ -1414,7 +1416,7 @@ test "app on X11: a composed page draws both sides; a pan, a widget, idle each s
         .first = &B.first,
         .count = &B.count,
     };
-    try w.open(conn, 300, 200, "lcgf app page", bufs);
+    try page.openTestWindow(&w, conn, 300, 200, "lcgf app page", bufs);
     defer w.close();
     var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
     var ctx = try context.Context.init(&B.ctx, limitsOf(page_options));
@@ -1496,7 +1498,7 @@ test "app on X11: a composed page in the bundled font draws both sides' text as 
         .first = &B.first,
         .count = &B.count,
     };
-    try w.open(conn, 300, 200, "lcgf app page mono", bufs);
+    try page.openTestWindow(&w, conn, 300, 200, "lcgf app page mono", bufs);
     defer w.close();
     var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
     var ctx = try context.Context.init(&B.ctx, limitsOf(page_options));
@@ -1570,7 +1572,7 @@ fn expectBitmapGlyphs(comptime options: Options, display: []const u8) !void {
             .first = &B.first,
             .count = &B.count,
         };
-        try w.open(conn, 300, 200, "lcgf app bitmap glyphs", bufs);
+        try page.openTestWindow(&w, conn, 300, 200, "lcgf app bitmap glyphs", bufs);
         defer w.close();
         var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
         var ctx = try context.Context.init(&B.ctx, limitsOf(options));
@@ -1623,7 +1625,7 @@ test "app on X11: canvas labels in the font file draw as the reference at camera
             .first = &B.first,
             .count = &B.count,
         };
-        try w.open(conn, 200, 100, "lcgf app labels", bufs);
+        try page.openTestWindow(&w, conn, 200, 100, "lcgf app labels", bufs);
         defer w.close();
         var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
         var ctx = try context.Context.init(&B.ctx, limitsOf(label_options));
@@ -1681,7 +1683,7 @@ test "app on X11: a full label atlas is reported, and the labels made again draw
         .first = &B.first,
         .count = &B.count,
     };
-    try w.open(conn, 200, 100, "lcgf app labels", bufs);
+    try page.openTestWindow(&w, conn, 200, 100, "lcgf app labels", bufs);
     defer w.close();
     var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
     var ctx = try context.Context.init(&B.ctx, limitsOf(small_labels));
@@ -1728,7 +1730,7 @@ test "app on X11: a canvas label in a composed page's region draws as the refere
         .first = &B.first,
         .count = &B.count,
     };
-    try w.open(conn, 300, 200, "lcgf app page labels", bufs);
+    try page.openTestWindow(&w, conn, 300, 200, "lcgf app page labels", bufs);
     defer w.close();
     var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
     var ctx = try context.Context.init(&B.ctx, limitsOf(page_options));

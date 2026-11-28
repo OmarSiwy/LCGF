@@ -282,6 +282,7 @@ pub const TestApp = struct {
 // tidy: allow-fn(large-generic-function) a test helper over the X11 window, one instance
 pub fn expectCanvas(w: anytype, app: *const TestApp) !void {
     const x11 = @import("x11");
+    try skipResized(w, .{ 300, 200 }, true);
     const Buf = struct {
         var px: [lcgf.render_sw.Framebuffer.len(200, 60)]u32 = undefined;
     };
@@ -316,6 +317,47 @@ pub fn pixelIn(w: anytype, box: [4]f32, dx: f32, dy: f32) !Color {
     return x11.pixel(w, @intFromFloat(box[0] + dx), @intFromFloat(box[1] + dy));
 }
 
+/// Test helper: opens X11 window `w` `width` x `height` and maps it again as override-redirect,
+/// so a window manager on the display (a desktop's Xwayland) neither resizes nor hides it, as
+/// src/shell/x11/gpu.zig's fixture does; Xvfb has none, and the window is as before there.
+// tidy: allow(too-many-parameters) the window's own `open`, passed through
+pub fn openTestWindow(
+    w: anytype,
+    conn: anytype,
+    width: u16,
+    height: u16,
+    title: []const u8,
+    bufs: @typeInfo(@TypeOf(w)).pointer.child.Buffers,
+) !void {
+    const wire = lcgf.shell_x11_wire;
+    std.debug.assert(width > 0);
+    try w.open(conn, width, height, title, bufs);
+    errdefer w.close();
+    _ = conn.send(wire.window_size, wire.onWindow, .{ 10, w.id }); // UnmapWindow
+    _ = conn.send(16, overrideRedirect, .{w.id});
+    _ = conn.send(wire.window_size, wire.onWindow, .{ wire.op.map_window, w.id });
+    try conn.sync();
+}
+
+fn overrideRedirect(b: *lcgf.shell_x11_wire.Buf, window: u32) void {
+    b.head(lcgf.shell_x11_wire.op.change_window_attributes, 0, 4);
+    b.int(u32, window);
+    b.int(u32, 0x200); // override-redirect
+    b.int(u32, 1);
+}
+
+/// Test helper: error.SkipZigTest, with a line saying so, when window `w` is not `want` (when
+/// given) or does not `fit` the caller's reference buffer: a window manager resized it, and a
+/// reference of the size asked can neither be compared with it nor indexed past.
+pub fn skipResized(w: anytype, want: ?[2]u32, fit: bool) !void {
+    const size: [2]u32 = .{ w.width, w.height };
+    std.debug.assert(size[0] > 0 or !fit);
+    if (fit and (want == null or std.meta.eql(want.?, size))) return;
+    const line = "skipped: the window manager resized the window to {d} x {d}\n";
+    std.debug.print(line, .{ size[0], size[1] });
+    return error.SkipZigTest;
+}
+
 /// Every run of the composed list `app` last drew, rasterised straight from the face
 /// (text.zig's golden reference) over its side's ground: each pixel of the run's rect within
 /// 2 of it in the window, at scale 1.
@@ -325,6 +367,7 @@ pub fn expectPageText(w: anytype, app: *const TestApp, t: *text.Text) !void {
     const Img = struct {
         var img: [300 * 200]u8 = undefined;
     };
+    try skipResized(w, .{ 300, 200 }, @as(usize, w.width) * w.height <= Img.img.len);
     const pw: u32 = w.width;
     const d = &app.list;
     const img = Img.img[0 .. @as(usize, pw) * w.height];

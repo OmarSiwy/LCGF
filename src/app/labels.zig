@@ -329,6 +329,7 @@ const DrawList = lcgf.draw_list.DrawList;
 const Camera = canvas.Camera;
 const sw_font = lcgf.render_sw_font;
 const AppImage = @import("app.zig").Image;
+const page = @import("page.zig");
 const Framebuffer = sw.Framebuffer;
 const Img = sw.Image;
 const text_mod = @import("text.zig");
@@ -472,6 +473,7 @@ pub const TestApp = struct {
     /// scale `s`, drawn into `pixels`.
     // tidy: allow-fn(large-generic-function) a test helper over the X11 window, one instance
     pub fn expectWindow(a: *const TestApp, w: anytype, pixel: anytype, s: f32, buf: []u32) !void {
+        try page.skipResized(w, null, sw.Framebuffer.len(w.width, w.height) <= buf.len);
         var fb = sw.Framebuffer.init(buf, w.width, w.height, .rgba8);
         a.reference(&fb, s);
         var bad: u32 = 0;
@@ -556,6 +558,7 @@ pub const BitmapApp = struct {
     // tidy: allow-fn(large-generic-function) a test helper over the X11 window, one instance
     pub fn expectWindow(a: *const BitmapApp, w: anytype, pixel: anytype, s: f32, buf: []u32) !void {
         const rows: u32 = @intFromFloat(height * s);
+        try page.skipResized(w, .{ 300, 200 }, sw.Framebuffer.len(w.width, rows) <= buf.len);
         var fb = sw.Framebuffer.init(buf, w.width, rows, .rgba8);
         const Draw = struct {
             var node: Node = .{};
