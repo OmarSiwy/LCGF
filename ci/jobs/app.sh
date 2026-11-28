@@ -18,6 +18,8 @@ LCGF_X11_TEST_DISPLAY=":$(cat "$dir/display")" XAUTHORITY=/dev/null golden_build
 DISPLAY=":$(cat "$dir/display")" XAUTHORITY=/dev/null WAYLAND_DISPLAY= LCGF_APP_SECONDS=1 zig-out/bin/app-example
 # examples/surface on the GPU (lavapipe here): it fails when no ring was drawn.
 DISPLAY=":$(cat "$dir/display")" XAUTHORITY=/dev/null LCGF_APP_SECONDS=1 zig-out/bin/surface-example
+# ... and in the software window, which it runs in too: no `draw`, a message in its place.
+DISPLAY=":$(cat "$dir/display")" XAUTHORITY=/dev/null LCGF_APP_SECONDS=1 LCGF_RENDER=sw zig-out/bin/surface-example
 if command -v weston >/dev/null; then
     mkdir -m 700 "$dir/xdg"
     XDG_RUNTIME_DIR="$dir/xdg" weston --backend=headless --socket=lcgf-app --width=640 --height=480 >"$dir/weston.log" 2>&1 &

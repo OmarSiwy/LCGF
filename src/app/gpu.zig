@@ -20,6 +20,7 @@
 //!   pub const gpu
 //!   pub const Surface = struct
 //!     pub fn node(s: *Surface, f: *Frame, id: Id, style: Style) Node
+//!     pub fn live(s: *const Surface) bool
 //!     pub fn redraw(s: *Surface) void
 //!   pub const GpuFrame = struct
 //!     pub fn encoder(g: *GpuFrame) gpu.Encoder
@@ -102,8 +103,9 @@ pub const Surface = struct {
 
     /// The node that shows the surface: `style` with the surface as its texture, its fill white
     /// unless it has one (a fill tints the texture). Registers the surface with the window.
-    /// Panics past `surfaces_max` surfaces.
+    /// Panics past `surfaces_max` surfaces. Not `live`: `style` as it is, its fill painted.
     pub fn node(s: *Surface, f: *Frame, id: lcgf.types.Id, style: Style) lcgf.types.Node {
+        if (!s.live()) return f.leaf(id, style);
         const slot = s.slot orelse registry.add(s);
         registry.built[slot] = true;
         var st = style;
@@ -118,6 +120,14 @@ pub const Surface = struct {
         const n = f.leaf(id, st);
         s.node_ix = n.ix();
         return n;
+    }
+
+    /// Whether the window draws its surfaces: it is on the GPU. Not in the software window a GPU
+    /// build falls back to (`LCGF_RENDER=sw`, no display or no Vulkan device), where `draw` is
+    /// never called and the node paints its style's fill: show something else in its place.
+    pub fn live(s: *const Surface) bool {
+        _ = s;
+        return registry.shell != null;
     }
 
     /// Asks for a frame that calls `draw` and shows the surface's new pixels, with no `build`:
@@ -446,6 +456,7 @@ fn owe(
     in: *const lcgf.input.Input,
 ) void {
     std.debug.assert(in.scale > 0);
+    @import("app.zig").sayCustom(list);
     gw.rows = .{
         .list = list,
         .glyphs = glyphs,

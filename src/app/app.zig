@@ -78,15 +78,32 @@ pub const has_gpu = builtin.os.tag == .linux and render == .vk;
 const gpu_app = if (has_gpu) @import("gpu.zig") else struct {};
 const no_gpu = std.fmt.comptimePrint(
     "lcgf_app: this build (-Drender={t}, {t}) has no GPU path; " ++
-        "surfaces and `draw` need -Drender=vk on Linux",
+        "`gpu` needs -Drender=vk on Linux (a `Surface` here is never live)",
     .{ render, builtin.os.tag },
 );
 /// `lcgf_render.gpu` on the build's back end: what `App.draw` renders a `Surface` with.
 pub const gpu = if (has_gpu) gpu_app.gpu else @compileError(no_gpu);
-/// A rectangle of the window the application draws itself (src/app/gpu.zig).
-pub const Surface = if (has_gpu) gpu_app.Surface else @compileError(no_gpu);
+/// A rectangle of the window the application draws itself (src/app/gpu.zig). A window that
+/// is not on the GPU (`Surface.live` false) never calls `App.draw`, and the node paints its
+/// style's fill.
+pub const Surface = if (has_gpu) gpu_app.Surface else NoSurface;
 /// What `App.draw` draws with (src/app/gpu.zig).
-pub const GpuFrame = if (has_gpu) gpu_app.GpuFrame else @compileError(no_gpu);
+pub const GpuFrame = if (has_gpu) gpu_app.GpuFrame else NoGpuFrame;
+
+/// A `Surface` in a build with no GPU path: never live, its node the style as it is.
+const NoSurface = struct {
+    const types = lcgf.types;
+    pub fn node(_: *NoSurface, f: *lcgf.frame.Frame, id: types.Id, style: types.Style) types.Node {
+        return f.leaf(id, style);
+    }
+    pub fn live(_: *const NoSurface) bool {
+        return false;
+    }
+    pub fn redraw(_: *NoSurface) void {}
+};
+
+/// What `App.draw` would take in a build with no GPU path, where it is never called.
+const NoGpuFrame = opaque {};
 const page = @import("page.zig");
 /// What `App.page` lays its page out with (src/app/page.zig).
 pub const PageText = page.PageText;
@@ -170,7 +187,6 @@ pub const Options = struct {
 /// the frame is placed at its node moved by the region's corner.
 pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime options: Options) !void {
     if (!@hasDecl(App, "build")) @compileError(@typeName(App) ++ " needs `pub fn build(*App, *lcgf.frame.Frame, *const lcgf.shell_iface.Events) void`");
-    if (@hasDecl(App, "draw") and !has_gpu) @compileError(no_gpu);
     const B = Buffers(options);
     const seconds: f32 = if (init.environ_map.get("LCGF_APP_SECONDS")) |s| std.fmt.parseFloat(f32, s) catch lcgf.types.inf else lcgf.types.inf;
     const clock: Clock = .{ .io = init.io, .t0 = std.Io.Timestamp.now(init.io, .awake), .seconds = seconds };
@@ -283,7 +299,7 @@ fn gpuEnv(init: std.process.Init) GpuEnv {
 /// The window on the GPU when the build has one: X11 with Vulkan where `DISPLAY` is set
 /// (under Wayland, through XWayland) and `LCGF_RENDER` is not `sw`. `.software` when it
 /// cannot (no display, no Vulkan device, or forced), so `run` opens the software window
-/// instead; an `App` with `draw` has no software window and gets error.NoGpu.
+/// instead, where `App.draw` is never called and `Surface.live` is false.
 // tidy: allow-fn(large-generic-function) one instance per App
 // tidy: allow(too-many-parameters) `run`'s own inputs, passed through
 fn runGpu(
@@ -298,10 +314,7 @@ fn runGpu(
     const B = Buffers(options);
     std.debug.assert(ctx.limits.damage);
     const forced = std.mem.eql(u8, env.render, "sw");
-    if (pickGpu(forced, env.display) == .software) {
-        if (@hasDecl(App, "draw")) return error.NoGpu;
-        return .software;
-    }
+    if (pickGpu(forced, env.display) == .software) return .software;
     const x11 = @import("x11");
     const display = env.display;
     const conn = &B.x11_conn;
@@ -319,10 +332,7 @@ fn runGpu(
     const gw = &B.gpu_window;
     const c = options.canvas;
     const room: gpu_app.Window.Open = .{ .canvas_rows = c.rows, .canvas_verts = c.verts };
-    gw.open(&w, display, room) catch {
-        if (@hasDecl(App, "draw")) return error.NoGpu;
-        return .software;
-    };
+    gw.open(&w, display, room) catch return .software;
     defer gw.close();
     ctx.trackDamageWhole();
     const run_: gpu_app.Run = .{
@@ -592,6 +602,7 @@ fn loop(
             app.build(&f, &ev);
             const out = tw.end(&f);
             shell.apply(&out.platform);
+            sayCustom(out.draw);
             if (@hasDecl(@TypeOf(shell.*), "presentWith")) {
                 const images = if (@hasDecl(App, "images")) app.images() else &.{};
                 const g = if (tw.on())
@@ -605,6 +616,21 @@ fn loop(
         if (!(left > 0)) break;
         shell.wait(@min(scheduler.wake(ctx, &ev.in), left), scheduler.pace(ctx));
     }
+}
+
+const log = std.log.scoped(.lcgf_app);
+/// A `custom` command reached the window and `sayCustom` said so.
+var custom_said = false;
+
+/// Says once, in a debug build, that `list` has a `custom` command (`Frame.custom`), which an
+/// `lcgf_app` window draws nothing for. Release builds check nothing.
+pub fn sayCustom(list: *const lcgf.draw_list.DrawList) void {
+    if (builtin.mode != .debug or custom_said) return;
+    const custom: u8 = @backingInt(lcgf.draw_list.DrawList.Kind.custom);
+    if (std.mem.indexOfScalar(u8, list.cmd.kind[0..list.cmd_len], custom) == null) return;
+    custom_said = true;
+    log.warn("a `custom` node (Frame.custom) draws nothing in an lcgf_app window: draw it " ++
+        "with a `Surface` and `draw`, a `Frame.canvas`, or an `lcgf_app.Image` on a node", .{});
 }
 
 /// One frame of a composing App (`page.build`) on a software shell: the composed list culled
@@ -625,6 +651,7 @@ fn composedFrame(
     const b = page.build(App, app, paging, ctx, tw, ev);
     shell.apply(&b.out.platform);
     const d = b.composed.draw;
+    sayCustom(d);
     var shown = b.out;
     shown.draw = d;
     if (!@hasDecl(@TypeOf(shell.*), "presentWith")) return shell.present(&shown);
@@ -731,7 +758,7 @@ fn clockFor(seconds: f32) Clock {
     return .{ .io = testing.io, .t0 = .now(testing.io, .awake), .seconds = seconds };
 }
 
-test "a GPU build draws in software when forced or without a device; an App with draw cannot" {
+test "a GPU build draws in software when forced or without a device, an App with draw too" {
     if (!has_gpu) return error.SkipZigTest;
     const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
         return error.SkipZigTest;
@@ -741,16 +768,12 @@ test "a GPU build draws in software when forced or without a device; an App with
     const gpa = testing.allocator;
     var tw = try text.Window.open(&B.service, textOptions(options), &.{}, false, gpa, testing.io);
     defer tw.close();
-    const DrawApp = struct {
-        pub fn build(_: *@This(), _: *lcgf.frame.Frame, _: *const Events) void {}
-        pub fn draw(_: *@This(), _: *GpuFrame) !void {}
-    };
     var app: ImageApp = .{};
-    var drawing: DrawApp = .{};
+    var sa: SurfaceApp = .{};
     const k = clockFor(0.1);
     const forced: GpuEnv = .{ .render = "sw", .display = display };
     try testing.expectEqual(.software, try runGpu(ImageApp, &app, forced, options, k, &ctx, &tw));
-    try testing.expectError(error.NoGpu, runGpu(DrawApp, &drawing, forced, options, k, &ctx, &tw));
+    try testing.expectEqual(.software, try runGpu(SurfaceApp, &sa, forced, options, k, &ctx, &tw));
     const headless: GpuEnv = .{};
     try testing.expectEqual(.software, try runGpu(ImageApp, &app, headless, options, k, &ctx, &tw));
 
@@ -771,7 +794,122 @@ test "a GPU build draws in software when forced or without a device; an App with
     _ = libc.setenv("VK_ICD_FILENAMES", "/nonexistent/lcgf_no_icd.json", 1);
     const gpu_env: GpuEnv = .{ .display = display };
     try testing.expectEqual(.software, try runGpu(ImageApp, &app, gpu_env, options, k, &ctx, &tw));
-    try testing.expectError(error.NoGpu, runGpu(DrawApp, &drawing, gpu_env, options, k, &ctx, &tw));
+    try testing.expectEqual(.software, try runGpu(SurfaceApp, &sa, gpu_env, options, k, &ctx, &tw));
+    try testing.expectEqual(@as(u32, 0), sa.draws);
+}
+
+/// A surface on a ground, which says whether it is live, and counts the `draw` calls.
+const SurfaceApp = struct {
+    const fill = Color.rgb(200, 0, 100);
+    plot: Surface = .{},
+    draws: u32 = 0,
+    live: ?bool = null,
+
+    pub fn build(a: *SurfaceApp, f: *lcgf.frame.Frame, _: *const Events) void {
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ImageApp.ground });
+        const box: [2]lcgf.types.Size = .{ .px(40), .px(40) };
+        const at: [2]f32 = .{ 10, 10 };
+        const style: lcgf.types.Style = .{ .float = true, .offset = at, .size = box, .fill = fill };
+        _ = a.plot.node(f, .from("plot"), style);
+        a.live = a.plot.live();
+        f.close();
+    }
+
+    pub fn draw(a: *SurfaceApp, _: *GpuFrame) !void {
+        a.draws += 1;
+        a.plot.redraw();
+    }
+};
+
+test "a surface App in the software window runs: not live, no draw, its node's fill painted" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const options: Options = .{ .limits = .{ .nodes = 16, .texts = 4 } };
+    const B = Buffers(options);
+    var ctx = try context.Context.init(&B.ctx, limitsOf(options));
+    const gpa = testing.allocator;
+    var tw = try text.Window.open(&B.service, textOptions(options), &.{}, false, gpa, testing.io);
+    defer tw.close();
+    var app: SurfaceApp = .{};
+    // What `run` does under LCGF_RENDER=sw: the GPU window declines, the software one opens.
+    if (has_gpu) {
+        const forced: GpuEnv = .{ .render = "sw", .display = display };
+        const k = clockFor(0.1);
+        const ran = try runGpu(SurfaceApp, &app, forced, options, k, &ctx, &tw);
+        try testing.expectEqual(.software, ran);
+    }
+    ctx.trackDamage();
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    conn.overrideScale(1);
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(gpa);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, 100, 80, "lcgf app no gpu", bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = gpa };
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    try loop(SurfaceApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(@as(?bool, false), app.live);
+    try testing.expectEqual(@as(u32, 0), app.draws);
+    try testing.expectEqual(SurfaceApp.fill, try x11.pixel(&w, 30, 30));
+    try testing.expectEqual(ImageApp.ground, try x11.pixel(&w, 70, 70));
+}
+
+test "a custom node in the window is said once, in a debug build" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const options: Options = .{ .limits = .{ .nodes = 16, .texts = 4, .customs = 2 } };
+    const B = Buffers(options);
+    var ctx = try context.Context.init(&B.ctx, limitsOf(options));
+    ctx.trackDamage();
+    const gpa = testing.allocator;
+    var tw = try text.Window.open(&B.service, textOptions(options), &.{}, false, gpa, testing.io);
+    defer tw.close();
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(gpa);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, 100, 80, "lcgf app custom", bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = gpa };
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const CustomApp = struct {
+        custom: bool = false,
+        pub fn build(a: *@This(), f: *lcgf.frame.Frame, _: *const Events) void {
+            _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ImageApp.ground });
+            if (a.custom) _ = f.custom(.from("3d"), .{ .size = .{ .px(40), .px(40) } }, 7);
+            f.close();
+        }
+    };
+    // Kept out of the test output: the build counts a test that writes to stderr as failed.
+    const level = testing.log_level;
+    testing.log_level = .err;
+    defer testing.log_level = level;
+    var app: CustomApp = .{};
+    try loop(CustomApp, &app, &shell, &ctx, clockFor(0.2), glyphs, &tw);
+    try testing.expect(!custom_said);
+    app.custom = true;
+    ctx.waker.post();
+    try loop(CustomApp, &app, &shell, &ctx, clockFor(0.2), glyphs, &tw);
+    try testing.expectEqual(builtin.mode == .debug, custom_said);
 }
 
 test "app on X11: the app's image and text in the bundled font draw; an idle second presents none" {

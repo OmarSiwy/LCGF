@@ -6,7 +6,8 @@
 //!     zig build surface-example && zig-out/bin/surface-example
 //!
 //! Vulkan over X11 on Linux (`-Drender=vk`, the default there). `LCGF_APP_SECONDS=1` closes
-//! it after a second, and it fails when no ring was drawn (ci/run.sh app runs it so on Xvfb).
+//! it after a second, and it fails when no ring was drawn on the GPU (ci/run.sh app runs it so
+//! on Xvfb). Under `LCGF_RENDER=sw` it runs in the software window and says it has no rings.
 
 const std = @import("std");
 const lcgf = @import("lcgf");
@@ -56,6 +57,8 @@ const App = struct {
     /// Frames of rings drawn, and widget frames built.
     draws: u32 = 0,
     builds: u32 = 0,
+    /// The window draws the surface (on the GPU); else it says why there are no rings.
+    live: bool = false,
 
     pub fn build(app: *App, f: *lcgf.frame.Frame, _: *const lcgf.shell_iface.Events) void {
         app.builds += 1;
@@ -66,7 +69,11 @@ const App = struct {
             app.running = !app.running;
             if (app.running) app.plot.redraw();
         }
-        _ = app.plot.node(f, .from("plot"), .{ .size = .{ .fill, .fill }, .radius = 8 });
+        app.live = app.plot.live();
+        if (!app.live) _ = ui.label("No GPU here (LCGF_RENDER=sw, or no Vulkan device): no rings.");
+        // A fill tints the rings; without them it is what the node shows.
+        const fill: lcgf.types.Color = if (app.live) .{} else th.control;
+        _ = app.plot.node(f, .from("plot"), .{ .size = .{ .fill, .fill }, .radius = 8, .fill = fill });
         f.close();
     }
 
@@ -82,5 +89,5 @@ const App = struct {
 pub fn main(init: std.process.Init) !void {
     var app: App = .{};
     try lcgf_app.run(App, &app, init, .{ .title = "Surface", .size = .{ 480, 360 } });
-    if (app.draws == 0) return error.NothingDrawn;
+    if (app.live and app.draws == 0) return error.NothingDrawn;
 }

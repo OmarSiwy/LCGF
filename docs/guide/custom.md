@@ -16,7 +16,8 @@ layer owns them, and your drawing goes in a `Surface` ([Drawing your own pixels 
 `lcgf_app` window](surface.md)): the texture-in route below, with the window making the
 texture, calling your `draw` only when that surface asks for it and redrawing only its
 rectangle. The routes that need the UI's pass (under, over and inline) stay with a host that
-owns its loop; an `lcgf_app` window skips `custom` commands, as `iface.render` does.
+owns its loop; an `lcgf_app` window draws nothing for a `custom` command, and a debug build
+says so once.
 
 Custom drawing is one of three layers (docs/DESIGN.md, "An application's own drawing: three
 layers"). For 2D content that must look the same on every back end, software included, use

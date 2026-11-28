@@ -83,9 +83,10 @@ the shell the application's images and glyphs.
 
 **Without a GPU.**
 
-- `-Drender=sw` has no `gpu`: a `Surface` or a `draw` there is a compile error that says so.
-- A GPU build that opens no device falls back to software. An application with `draw` cannot:
-  it exits with `error.NoGpu`.
+- `-Drender=sw` has no `gpu` (a compile error that says so); a `Surface` and a `draw` there
+  compile, and the surface is never live.
+- A GPU build that opens no device falls back to software, an application with `draw` too:
+  `draw` is never called and `Surface.live` is false, so `build` can show something else.
 - `LCGF_RENDER=sw` forces the fallback.
 
 **Inline drawing stays below the window layer.** `Frame.custom` with `drawUntilCustom`

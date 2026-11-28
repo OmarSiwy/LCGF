@@ -34,8 +34,9 @@ zig build surface-example && zig-out/bin/surface-example
 ```
 
 It needs a Vulkan build on Linux (`-Drender=vk`, the default there). The window is X11, and a
-Wayland session runs it through XWayland when `DISPLAY` is set. Another build that uses
-`Surface`, `GpuFrame` or `draw` fails to compile and says why.
+Wayland session runs it through XWayland when `DISPLAY` is set. In any other build `gpu` is a
+compile error that says why; `Surface`, `GpuFrame` and `draw` compile, and a surface is never
+live there (below).
 
 ## The two functions
 
@@ -74,12 +75,13 @@ runs only if a surface asked for it.
 ## Without a GPU
 
 `LCGF_RENDER=sw` forces the software window, and a machine without a display or a Vulkan
-device falls back to it. An application without `draw` then runs as it always did. An
-application with `draw` has nothing to draw its surfaces with, so `run` returns
-`error.NoGpu`.
+device falls back to it. Every application runs there. Its `draw` is never called, and a
+surface's node paints its style's fill. `plot.live()` says which window it is in, so `build`
+can put something else in the surface's place: a message, or a CPU-drawn `lcgf_app.Image`.
+It is false in every frame of a software window, and true in every frame of a GPU one.
 
-A surface has no software fallback, because its pixels are defined by your shaders and
-pipeline state. Running them takes an implementation of the GPU API and a shader compiler,
+A surface has no software fallback of its own, because its pixels are defined by your shaders
+and pipeline state. Running them takes an implementation of the GPU API and a shader compiler,
 which is what a software driver (lavapipe, WARP) is; no framework ships one, and WebGPU makes a
 fallback adapter optional. Where a software Vulkan driver is installed, a surface runs on it
 unchanged: that is how CI runs `examples/surface`. Content that must draw without any GPU

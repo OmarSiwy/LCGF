@@ -93,8 +93,8 @@ platform:
 | macOS | AppKit with Metal, every frame drawn whole |
 
 On the Vulkan build, `LCGF_RENDER=sw` in the environment, an unset `DISPLAY` or no Vulkan
-device gives the software window instead; an application with `draw` then fails with
-`error.NoGpu`. On Linux an `lcgf_app` build links libc when its back end is a GPU one (the
+device gives the software window instead. An application with `draw` runs there too: `draw`
+is never called, and a `Surface` is not live (`Surface.live`) and paints its node's fill. On Linux an `lcgf_app` build links libc when its back end is a GPU one (the
 Vulkan loader is opened at run time); a `-Drender=sw` build does not.
 
 ## Which one to pick

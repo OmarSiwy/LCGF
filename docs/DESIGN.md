@@ -150,8 +150,8 @@ output), text runs, `canvas` batches (LCGF's own instanced primitives under a ca
   surface frame skips and the `draw` a widget frame skips (docs/plans/window.md, "Landed").
   Windows, macOS and native Wayland have no GPU window through `lcgf_app`, and macOS text stays
   on the bitmap font. `LCGF_RENDER=sw`, no
-  display or no Vulkan device falls back to the software window; an application with `draw`
-  then gets `error.NoGpu`. A GPU build links libc on Linux (the loader is opened at run time);
+  display or no Vulkan device falls back to the software window, where `draw` is never called
+  and a `Surface` is not live (`Surface.live`): its node paints its fill. A GPU build links libc on Linux (the loader is opened at run time);
   `-Drender=sw` does not. docs/plans/window.md is the plan; docs/guide/surface.md the guide.
 - **Gompute** (CUDA / HIP compute kernels): measured and dropped. Lane render-gompute built it
   (C0418-C0425) and it lost to the Vulkan back end on every measure on an RTX 4060: frame time,
