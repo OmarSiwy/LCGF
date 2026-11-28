@@ -163,7 +163,7 @@ pub fn build(b: *std.Build) void {
     const app_libc = target.result.os.tag == .macos or (linux and render != .sw);
     const app_mod = b.addModule("lcgf_app", .{ .root_source_file = b.path("src/app/app.zig"), .target = target, .optimize = optimize, .link_libc = app_libc, .imports = app_imports });
     app_mod.addOptions("render_options", render_options);
-    // The GPU window (src/app/gpu.zig): Vulkan over the X11 shell's window.
+    // The GPU window (src/app/gpu.zig's loop, src/app/gpu_x11.zig): Vulkan over the X11 shell's window.
     if (linux and render == .vk) if (renderBackend(b, .vk, target, optimize, lcgf, wgpu_native_mod)) |app_vk| {
         app_mod.addImport("vk", app_vk);
         app_mod.addImport("x11_gpu", b.createModule(.{

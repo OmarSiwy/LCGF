@@ -83,9 +83,18 @@ const TextService = text.Text;
 /// fills before the first `build` (src/app/labels.zig `Handle`).
 pub const Labels = text.labels.Handle;
 const render = @import("render_options").render;
-/// Whether this build draws the window with a GPU: Vulkan over X11 on Linux (src/app/gpu.zig).
-pub const has_gpu = builtin.os.tag == .linux and render == .vk;
-const gpu_app = if (has_gpu) @import("gpu.zig") else struct {};
+/// The GPU window this build opens, per OS and `-Drender` (src/app/gpu.zig's contract), or an
+/// empty struct: the software window only. Each one has `Loop` (`gpu.Gpu(Window)`) and
+/// `runApp`, which opens its shell window and runs the loop in it.
+const gpu_window = switch (builtin.os.tag) {
+    .linux => if (render == .vk) @import("gpu_x11.zig") else struct {},
+    else => struct {},
+};
+/// Whether this build draws the window with a GPU: Vulkan over X11 on Linux.
+pub const has_gpu = @hasDecl(gpu_window, "Loop");
+const gpu_app = if (has_gpu) gpu_window.Loop else struct {};
+/// What a GPU window's `runApp` opens and runs with (src/app/gpu.zig).
+pub const GpuWant = @import("gpu.zig").Want;
 const no_gpu = std.fmt.comptimePrint(
     "lcgf_app: this build (-Drender={t}, {t}) has no GPU path; " ++
         "`gpu` needs -Drender=vk on Linux (a `Surface` here is never live)",
@@ -305,7 +314,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     defer tw.close();
     ctx.enableCanvas(&B.canvas_rows);
     openLabels(App, app, options, &tw);
-    const env = if (builtin.os.tag == .linux) envOf(init) else {};
+    const env = envOf(init);
     if (has_gpu) switch (try runGpu(App, app, env, options, clock, &ctx, &tw)) {
         .done => return,
         .software => if (composing) ctx.trackDamageWhole() else ctx.trackDamage(),
@@ -423,10 +432,11 @@ fn runSoftwareLinux(
     return loop(App, app, &shell, ctx, clock, glyphs, tw);
 }
 
-/// The window on the GPU when the build has one: X11 with Vulkan where `DISPLAY` is set
-/// (under Wayland, through XWayland) and `LCGF_RENDER` is not `sw`. `.software` when it
-/// cannot (no display, no X server there, no Vulkan device, or forced), so `run` opens the
-/// software window instead, where `App.draw` is never called and `Surface.live` is false.
+/// The window on the GPU when the build has one (`gpu_window`) and `LCGF_RENDER` is not `sw`:
+/// on Linux X11 with Vulkan where `DISPLAY` is set (under Wayland, through XWayland).
+/// `.software` when it cannot (no display, no server there, no device, or forced), so `run`
+/// opens the software window instead, where `App.draw` is never called and `Surface.live` is
+/// false.
 // tidy: allow-fn(large-generic-function) one instance per App
 // tidy: allow(too-many-parameters) `run`'s own inputs, passed through
 fn runGpu(
@@ -440,45 +450,28 @@ fn runGpu(
 ) !GpuRun {
     const B = Buffers(options);
     std.debug.assert(ctx.limits.damage);
-    const forced = std.mem.eql(u8, env.render, "sw");
-    if (pickGpu(forced, env.display) == .software) return .software;
-    const x11 = @import("x11");
-    const display = env.display;
-    const conn = &B.x11_conn;
-    // No server there (a stale `DISPLAY`): the software path, which may find a compositor.
-    conn.open(display, env.auth) catch return .software;
-    defer conn.close();
-    var w: x11.Window = undefined;
-    const bufs: x11.Window.Buffers = .{
-        .pixels = &.{},
-        .glyphs = &B.glyphs,
-        .first = &B.first,
-        .count = &B.count,
-    };
-    try w.open(conn, @intCast(options.size[0]), @intCast(options.size[1]), options.title, bufs);
-    defer w.close();
-    const gw = &B.gpu_window;
+    if (pickGpu(env) == .software) return .software;
     const c = options.canvas;
-    const room: gpu_app.Window.Open = .{ .canvas_rows = c.rows, .canvas_verts = c.verts };
-    gw.open(&w, display, room) catch return .software;
-    defer gw.close();
-    ctx.trackDamageWhole();
-    const run_: gpu_app.Run = .{
-        .w = &w,
+    const want: GpuWant = .{
+        .title = options.title,
+        .size = options.size,
+        .room = .{ .canvas_rows = c.rows, .canvas_verts = c.verts },
+        .display = env.display,
+        .auth = env.auth,
         .ctx = ctx,
         .tw = tw,
         .quads = &B.glyphs,
         .first = &B.first,
         .count = &B.count,
     };
-    try gpu_app.loop(App, app, gw, run_, clock);
-    return .done;
+    return if (try gpu_window.runApp(App, app, want, clock)) .done else .software;
 }
 
-/// Where a GPU build draws: on the GPU unless `LCGF_RENDER=sw` forces software or there is no
-/// X display (`display` empty) to draw on.
-fn pickGpu(forced_software: bool, display: []const u8) GpuRun {
-    if (forced_software or display.len == 0) return .software;
+/// Where a GPU build draws: on the GPU unless `LCGF_RENDER=sw` forces software or, on Linux,
+/// there is no X display (`DISPLAY` empty) to draw on.
+fn pickGpu(env: Env) GpuRun {
+    if (std.mem.eql(u8, env.render, "sw")) return .software;
+    if (builtin.os.tag == .linux and env.display.len == 0) return .software;
     return .done;
 }
 
@@ -688,7 +681,6 @@ fn Buffers(comptime options: Options) type {
         // Win32 paints into a fixed buffer that covers a 2560 x 1600 client.
         var win32_pixels: [if (builtin.os.tag == .windows) lcgf.render_sw.Framebuffer.len(2560, 1600) else 0]u32 = undefined;
         var x11_conn: if (builtin.os.tag == .linux) @import("x11").Connection else void = if (builtin.os.tag == .linux) .{} else {};
-        var gpu_window: if (has_gpu) gpu_app.Window else void = undefined;
         var canvas_rows: [2 * limits.customs]lcgf.draw_list.CanvasDraw = undefined;
     };
 }
@@ -819,7 +811,7 @@ const testing = std.testing;
 const Color = lcgf.types.Color;
 
 test {
-    if (has_gpu) _ = gpu_app;
+    if (has_gpu) _ = gpu_window;
 }
 
 /// An application with one image of its own, drawn on a node, and a line of text.
