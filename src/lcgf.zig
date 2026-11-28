@@ -103,6 +103,7 @@ pub const gpu_check = @import("render/gpu/check.zig");
 pub const gpu_naga = @import("render/gpu/naga.zig");
 pub const context = @import("runtime/context.zig");
 pub const frame = @import("runtime/frame.zig");
+pub const kept = @import("runtime/kept.zig");
 pub const text_lines = @import("text/layout/lines.zig");
 pub const text_spans = @import("text/layout/spans.zig");
 pub const text_query = @import("text/layout/query.zig");

@@ -3610,11 +3610,12 @@ Fields: `draw`, `tree`, `texts`, `platform`, `status`, `wake`, `pace`
 ### `Context` (struct)
 Everything that outlives a frame.
 
-Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`, `damage`, `damage_hook`, `redraw_all`, `last_view`, `canvas_hook`, `canvas_frame`
+Fields: `limits`, `trees`, `texts`, `customs`, `strings`, `cur`, `draw`, `signals`, `anims`, `tweens`, `flips`, `stack`, `depth`, `inter`, `focus`, `scopes`, `previous_scope_kind`, `previous_scoped`, `scoped`, `platform`, `text_input_node`, `status`, `frame`, `settle`, `last_stamp`, `track_pointer`, `settings`, `motion`, `timers`, `waker`, `memos`, `levels`, `damage`, `damage_hook`, `redraw_all`, `last_view`, `canvas_hook`, `canvas_frame`, `kept`
 
 - `needsFrame = scheduler.needsFrame`
 - `fn trackDamage(ctx: *Context) void`: From the next frame on, keeps in the draw list only the quads that reach what changed since the last frame, with `DrawList.damage` saying where: for a host that keeps last frame's pixels and redraws only that (`sw.Setup.draw`, the X11 and Wayland shells, the bare-metal flush).
 - `fn trackDamageWhole(ctx: *Context) void`: `trackDamage` without the cull: `DrawList.damage` says what changed and the list keeps every quad.
+- `fn enableKept(ctx: *Context, k: *@import("kept.zig").Kept) void`: Keeps, in `k`, the runs widgets ask for (`Frame.keepText`) as a shaper lays them out (`Frame.endText`): an editable text that wraps follows the lines the font drew.
 - `fn enableCanvas(ctx: *Context, rows: []draw_list.CanvasDraw) void`: Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `2 * limits.customs` of them, the caller's, alive as long as the context) hold `DrawList.canvases`, one per custom row, in two generations as the customs are, so `Frame.reuse` can carry a canvas over from the last frame.
 - `fn canvasRows(ctx: *Context) [2][]draw_list.CanvasDraw`: This frame's canvas rows and last frame's.
 - `fn redrawAll(ctx: *Context) void`: With `trackDamage`: the next frame's draw list covers the whole window, as for a host that has lost last frame's pixels (a new buffer).
@@ -3658,6 +3659,9 @@ Fields: `ctx`, `in`
 - `fn room(f: *const Frame) []u8`: The free end of the frame's strings, to write text into before `textWritten`: how a caller with its own formatter puts formatted text in the frame without a buffer of its own.
 - `fn textWritten(f: *Frame, n: usize, ts: TextStyle) Node`: A text leaf over the `n` bytes just written at `room()`, as `text` would push them; `n` past the room is cut to it, and reported (`Status.strings`).
 - `fn textfStyled(f: *Frame, comptime fmt: []const u8, args: anytype, ts: TextStyle, style: Style) Node`: `textf` with full control over the leaf, as `textStyled`.
+- `fn keepText(f: *Frame, node: Node, key: u64) void`: Asks for text leaf `node`'s run as the shaper lays it out at this frame's end, kept under `key` for the next frame (`keptRun`), when the host keeps runs (`Context.enableKept`) and draws with a shaper (`endText`).
+- `fn keepCaret(f: *Frame, node: Node, key: u64, at: u32) void`: Asks for float leaf `node` (a caret) to be moved, at this frame's end, onto the run asked under `key` at byte `at`, as laid out: at its x, on its line, that line tall.
+- `fn keptRun(f: *const Frame, key: u64, bytes: []const u8) ?@import("kept.zig").Kept.Run`: The run kept under `key` by the last frame (`keepText`), while its text is `bytes`.
 - `fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node`: `text` with full control over the leaf (padding, sizing, background).
 - `fn custom(f: *Frame, id: Id, style: Style, data: u64) Node`: Reserves a rect that the caller draws itself.
 - `fn customRow(f: *Frame, id: Id, row: anytype, data: u64) Node`: `custom` from a row (`openRow`).
@@ -3708,6 +3712,37 @@ Fields: `ctx`, `in`
 Caller-owned side tables for `endSides`, each null when the frame uses none.
 
 Fields: `grids`, `anchors`, `sticky`, `layers`, `flex`
+
+
+## `lcgf.kept` (src/runtime/kept.zig)
+
+kept: text runs laid out by a real font, kept for the widget that drew them.
+
+### Top level
+
+- `fn lineOf(starts: []const u32, at: u32) u32`: The line of `starts` (each line's first byte, ascending) holding byte `at`: the last that starts at or before it.
+- `fn lineHeight(r: Kept.Run, line: u32) f32`: How tall line `line` of `r` is: to the next line's top, the last to the run's height.
+
+### `Laid` (struct)
+A frame's columns after layout, before finalizing: its runs (`tx`, their bytes in `strings`), each tree row's run (`text_of`), and the tree's `pos` and `size`.
+
+Fields: `tx`, `strings`, `text_of`, `pos`, `size`
+
+
+### `Kept` (struct)
+
+Fields: `ask_key`, `ask_node`, `ask_len`, `caret_node`, `caret_key`, `caret_at`, `key`, `hash`, `height`, `line_first`, `line_len`, `x_first`, `len`, `starts`, `tops`, `ends`, `lines`, `xs`, `bytes`
+
+- `fn requiredBytes(runs: u32, lines: u32, bytes: u32) usize`
+- `fn init(carver: *mem.Carver, runs: u32, lines: u32, bytes: u32) Kept`
+- `fn ask(k: *Kept, key: u64, node: u32) void`: Asks for the run of `node` under `key`, laid out at this frame's end.
+- `fn get(k: *const Kept, key: u64, text: []const u8) ?Run`: The run kept under `key` by the last frame, while its text was `text`.
+- `fn record(k: *Kept, stack: *text_stack.Stack, laid: Laid) void`: Lays out again, with `stack`, the runs asked this frame, keeps them for the next frame, and moves the caret asked for onto its run (`laid`'s columns).
+
+### `Kept.Run` (struct)
+One kept run: its lines' first bytes and tops, px from the run's top, its height, and each byte offset's x (`xs.len` is its bytes plus one).
+
+Fields: `starts`, `tops`, `ends`, `height`, `xs`
 
 
 ## `lcgf.text_lines` (src/text/layout/lines.zig)
@@ -6962,6 +6997,7 @@ Text area: several lines of editable text, scrolled by whole lines.
 - `Text = tf.Text`: The state type: a text field's (`textfield.Text(cap)`).
 - `Line = struct { str: []const u8, sel: [2]f32 }`: One line shown: its bytes, and the selection on it as x px from the line's left edge.
 - `textValue = tf.textValue`: Its text and placeholder, as the text field's (`textfield.textValue`).
+- `Wrapped = struct { f: *const Frame, th: *const Theme, id: Id, last: Rect, o: Options }`: What a text area that wraps is given each frame: last frame's box and layout, its options.
 - `fn bindError(comptime State: type, comptime name: []const u8, comptime rows: u32) ?[]const u8`: Why `State` cannot hold a text area over `name`, showing `rows` lines, or null when it can.
 - `fn areaStyle(th: *const Theme, rows: u32, focused: bool) Style`: The box: as wide as it is given (at least 80), `rows` lines tall, inset, its border the accent while focused; it clips its lines.
 - `fn lineAt(t: []const u8, k: u32) ?[2]u32`: Line `k` of `t` (counting from 0, lines end at newlines), or null past the last.
@@ -6973,9 +7009,47 @@ Text area: several lines of editable text, scrolled by whole lines.
 - `fn revealLine(scroll: u32, line: u32, rows: u32, lines: u32) u32`: The first line shown after the caret moved to line `line`: as little scrolling as keeps it among the `rows` lines shown, never past the last line.
 - `fn behave(s: anytype, th: *const Theme, id: Id, r: Response, last: Rect, rows: u32, in: *const Input) void`: Applies a frame's input to text area `s` (a `*Text(cap)`) named `id` showing `rows` lines, laid out last frame at `last`: as `textfield.behave` (pointer, keys, typed text, IME), with Enter inserting a newline, Up and Down moving between lines in their column, and the wheel scrolling by lines while the pointer is over it.
 - `fn semantics(t: *const Tree, s: *a11y.Semantics, name: Id, label: u32) void`: The semantics the tree columns cannot carry, for text area `name`: its name is the row `label` (its caption, `aria-labelledby`; `none` for none), as for the text field (`textfield.semantics`), and it is multiline (`aria-multiline`).
-- `fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8) Response`: A text area named `id` over `s` (a `*Text(cap)`) showing `rows` lines (as many as its comptime twin, if any), the placeholder `hint` on its first line while empty.
-- `fn textareaFace(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8, face: Style) Response`: `textarea` with its root laid out by `face` instead of `areaStyle(th, rows, false)`, as `spec.styled` restyles `ct.textarea`; focus still sets the border (`textfield.focusFace`).
+- `fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: anytype, hint: []const u8) Response`: A text area named `id` over `s` (a `*Text(cap)`) showing `rows` lines (as many as its comptime twin, if any), the placeholder `hint` on its first line while empty; or, given `Options` for `rows`, wrapping and growing with its text (`textarea_zig` header).
+- `fn textareaFace(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: anytype, hint: []const u8, face: Style) Response`: `textarea` with its root laid out by `face` instead of `areaStyle(th, rows, false)` (or `wrapStyle`, whose height it keeps), as `spec.styled` restyles `ct.textarea`; focus still sets the border (`textfield.focusFace`).
+- `fn wrapStyle(th: *const Theme, o: Options, line_h: f32, scroll: f32) Style`: The box of a text area that wraps: as wide as it is given (at least 80), as tall as its lines between `o.rows.min` and `o.rows.max` lines of `line_h` px, scrolled down `scroll` px.
+- `fn behaveWrapped(s: anytype, g: Wrapped, r: Response, in: *const Input) void`: `behave` for a text area that wraps: clicks, Up and Down, Home and End on its visual lines (`Wrap` over last frame's layout), Enter as `o.enter` says, and the view following the caret by visual lines.
 - `fn Comptime(comptime name: [:0]const u8, comptime bind: []const u8, comptime rows: u32, comptime hint: Spec) type`: The comptime text area named `name` over field `bind`, showing `rows` lines, placeholder `hint` (`textfield.hintSpec`; `Spec.widget`): the same rows as `textarea`, the same input applied (`behave`).
+
+### `Options` (struct)
+How a text area that wraps its lines grows and what Enter does: pass it to `textarea` in place of a row count.
+
+Fields: `rows`, `enter`
+
+- `Rows = struct { min: u32 = 1, max: u32 = 8 }`
+- `Enter = enum { newline, submit }`
+
+### `Wrap` (struct)
+The visual lines of a text area's text as the font that draws it breaks them: each line between newlines from the run a shaper laid out last frame (`Frame.keptRun`), or broken every `per` bytes as `Mono.wrap` breaks it.
+
+Fields: `t`, `f`, `id`, `adv`, `lh`, `per`
+
+- `fn of(t: []const u8, f: ?*const Frame, id: Id, th: *const Theme, width: f32) Wrap`
+- `fn lines(w: *const Wrap) Iterator`
+- `fn count(w: *const Wrap) u32`: How many visual lines there are.
+- `fn find(w: *const Wrap, at: u32) struct { k: u32, line: Visual }`: The visual line holding the caret at `at`, and its index: a byte where a line breaks is the next line's start.
+- `fn nth(w: *const Wrap, k: u32) Visual`: Visual line `k`, or the last past it.
+- `fn x(w: *const Wrap, l: Visual, at: u32) f32`: The x of byte `at` on line `l`, px from the line's left edge; its end, where a line breaks, is its right end.
+- `fn hit(w: *const Wrap, l: Visual, px: f32) u32`: The grapheme boundary on line `l` nearest to x `px`: on a line that does not end its line between newlines, not past its last grapheme (its end is the next line's start).
+- `fn move(w: *const Wrap, at: u32, code: u8, goal: *f32) u32`: The caret after Home, End, Up or Down (`code`) from `at`, keeping x `goal` px (NaN: from `at`'s) on Up and Down; `goal` is set for a run of them.
+- `fn scrollPx(w: *const Wrap, first: u32) f32`: The px a scroll of `first` whole visual lines moves the text up by.
+- `fn press(w: *const Wrap, px: f32, py: f32) u32`: The byte a press at (`px`, `py`) px from the text's top left hits.
+
+### `Wrap.Visual` (struct)
+A visual line: its bytes `start..end` (`end` before a newline or at the text's end, else the next line's start), whether it ends its line between newlines, its top, height and right end px from the text's top left, and where its hard line starts and how it was laid out.
+
+Fields: `start`, `end`, `last`, `top`, `height`, `end_x`, `hard`, `hard_start`, `run`
+
+
+### `Wrap.Iterator` (struct)
+
+Fields: `w`, `hard`, `hard_start`, `hard_end`, `run`, `j`, `count`, `top`, `done`
+
+- `fn next(it: *Iterator) ?Visual`
 
 ### `ct` (struct)
 

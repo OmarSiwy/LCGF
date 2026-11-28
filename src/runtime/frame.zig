@@ -200,6 +200,29 @@ pub const Frame = struct {
         return n;
     }
 
+    /// Asks for text leaf `node`'s run as the shaper lays it out at this frame's end, kept
+    /// under `key` for the next frame (`keptRun`), when the host keeps runs
+    /// (`Context.enableKept`) and draws with a shaper (`endText`).
+    pub fn keepText(f: *Frame, node: Node, key: u64) void {
+        const k = f.ctx.kept orelse return;
+        k.ask(key, node.ix());
+    }
+
+    /// Asks for float leaf `node` (a caret) to be moved, at this frame's end, onto the run
+    /// asked under `key` at byte `at`, as laid out: at its x, on its line, that line tall.
+    pub fn keepCaret(f: *Frame, node: Node, key: u64, at: u32) void {
+        const k = f.ctx.kept orelse return;
+        k.caret_node = node.ix();
+        k.caret_key = key;
+        k.caret_at = at;
+    }
+
+    /// The run kept under `key` by the last frame (`keepText`), while its text is `bytes`.
+    pub fn keptRun(f: *const Frame, key: u64, bytes: []const u8) ?@import("kept.zig").Kept.Run {
+        const k = f.ctx.kept orelse return null;
+        return k.get(key, bytes);
+    }
+
     /// `text` with full control over the leaf (padding, sizing, background).
     pub fn textStyled(f: *Frame, str: []const u8, ts: TextStyle, style: Style) Node {
         return f.attachText(f.leaf(.none, style), str, ts);
@@ -783,6 +806,16 @@ pub const Frame = struct {
         layout.fit(t, .y);
         layout.resolve(t, .y, f.in.viewport[1]);
         layout.place(t);
+        if (f.ctx.kept) |k| {
+            const laid: @import("kept.zig").Laid = .{
+                .tx = tx,
+                .strings = strings,
+                .text_of = t.c.text[0..t.len],
+                .pos = t.c.pos,
+                .size = t.c.size,
+            };
+            if (k.ask_len > 0) k.record(stack, laid);
+        }
         tx.overflow = tx.overflow or stack.overflow;
     }
 

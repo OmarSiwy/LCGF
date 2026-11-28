@@ -330,6 +330,7 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     var tw = try TextWindow.open(&B.service, textOptions(options), fonts, !soft, init.gpa, init.io);
     defer tw.close();
     ctx.enableCanvas(&B.canvas_rows);
+    openKept(&ctx, options, &tw);
     openLabels(App, app, options, &tw);
     if (has_gpu) switch (try runGpu(App, app, env, options, clock, &ctx, &tw)) {
         .done => return,
@@ -552,6 +553,28 @@ fn serves(comptime options: Options) bool {
 /// by `options.labels`, which the window then draws canvas glyphs from, when its text is the
 /// service's; else the field stays empty and canvas glyphs sample the bundled font. An App
 /// without the field carves nothing.
+/// Runs a widget keeps (`lcgf.kept`: a text area that wraps follows the lines the service
+/// drew): runs, their lines and their bytes.
+// ponytail: fixed, about 75 KB beside the service's megabytes; an option if an App needs more.
+const kept_room = .{ 64, 1024, 16 * 1024 };
+
+/// Keeps the runs widgets ask for when the window draws with the text service, in buffers
+/// carved once per program; with the bitmap font they break as `Mono` does, and nothing is
+/// carved.
+pub fn openKept(ctx: *context.Context, comptime options: Options, tw: anytype) void {
+    if (comptime !serves(options)) return;
+    if (!tw.on()) return;
+    const Kept = lcgf.kept.Kept;
+    const K = struct {
+        const n = Kept.requiredBytes(kept_room[0], kept_room[1], kept_room[2]);
+        var bytes: [n]u8 align(lcgf.mem.column_align) = undefined;
+        var kept: Kept = undefined;
+    };
+    var carver: lcgf.mem.Carver = .{ .buf = &K.bytes };
+    K.kept = .init(&carver, kept_room[0], kept_room[1], kept_room[2]);
+    ctx.enableKept(&K.kept);
+}
+
 pub fn openLabels(comptime App: type, app: *App, comptime options: Options, tw: anytype) void {
     if (comptime !(@hasField(App, "labels") and serves(options))) return;
     std.debug.assert(tw.labels == null);

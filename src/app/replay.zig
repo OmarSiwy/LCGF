@@ -178,6 +178,7 @@ pub fn runWith(app: anytype, recording: []const u8, comptime o: Options) !Run {
     var tw = try TextWindow.open(&B.service, app_mod.textOptions(B.ao), o.fonts, false, gpa, io);
     defer tw.close();
     ctx.enableCanvas(&B.canvas_rows);
+    if (serves) app_mod.openKept(&ctx, B.ao, &tw);
     if (serves) app_mod.openLabels(App, app, B.ao, &tw);
     const viewport: [2]f32 = .{ @floatFromInt(o.size[0]), @floatFromInt(o.size[1]) };
     var shell: Shell = .{
@@ -339,6 +340,117 @@ test "replay: a canvas label in the text service's font matches the software bac
     try testing.expectEqual(0, bad);
     // The square's 100 pixels and the label's.
     try testing.expect(lit > 150);
+}
+
+/// A chat input: a text area that wraps, one line tall at first, growing to eight, Enter
+/// submitting, in a column 200 px wide.
+const Chat = struct {
+    const textarea = lcgf.widgets_textarea;
+    const th: lcgf.widgets_base.Theme = .default;
+    /// In the bundled bitmap font, and in the text service's test face.
+    const both = .{
+        Options{ .size = .{ 300, 200 } },
+        Options{ .size = .{ 300, 200 }, .fonts = &font_files },
+    };
+    draft: lcgf.widgets_textfield.Text(256) = .{},
+    sent: u32 = 0,
+
+    pub fn build(a: *Chat, f: *lcgf.frame.Frame, _: *const Events) void {
+        const fill: [2]types.Size = .{ .fill, .fill };
+        const panel: types.Style = .{
+            .dir = .y,
+            .size = fill,
+            .pad = @splat(10),
+            .fill = th.panel,
+        };
+        _ = f.open(.none, panel);
+        _ = f.open(.none, .{ .dir = .y, .size = .{ .px(200), .fit } });
+        const o: textarea.Options = .{ .rows = .{ .min = 1, .max = 8 }, .enter = .submit };
+        _ = textarea.textarea(f, &th, .from("chat"), &a.draft, o, "Message");
+        a.sent += @intFromBool(a.draft.result.submitted);
+        f.close();
+        f.close();
+    }
+
+    /// The box, its first line's run, its caret, and ink below its first line, after typing
+    /// `typed` into it.
+    const Typed = struct { box: types.Rect, run: types.Rect, caret: types.Rect, ink: u32 };
+
+    fn typing(typed: []const u8, comptime o: Options) !Typed {
+        var app: Chat = .{};
+        var rec: [512]u8 = undefined;
+        // Focused by a click inside its padding, then typed into.
+        const script = "frame\npointer 14 14\nframe\nbuttons left\nframe\nbuttons\nframe\n" ++
+            "text {s}\nframe\nframe\n";
+        const s = try runWith(&app, try std.fmt.bufPrint(&rec, script, .{typed}), o);
+        try testing.expectEqualStrings(typed, app.draft.text());
+        const t = s.out.?.tree;
+        const a = t.find(.from("chat"));
+        const box = s.rect(.from("chat"));
+        const first = t.rect(a + 1);
+        const caret = t.rect(t.c.end[a] - 1);
+        // Text-coloured pixels below the first line, inside the box.
+        var ink: u32 = 0;
+        const x0: u32 = @intFromFloat(first.x0);
+        // The caret is one line tall: the second line starts that far below the first.
+        const y1: u32 = @intFromFloat(first.y0 + caret.h());
+        var y: u32 = y1;
+        while (y < @as(u32, @intFromFloat(box.y1 - 2))) : (y += 1) {
+            for (x0..x0 + 150) |x| ink += @intFromBool(s.at(@intCast(x), y).r > 160);
+        }
+        return .{ .box = box, .run = first, .caret = caret, .ink = ink };
+    }
+};
+
+test "replay: a text area typed past its right edge wraps, grows a line and shows it" {
+    inline for (Chat.both) |o| {
+        const short = try Chat.typing("Wave office", o);
+        const long = try Chat.typing("Wave office fluff and a few words", o);
+        // One line, then two: the run twice as tall, the box one line taller, in one frame.
+        try testing.expectApproxEqAbs(2 * short.run.h(), long.run.h(), 1);
+        try testing.expectApproxEqAbs(short.box.h() + short.run.h(), long.box.h(), 1);
+        // Ink on the second line, none below the first before.
+        try testing.expectEqual(@as(u32, 0), short.ink);
+        try testing.expect(long.ink > 20);
+        // The caret at the end of the text, on the second line.
+        try testing.expect(long.caret.y0 >= long.run.y0 + short.run.h() - 1);
+        try testing.expect(long.caret.y1 <= long.run.y1 + 1);
+    }
+}
+
+test "replay: Up, Home, End and Down on a text area's wrapped lines, in Mono and the service" {
+    const typed = "Wave office fluff and a few words";
+    const Keys = struct {
+        /// The caret after typing `typed` and pressing `presses` (HID codes), a frame each.
+        fn caret(comptime presses: []const u8, comptime o: Options) !u32 {
+            var app: Chat = .{};
+            var rec: [512]u8 = undefined;
+            const script = "frame\npointer 14 14\nframe\nbuttons left\nframe\nbuttons\nframe\n" ++
+                "text {s}\nframe\n";
+            var n = (try std.fmt.bufPrint(&rec, script, .{typed})).len;
+            inline for (presses) |code| {
+                n += (try std.fmt.bufPrint(rec[n..], "press {d}\nframe\n", .{code})).len;
+            }
+            _ = try runWith(&app, rec[0..n], o);
+            return app.draft.ed.caret;
+        }
+    };
+    const up = 82;
+    const down = 81;
+    const home = 74;
+    const end = 77;
+    inline for (Chat.both) |o| {
+        // Up from the text's end on the second line lands on the first; Home is its start;
+        // End its last stop, before where it breaks; Down from there is on the second line.
+        const above = try Keys.caret(&.{up}, o);
+        const start = try Keys.caret(&.{ up, home }, o);
+        const last = try Keys.caret(&.{ up, end }, o);
+        const below = try Keys.caret(&.{ up, end, down }, o);
+        try testing.expect(above > 0 and above <= last);
+        try testing.expectEqual(@as(u32, 0), start);
+        try testing.expect(last > 0 and last < typed.len);
+        try testing.expect(below > last);
+    }
 }
 
 test "replay: draw paints a list as the replay drew it" {

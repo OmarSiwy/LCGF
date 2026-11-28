@@ -3,12 +3,23 @@
 //! (textfield.zig): the same state type, look and editor; it adds lines, Up and Down between
 //! them, and a vertical scroll that keeps the caret in view and follows the wheel.
 //!
-//! State: a `textfield.Text(cap)`, whose `scroll` is the first line shown. A text area shows
-//! `rows` lines (a compile-time count in the comptime front end, so its rows are fixed): one
-//! text leaf per line shown, each line the text between two newlines. Lines are not wrapped;
-//! one longer than the box is clipped. With the host's layout in `Text.view` (unwrapped, one
-//! laid-out line per line), the caret, clicks and selection follow it, the selection as up to
-//! `textfield.bands` bands per line, one per direction run.
+//! State: a `textfield.Text(cap)`, whose `scroll` is the first line shown. Given a row count
+//! (both front ends; a compile-time count in the comptime one, so its rows are fixed), a text
+//! area shows that many lines: one text leaf per line shown, each line the text between two
+//! newlines. Those lines are not wrapped; one longer than the box is clipped. With the host's
+//! layout in `Text.view` (unwrapped, one laid-out line per line), the caret, clicks and
+//! selection follow it, the selection as up to `textfield.bands` bands per line, one per
+//! direction run.
+//!
+//! Given `Options` instead (the runtime front end), it wraps: each line between newlines is
+//! one text leaf that wraps at the box's content width, at the text protocol's wrap point, so
+//! the font that draws it breaks it and the box grows with it in the same frame, from
+//! `rows.min` to `rows.max` lines, then scrolls. The caret, clicks, the selection, Up and Down
+//! (keeping the caret's x) and Home and End follow the visual lines (`Wrap`): with `Mono`,
+//! broken every so many bytes as `Mono.wrap` breaks them; with a shaper, as it laid each line
+//! out (the host keeps the runs, `Context.enableKept`, src/runtime/kept.zig), the caret placed
+//! on its line in the same frame. `enter = .submit` makes Enter submit and Shift+Enter a
+//! newline, for a chat input or a commit message.
 
 const std = @import("std");
 const base = @import("base.zig");
@@ -23,6 +34,8 @@ const edit = @import("../text/edit/edit.zig");
 const moves = @import("../text/edit/moves.zig");
 const query = @import("../text/layout/query.zig");
 const a11y = @import("../a11y/tree.zig");
+const kept_mod = @import("../runtime/kept.zig");
+const Kept = kept_mod.Kept;
 const Spec = spec_zig.Spec;
 const Theme = base.Theme;
 const Id = types.Id;
@@ -240,15 +253,36 @@ pub const textValue = tf.textValue;
 // ---- runtime front end ----------------------------------------------------------------------
 
 /// A text area named `id` over `s` (a `*Text(cap)`) showing `rows` lines (as many as its
-/// comptime twin, if any), the placeholder `hint` on its first line while empty. Returns its
-/// response; what the input did is `s.result`.
-pub fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8) Response {
+/// comptime twin, if any), the placeholder `hint` on its first line while empty; or, given
+/// `Options` for `rows`, wrapping and growing with its text (`textarea_zig` header). Returns
+/// its response; what the input did is `s.result`.
+pub fn textarea(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: anytype, hint: []const u8) Response {
+    if (@TypeOf(rows) == Options) {
+        const face = wrapStyle(th, rows, tf.lineHeight(th), 0);
+        return wrappedRows(f, th, id, s, rows, hint, face);
+    }
     return textareaFace(f, th, id, s, rows, hint, areaStyle(th, rows, false));
 }
 
-/// `textarea` with its root laid out by `face` instead of `areaStyle(th, rows, false)`, as
-/// `spec.styled` restyles `ct.textarea`; focus still sets the border (`textfield.focusFace`).
-pub fn textareaFace(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: u32, hint: []const u8, face: Style) Response {
+/// `textarea` with its root laid out by `face` instead of `areaStyle(th, rows, false)` (or
+/// `wrapStyle`, whose height it keeps), as `spec.styled` restyles `ct.textarea`; focus still
+/// sets the border (`textfield.focusFace`).
+pub fn textareaFace(f: *Frame, th: *const Theme, id: Id, s: anytype, rows: anytype, hint: []const u8, face: Style) Response {
+    if (@TypeOf(rows) == Options) return wrappedRows(f, th, id, s, rows, hint, face);
+    return fixedRows(f, th, id, s, rows, hint, face);
+}
+
+// tidy: allow(too-many-parameters) `textareaFace`'s, with the row count
+fn fixedRows(
+    f: *Frame,
+    th: *const Theme,
+    id: Id,
+    s: anytype,
+    rows: u32,
+    hint: []const u8,
+    face: Style,
+) Response {
+    std.debug.assert(rows > 0);
     const r0 = f.ctx.inter.response(id);
     behave(s, th, id, r0, f.lastRect(id), rows, f.in);
     tf.platform(f, s);
@@ -299,6 +333,391 @@ fn view(s: anytype, th: *const Theme, rows: u32, focused: bool) View {
         .caret = caretAt(t, ed.shownCaret(), scroll, rows, th, tf.fresh(s)),
         .fresh = tf.fresh(s),
     };
+}
+
+// ---- a text area that wraps (runtime front end) ---------------------------------------------
+
+/// How a text area that wraps its lines grows and what Enter does: pass it to `textarea` in
+/// place of a row count. It shows `clamp(visual lines, rows.min, rows.max)` lines, scrolls
+/// past `rows.max` with the caret kept in view, and with `enter = .submit` Enter submits
+/// (`result.submitted`) and Shift+Enter inserts a newline.
+pub const Options = struct {
+    rows: Rows = .{},
+    enter: Enter = .newline,
+
+    pub const Rows = struct { min: u32 = 1, max: u32 = 8 };
+    pub const Enter = enum { newline, submit };
+};
+
+/// The box of a text area that wraps: as wide as it is given (at least 80), as tall as its
+/// lines between `o.rows.min` and `o.rows.max` lines of `line_h` px, scrolled down `scroll` px.
+pub fn wrapStyle(th: *const Theme, o: Options, line_h: f32, scroll: f32) Style {
+    std.debug.assert(line_h > 0);
+    var s = areaStyle(th, o.rows.min, false);
+    const pad = tf.padding(th);
+    s.size = .{ .fill, .fit };
+    s.min[1] = @as(f32, @floatFromInt(o.rows.min)) * line_h + pad[1] + pad[3];
+    s.max[1] = @as(f32, @floatFromInt(@max(o.rows.max, o.rows.min))) * line_h + pad[1] + pad[3];
+    s.scroll = .{ 0, scroll };
+    return s;
+}
+
+/// The key a hard line's run is kept under (`Frame.keepText`): the area's id and the line.
+fn keyOf(id: Id, hard: u32) u64 {
+    return (@as(u64, @backingInt(id)) << 32) | hard;
+}
+
+/// The visual lines of a text area's text as the font that draws it breaks them: each line
+/// between newlines from the run a shaper laid out last frame (`Frame.keptRun`), or broken
+/// every `per` bytes as `Mono.wrap` breaks it.
+pub const Wrap = struct {
+    t: []const u8,
+    /// Last frame's kept runs, or null (no host keeps them).
+    f: ?*const Frame,
+    id: Id,
+    adv: f32,
+    lh: f32,
+    /// Bytes on a full line, as `Mono.wrap` counts them for a content `width` px wide.
+    per: u32,
+
+    pub fn of(t: []const u8, f: ?*const Frame, id: Id, th: *const Theme, width: f32) Wrap {
+        const adv = tf.advance(th);
+        const per: u32 = @intFromFloat(@min(@max(@floor(width / adv + 0.5), 1), 1e6));
+        return .{ .t = t, .f = f, .id = id, .adv = adv, .lh = tf.lineHeight(th), .per = per };
+    }
+
+    /// A visual line: its bytes `start..end` (`end` before a newline or at the text's end, else
+    /// the next line's start), whether it ends its line between newlines, its top, height and
+    /// right end px from the text's top left, and where its hard line starts and how it was
+    /// laid out.
+    pub const Visual = struct {
+        start: u32,
+        end: u32,
+        last: bool,
+        top: f32,
+        height: f32,
+        end_x: f32,
+        hard: u32,
+        hard_start: u32,
+        run: ?Kept.Run,
+    };
+
+    pub const Iterator = struct {
+        w: *const Wrap,
+        hard: u32 = 0,
+        hard_start: u32 = 0,
+        hard_end: u32 = 0,
+        run: ?Kept.Run = null,
+        j: u32 = 0,
+        count: u32 = 0,
+        top: f32 = 0,
+        done: bool = false,
+
+        /// Moves on to the next line between newlines, false past the last.
+        fn nextHard(it: *Iterator) bool {
+            const w = it.w;
+            if (it.count != 0) {
+                if (it.hard_end >= w.t.len) return false;
+                it.hard += 1;
+                it.hard_start = it.hard_end + 1;
+            }
+            it.hard_end = moves.lineEnd(w.t, it.hard_start);
+            const bytes = w.t[it.hard_start..it.hard_end];
+            it.run = if (w.f) |f| f.keptRun(keyOf(w.id, it.hard), bytes) else null;
+            const n: u32 = @intCast(bytes.len);
+            const mono = @max(std.math.divCeil(u32, n, w.per) catch 1, 1);
+            it.count = if (it.run) |r| @intCast(r.starts.len) else mono;
+            it.j = 0;
+            return true;
+        }
+
+        pub fn next(it: *Iterator) ?Visual {
+            std.debug.assert(it.j <= it.count);
+            if (it.done) return null;
+            const w = it.w;
+            if (it.j == it.count and !it.nextHard()) {
+                it.done = true;
+                return null;
+            }
+            const j = it.j;
+            it.j += 1;
+            const last = it.j == it.count;
+            const a = it.hard_start;
+            const r = it.run;
+            const start = if (r) |k| a + k.starts[j] else a + j * w.per;
+            const kept_after = if (r) |k| (if (last) 0 else a + k.starts[j + 1]) else 0;
+            const after = if (r != null) kept_after else a + (j + 1) * w.per;
+            const end = if (last) it.hard_end else after;
+            const mono_x = @as(f32, @floatFromInt(end - start)) * w.adv;
+            const l: Visual = .{
+                .start = start,
+                .end = end,
+                .last = last,
+                .top = it.top,
+                .height = if (r) |k| kept_mod.lineHeight(k, j) else w.lh,
+                .end_x = if (r) |k| k.ends[j] else mono_x,
+                .hard = it.hard,
+                .hard_start = a,
+                .run = r,
+            };
+            it.top += l.height;
+            return l;
+        }
+    };
+
+    pub fn lines(w: *const Wrap) Iterator {
+        return .{ .w = w };
+    }
+
+    /// How many visual lines there are.
+    pub fn count(w: *const Wrap) u32 {
+        var it = w.lines();
+        var n: u32 = 0;
+        while (it.next()) |_| n += 1;
+        return n;
+    }
+
+    /// The visual line holding the caret at `at`, and its index: a byte where a line breaks
+    /// is the next line's start.
+    pub fn find(w: *const Wrap, at: u32) struct { k: u32, line: Visual } {
+        var it = w.lines();
+        var best = it.next().?;
+        var best_k: u32 = 0;
+        var k: u32 = 0;
+        while (it.next()) |l| {
+            k += 1;
+            if (l.start > at) break;
+            best = l;
+            best_k = k;
+        }
+        return .{ .k = best_k, .line = best };
+    }
+
+    /// Visual line `k`, or the last past it.
+    pub fn nth(w: *const Wrap, k: u32) Visual {
+        var it = w.lines();
+        var l = it.next().?;
+        for (0..k) |_| l = it.next() orelse return l;
+        return l;
+    }
+
+    /// The x of byte `at` on line `l`, px from the line's left edge; its end, where a line
+    /// breaks, is its right end.
+    pub fn x(w: *const Wrap, l: Visual, at: u32) f32 {
+        std.debug.assert(at >= l.start);
+        if (at == l.end) return l.end_x;
+        if (l.run) |r| return r.xs[at - l.hard_start];
+        return @as(f32, @floatFromInt(at - l.start)) * w.adv;
+    }
+
+    /// The grapheme boundary on line `l` nearest to x `px`: on a line that does not end its
+    /// line between newlines, not past its last grapheme (its end is the next line's start).
+    pub fn hit(w: *const Wrap, l: Visual, px: f32) u32 {
+        std.debug.assert(l.start <= l.end);
+        const stop = if (l.last) l.end else moves.prevGrapheme(w.t, l.end);
+        const end = @max(stop, l.start);
+        if (l.run == null) return l.start + tf.stopNear(w.t[l.start..end], px / w.adv);
+        var best = l.start;
+        var dist = std.math.inf(f32);
+        var at = l.start;
+        // One stop a grapheme, at most a byte apart.
+        for (0..end - l.start + 1) |_| {
+            const d = @abs(w.x(l, at) - px);
+            if (d < dist) {
+                dist = d;
+                best = at;
+            }
+            if (at >= end) break;
+            at = moves.nextGrapheme(w.t, at);
+        }
+        return best;
+    }
+
+    /// The caret after Home, End, Up or Down (`code`) from `at`, keeping x `goal` px (NaN:
+    /// from `at`'s) on Up and Down; `goal` is set for a run of them.
+    pub fn move(w: *const Wrap, at: u32, code: u8, goal: *f32) u32 {
+        const here = w.find(at);
+        if (code == keys.home or code == keys.end) goal.* = std.math.nan(f32);
+        if (code == keys.home) return here.line.start;
+        if (code == keys.end) {
+            if (here.line.last) return here.line.end;
+            return @max(moves.prevGrapheme(w.t, here.line.end), here.line.start);
+        }
+        std.debug.assert(code == keys.up or code == keys.down);
+        if (std.math.isNan(goal.*)) goal.* = w.x(here.line, at);
+        const k = @as(i64, here.k) + @as(i64, if (code == keys.up) -1 else 1);
+        if (k < 0) return 0;
+        if (k >= w.count()) return @intCast(w.t.len);
+        return w.hit(w.nth(@intCast(k)), goal.*);
+    }
+
+    /// The px a scroll of `first` whole visual lines moves the text up by.
+    pub fn scrollPx(w: *const Wrap, first: u32) f32 {
+        if (first == 0) return 0;
+        return w.nth(first).top;
+    }
+
+    /// The byte a press at (`px`, `py`) px from the text's top left hits.
+    pub fn press(w: *const Wrap, px: f32, py: f32) u32 {
+        var it = w.lines();
+        var line = it.next().?;
+        while (it.next()) |l| {
+            if (l.top > py) break;
+            line = l;
+        }
+        return w.hit(line, px);
+    }
+};
+
+/// The content width of last frame's box `last`.
+fn contentWidth(th: *const Theme, last: Rect) f32 {
+    const pad = tf.padding(th);
+    return @max(last.w() - pad[0] - pad[2], 1);
+}
+
+/// What a text area that wraps is given each frame: last frame's box and layout, its options.
+pub const Wrapped = struct { f: *const Frame, th: *const Theme, id: Id, last: Rect, o: Options };
+
+// tidy: allow-fn(large-generic-function) one instance per Text(cap), as `behave`
+/// `behave` for a text area that wraps: clicks, Up and Down, Home and End on its visual lines
+/// (`Wrap` over last frame's layout), Enter as `o.enter` says, and the view following the caret
+/// by visual lines.
+pub fn behaveWrapped(s: anytype, g: Wrapped, r: Response, in: *const Input) void {
+    std.debug.assert(g.o.rows.min > 0);
+    const ed = s.editor();
+    ed.mode.single_line = false;
+    s.clipboard.reset();
+    s.input.reset();
+    const pad = tf.padding(g.th);
+    const origin = [2]f32{ g.last.x0 + pad[0], g.last.y0 + pad[1] };
+    const width = contentWidth(g.th, g.last);
+    var scroll: u32 = @intFromFloat(s.scroll);
+    const before = ed.caret;
+    if (r.held) {
+        const w = Wrap.of(ed.text(), g.f, g.id, g.th, width);
+        const py = in.pointer[1] - origin[1] + w.scrollPx(scroll);
+        const at = w.press(in.pointer[0] - origin[0], py);
+        ed.caret = at;
+        if (!s.held and !in.mods.shift) ed.anchor = at;
+        ed.goal = std.math.nan(f32);
+        ed.run = .none;
+    }
+    s.held = r.held;
+    const cx: edit.Context = .{ .clipboard = &s.clipboard, .copy_buf = &s.copied };
+    var res: edit.Result = .{};
+    for (in.events, 0..) |e, i| {
+        if (!r.focused or i >= 64) break;
+        const pressed = e.kind == .press or e.kind == .repeat;
+        const plain = @as(u8, @bitCast(e.mods)) & 0xe == 0;
+        const enter = pressed and (e.code == keys.enter or e.code == 0x58);
+        // Submitting: Enter submits; Shift+Enter is left to the editor, a newline.
+        const bare = !e.mods.shift and !e.mods.ctrl and !e.mods.cmd;
+        if (enter and g.o.enter == .submit and bare) {
+            res.submitted = true;
+            ed.run = .none;
+            continue;
+        }
+        const c = e.code;
+        const lines = c == keys.up or c == keys.down or c == keys.home or c == keys.end;
+        if (!(pressed and plain and lines)) {
+            tf.orResult(&res, tf.feed(ed, in, g.id, i, cx));
+            continue;
+        }
+        const w = Wrap.of(ed.text(), g.f, g.id, g.th, width);
+        ed.caret = w.move(ed.caret, c, &ed.goal);
+        if (!e.mods.shift) ed.anchor = ed.caret;
+        ed.run = .none;
+    }
+    const k = tf.keyboardOf(in, g.id, r.focused);
+    var last_cx = cx;
+    last_cx.composition = k.composition(g.id, &s.ime);
+    tf.orResult(&res, tf.feed(ed, in, g.id, null, last_cx));
+    s.result = res;
+    const w = Wrap.of(ed.text(), g.f, g.id, g.th, width);
+    const n = w.count();
+    const rows = std.math.clamp(n, g.o.rows.min, @max(g.o.rows.max, g.o.rows.min));
+    const hovered: f32 = @floatFromInt(@intFromBool(r.hovered));
+    const wheel: i64 = @intFromFloat(@round(in.wheel[1] * hovered));
+    scroll = @intCast(std.math.clamp(@as(i64, scroll) - wheel, 0, n -| rows));
+    const caret = ed.shownCaret();
+    const here = w.find(caret);
+    if (caret != before or res.changed) scroll = revealLine(scroll, here.k, rows, n);
+    s.scroll = @floatFromInt(scroll);
+    if (r.focused) {
+        const x = origin[0] + w.x(here.line, caret);
+        const y = origin[1] + here.line.top - w.scrollPx(scroll);
+        s.input.request(.{ .x0 = x, .y0 = y, .x1 = x + 1, .y1 = y + here.line.height }, .normal);
+    }
+}
+
+/// The rows of a text area that wraps, under `face`: a band per visual line the selection
+/// covers, a text leaf per line between newlines, wrapping (each kept for the next frame),
+/// and the caret, placed on its line as the font laid it out.
+// tidy: allow-fn(large-generic-function) one instance per Text(cap), as `textareaFace`
+// tidy: allow(too-many-parameters) `textareaFace`'s own, passed through
+fn wrappedRows(
+    f: *Frame,
+    th: *const Theme,
+    id: Id,
+    s: anytype,
+    o: Options,
+    hint: []const u8,
+    face: Style,
+) Response {
+    const r0 = f.ctx.inter.response(id);
+    const last = f.lastRect(id);
+    behaveWrapped(s, .{ .f = f, .th = th, .id = id, .last = last, .o = o }, r0, f.in);
+    tf.platform(f, s);
+    const ed = s.editor();
+    const t = ed.text();
+    const w = Wrap.of(t, f, id, th, contentWidth(th, last));
+    // The box's rows counted in its first line's height: the font's, else Mono's.
+    var box = face;
+    const style = wrapStyle(th, o, w.nth(0).height, w.scrollPx(@intFromFloat(s.scroll)));
+    box.min[1] = style.min[1];
+    box.max[1] = style.max[1];
+    box.scroll = style.scroll;
+    const node = f.open(id, tf.focusFace(th, box, r0.focused));
+    const r = f.interact(node, types.Sense.any);
+    f.setCursor(.text, r.hovered);
+    wrappedBands(f, th, &w, ed.selection());
+    const empty = t.len == 0;
+    var start: u32 = 0;
+    for (0..t.len + 1) |hard| {
+        const end = moves.lineEnd(t, start);
+        var ts = tf.textStyle(th, empty);
+        ts.wrap = true;
+        const leaf = f.textStyled(if (empty) hint else t[start..end], ts, .{ .shrink = true });
+        if (!empty) f.keepText(leaf, keyOf(id, @intCast(hard)));
+        if (end >= t.len) break;
+        start = end + 1;
+    }
+    const caret = ed.shownCaret();
+    const here = w.find(caret);
+    const look = tf.caretStyle(th, w.x(here.line, caret), here.line.top, r0.focused);
+    const cn = f.leaf(.none, look);
+    if (!empty) f.keepCaret(cn, keyOf(id, here.line.hard), caret - here.line.hard_start);
+    f.close();
+    return r;
+}
+
+/// A band behind each visual line of `w` the selection `sel` covers; a selection running
+/// past a line between newlines takes one advance more, for the newline.
+fn wrappedBands(f: *Frame, th: *const Theme, w: *const Wrap, sel: [2]u32) void {
+    std.debug.assert(sel[0] <= sel[1]);
+    if (sel[0] == sel[1]) return;
+    var it = w.lines();
+    while (it.next()) |l| {
+        const a = std.math.clamp(sel[0], l.start, l.end);
+        const b = std.math.clamp(sel[1], l.start, l.end);
+        const past = l.last and sel[0] <= l.end and sel[1] > l.end;
+        if (a == b and !past) continue;
+        const x0 = w.x(l, a);
+        const x1 = w.x(l, b) + @as(f32, @floatFromInt(@intFromBool(past))) * w.adv;
+        var band = tf.selectionStyle(th, .{ x0, @max(x1, x0) }, l.top);
+        band.size[1] = .px(l.height);
+        _ = f.leaf(.none, band);
+    }
 }
 
 // ---- comptime front end ---------------------------------------------------------------------
@@ -689,6 +1108,173 @@ test "Page: the text area replay types lines, moves, scrolls and selects, in bot
     // The rect the replay's comment gives.
     try testing.expectEqual(Rect{ .x0 = 12, .y0 = 38, .x1 = 308, .y1 = 98 }, t.rect(t.find(.from("notes"))));
     inline for (Page.golden_frames) |g| try testing.expect(g[1] < 9);
+}
+
+/// A text area that wraps, alone in a column ten advances wide inside its padding, in `Mono`:
+/// ten bytes a line.
+const WrapFixture = struct {
+    const context = @import("../runtime/context.zig");
+    const mem = @import("../core/mem.zig");
+    const limits: context.Limits = .{
+        .nodes = 64,
+        .texts = 16,
+        .customs = 1,
+        .strings = 1024,
+        .depth = 8,
+    };
+    const th = Theme.default;
+    var raw: [context.Context.requiredBytes(limits)]u8 align(mem.column_align) = undefined;
+    ctx: context.Context,
+    s: Text(128) = .{},
+    o: Options = .{ .rows = .{ .min = 1, .max = 3 } },
+    in: Input = .{ .viewport = .{ 400, 300 } },
+    out: context.Output = undefined,
+
+    fn init(w: *WrapFixture) !void {
+        w.* = .{ .ctx = try context.Context.init(&raw, limits) };
+    }
+
+    fn width() f32 {
+        const pad = tf.padding(&th);
+        return 10 * tf.advance(&th) + pad[0] + pad[2];
+    }
+
+    fn frame(w: *WrapFixture) void {
+        var f = w.ctx.begin(&w.in);
+        _ = f.open(.none, .{ .dir = .y, .size = .{ .px(width()), .fit } });
+        _ = textarea(&f, &th, .from("chat"), &w.s, w.o, "Message");
+        f.close();
+        w.out = f.end(.{});
+        w.in.events = &.{};
+        w.in.text = "";
+        w.in.buttons.left = false;
+    }
+
+    fn box(w: *const WrapFixture) Rect {
+        return w.out.tree.rect(w.out.tree.find(.from("chat")));
+    }
+
+    /// The caret leaf: the area's last row.
+    fn caret(w: *const WrapFixture) Rect {
+        const t = w.out.tree;
+        const a = t.find(.from("chat"));
+        return t.rect(t.c.end[a] - 1);
+    }
+
+    fn lines(w: *const WrapFixture, n: f32) f32 {
+        _ = w;
+        const pad = tf.padding(&th);
+        return n * tf.lineHeight(&th) + pad[1] + pad[3];
+    }
+
+    fn press(w: *WrapFixture, code: u8, mods: Input.Mods) void {
+        const S = struct {
+            var ev: [1]Input.Event = undefined;
+        };
+        S.ev[0] = .{ .kind = .press, .code = code, .mods = mods };
+        w.in.events = &S.ev;
+        w.frame();
+    }
+
+    fn focus(w: *WrapFixture) void {
+        w.frame();
+        const b = w.box();
+        w.in.pointer = .{ b.x0 + 2, b.y0 + 2 };
+        w.in.buttons.left = true;
+        w.frame();
+        w.frame();
+    }
+};
+
+var wrapped: WrapFixture = undefined;
+
+test "wrapped: one line tall empty, growing a line per ten bytes in Mono to three, then scrolling" {
+    const w = &wrapped;
+    try w.init();
+    w.frame();
+    w.frame();
+    try testing.expectApproxEqAbs(w.lines(1), w.box().h(), 0.5);
+    w.s.set("abcdefghijklmnopqrstuvwxy");
+    w.frame();
+    // Three visual lines of a 25-byte line between newlines: the box grew in the same frame.
+    try testing.expectApproxEqAbs(w.lines(3), w.box().h(), 0.5);
+    const lh = tf.lineHeight(&WrapFixture.th);
+    const run = w.out.tree.rect(w.out.tree.find(.from("chat")) + 1);
+    try testing.expectApproxEqAbs(3 * lh, run.h(), 0.5);
+    // Five lines, three shown: scrolled to the caret at the end, on the last line shown.
+    w.focus();
+    w.s.set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS");
+    w.press(keys.home, .{});
+    w.press(keys.end, .{});
+    try testing.expectApproxEqAbs(w.lines(3), w.box().h(), 0.5);
+    try testing.expectEqual(@as(f32, 2), w.s.scroll);
+    const b = w.box();
+    const pad = tf.padding(&WrapFixture.th);
+    try testing.expectApproxEqAbs(b.y0 + pad[1] + 2 * lh, w.caret().y0, 0.5);
+    const adv = tf.advance(&WrapFixture.th);
+    try testing.expectApproxEqAbs(b.x0 + pad[0] + 5 * adv, w.caret().x0, 0.5);
+}
+
+test "wrapped: the caret, a click, Up and Down keeping x, Home and End on visual lines" {
+    const w = &wrapped;
+    try w.init();
+    w.s.set("abcdefghijklmnopqrstuvwxy\nshort");
+    w.focus();
+    const th = &WrapFixture.th;
+    const adv = tf.advance(th);
+    const lh = tf.lineHeight(th);
+    const pad = tf.padding(th);
+    const b = w.box();
+    // A click on the second visual line, nearest byte 13.
+    w.in.pointer = .{ b.x0 + pad[0] + 3.4 * adv, b.y0 + pad[1] + 1.5 * lh };
+    w.in.buttons.left = true;
+    w.frame();
+    w.frame();
+    try testing.expectEqual(@as(u32, 13), w.s.ed.caret);
+    try testing.expectApproxEqAbs(b.x0 + pad[0] + 3 * adv, w.caret().x0, 0.5);
+    try testing.expectApproxEqAbs(b.y0 + pad[1] + lh, w.caret().y0, 0.5);
+    // Up keeps the x: byte 3; Down twice: 13, 23; Down again: the short line's end, as its
+    // x (3 advances) is past nothing, then the text's end.
+    for ([_]struct { code: u8, caret: u32 }{
+        .{ .code = keys.up, .caret = 3 },
+        .{ .code = keys.down, .caret = 13 },
+        .{ .code = keys.down, .caret = 23 },
+        .{ .code = keys.down, .caret = 29 },
+        .{ .code = keys.down, .caret = 31 },
+    }) |st| {
+        w.press(st.code, .{});
+        try testing.expectEqual(st.caret, w.s.ed.caret);
+    }
+    // Home and End on a wrapped line: its first byte, and before its last (its end is the
+    // next line's start); on the line's last visual line, the end before the newline.
+    w.s.ed.caret = 13;
+    w.s.ed.anchor = 13;
+    w.press(keys.home, .{});
+    try testing.expectEqual(@as(u32, 10), w.s.ed.caret);
+    w.press(keys.end, .{});
+    try testing.expectEqual(@as(u32, 19), w.s.ed.caret);
+    w.press(keys.down, .{});
+    w.press(keys.end, .{});
+    try testing.expectEqual(@as(u32, 25), w.s.ed.caret);
+}
+
+test "wrapped: Enter submits and Shift+Enter is a newline with the option; by default a newline" {
+    const w = &wrapped;
+    try w.init();
+    w.o.enter = .submit;
+    w.s.set("hi");
+    w.focus();
+    w.press(keys.end, .{});
+    w.press(keys.enter, .{});
+    try testing.expect(w.s.result.submitted);
+    try testing.expectEqualStrings("hi", w.s.text());
+    w.press(keys.enter, .{ .shift = true });
+    try testing.expect(!w.s.result.submitted);
+    try testing.expectEqualStrings("hi\n", w.s.text());
+    w.o.enter = .newline;
+    w.press(keys.enter, .{});
+    try testing.expect(!w.s.result.submitted);
+    try testing.expectEqualStrings("hi\n\n", w.s.text());
 }
 
 test {

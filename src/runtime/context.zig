@@ -180,6 +180,9 @@ pub const Context = struct {
     canvas_hook: ?*const fn (ctx: *Context) void = null,
     /// `frame` when `DrawList.canvases` last moved to its generation's rows.
     canvas_frame: u32 = 0,
+    /// Set by `enableKept`: text runs a shaper laid out, kept for the widgets that asked
+    /// (src/runtime/kept.zig).
+    kept: ?*@import("kept.zig").Kept = null,
 
     /// Carves every column in a fixed order. With a counting carver it only sizes them, so
     /// `requiredBytes` and `init` run the same code and cannot disagree.
@@ -242,6 +245,15 @@ pub const Context = struct {
         _ = ctx.damage.frame(t, tx, cu, strings);
         ctx.draw.damage = if (ctx.redraw_all) .everything else ctx.damage.region;
         ctx.redraw_all = false;
+    }
+
+    /// Keeps, in `k`, the runs widgets ask for (`Frame.keepText`) as a shaper lays them out
+    /// (`Frame.endText`): an editable text that wraps follows the lines the font drew.
+    pub fn enableKept(ctx: *Context, k: *@import("kept.zig").Kept) void {
+        std.debug.assert(k.ask_key.len > 0);
+        k.ask_len = 0;
+        k.len = 0;
+        ctx.kept = k;
     }
 
     /// Lets frames make canvas nodes (`Frame.canvas`): `rows` (at least `2 * limits.customs`

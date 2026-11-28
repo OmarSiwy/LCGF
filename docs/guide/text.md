@@ -201,3 +201,17 @@ from that atlas ([runtime.md](runtime.md), "A window in one call"). Without the 
 the bitmap font, canvas glyphs sample the bundled font's cells (`Mono.canvasGlyphs`).
 `bench/micro/canvastext.zig` measures the choice of distance images over rasterising again at
 each zoom.
+
+## Editable text that wraps
+
+A text area given `textarea.Options` instead of a row count (`src/widgets/textarea.zig`) wraps
+its text at the box's width and grows with it. Each line between newlines is one text leaf with
+`TextStyle.wrap`, so the font breaks it at the second point above and the box, sized to fit its
+lines between `rows.min` and `rows.max`, takes the new height in the same frame. The widget
+needs the same lines for its caret, clicks, selection, Up and Down, Home and End. With `Mono`
+it breaks the bytes as `Mono.wrap` does. With a shaper it asks for each line's run with
+`Frame.keepText`: at the frame's end, `Frame.endText` lays the run out once more and keeps each
+line's first byte and each byte's x (`src/runtime/kept.zig`) for the next frame, and moves the
+caret the widget asked for (`Frame.keepCaret`) onto its line as laid out, in the same frame. A
+host turns that on with `Context.enableKept` and its own buffers; `lcgf_app` does it whenever it
+draws with the text service.
