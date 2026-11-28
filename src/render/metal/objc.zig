@@ -140,6 +140,91 @@ pub const Pool = struct {
     }
 };
 
+/// A stand-in for the runtime off macOS, for tests that check a call stream without a device:
+/// while installed every message is logged by selector name and answers `object`, or null for
+/// a selector named in `nil`; every class is `object`. Nothing is sent anywhere, so a message
+/// whose answer the code reads as memory (`contents`) must not be sent while it is installed.
+/// Process-global, as the runtime is: one test at a time.
+pub const Fake = struct {
+    /// What every message and class lookup answers.
+    pub const object: Id = @ptrFromInt(0x1000);
+    pub const log_max = 1024;
+    pub var log: [log_max][*:0]const u8 = undefined;
+    pub var len: u32 = 0;
+    /// Selectors answered with null (`nextDrawable`, for a window that is not shown).
+    pub var nil: []const []const u8 = &.{};
+    var saved: Fns = undefined;
+
+    /// Takes the runtime's place, with an empty log. Asserts that this is not macOS, where the
+    /// selectors it registers would stay cached against the real runtime.
+    pub fn install() void {
+        std.debug.assert(builtin.os.tag != .macos);
+        saved = fns;
+        fns = .{
+            .objc_msgSend = @ptrCast(&send),
+            .objc_getClass = getClass,
+            .sel_registerName = register,
+            .objc_autoreleasePoolPush = poolPush,
+            .objc_autoreleasePoolPop = poolPop,
+        };
+        len = 0;
+        nil = &.{};
+    }
+
+    /// Puts back what `install` replaced.
+    pub fn uninstall() void {
+        fns = saved;
+    }
+
+    /// The selectors sent since `install`, in order.
+    pub fn recorded() []const [*:0]const u8 {
+        return log[0..len];
+    }
+
+    /// How many times `name` was sent.
+    pub fn count(name: []const u8) u32 {
+        var n: u32 = 0;
+        for (recorded()) |s| n += @intFromBool(std.mem.eql(u8, std.mem.span(s), name));
+        return n;
+    }
+
+    /// Where `name` was first sent at or after `from`, else null.
+    pub fn find(name: []const u8, from: u32) ?u32 {
+        for (recorded()[@min(from, len)..], @min(from, len)..) |s, i| {
+            if (std.mem.eql(u8, std.mem.span(s), name)) return @intCast(i);
+        }
+        return null;
+    }
+
+    // ---- private ----
+
+    // Reads only the receiver and the selector: the C calling conventions of x86_64 and arm64
+    // leave further arguments where a callee that takes none never looks, and no message here
+    // returns a struct in memory, which would move the selector on x86_64 (header).
+    fn send(_: ?*anyopaque, s: Sel) callconv(.c) usize {
+        const name: [*:0]const u8 = @ptrCast(s);
+        std.debug.assert(len < log_max);
+        log[len] = name;
+        len += 1;
+        for (nil) |n| if (std.mem.eql(u8, std.mem.span(name), n)) return 0;
+        return @intFromPtr(object);
+    }
+
+    fn getClass(_: [*:0]const u8) callconv(.c) ?Class {
+        return @ptrCast(object);
+    }
+
+    fn register(name: [*:0]const u8) callconv(.c) Sel {
+        return @ptrCast(@constCast(name));
+    }
+
+    fn poolPush() callconv(.c) ?*anyopaque {
+        return null;
+    }
+
+    fn poolPop(_: ?*anyopaque) callconv(.c) void {}
+};
+
 const testing = std.testing;
 
 test "objc: message signatures follow the argument tuple" {
@@ -159,6 +244,21 @@ test "objc: messages reach a real runtime" {
     defer pool.pop();
     const s = string("metal");
     try testing.expectEqual(@as(NSUInteger, 5), msg(NSUInteger, s, "length", .{}));
+}
+
+test "objc: the fake runtime logs each message and answers null where told" {
+    if (builtin.os.tag == .macos) return error.SkipZigTest;
+    Fake.install();
+    defer Fake.uninstall();
+    Fake.nil = &.{"nextDrawable"};
+    const layer = msg(Id, class("CAMetalLayer"), "new", .{});
+    try testing.expectEqual(Fake.object, layer);
+    msg(void, layer, "setDrawableSize:", .{CGSize{ .width = 4, .height = 2 }});
+    try testing.expectEqual(null, msg(?Id, layer, "nextDrawable", .{}));
+    try testing.expectEqual(3, Fake.len);
+    try testing.expectEqual(1, Fake.count("setDrawableSize:"));
+    try testing.expectEqual(2, Fake.find("nextDrawable", 1).?);
+    try testing.expectEqual(null, Fake.find("new", 1));
 }
 
 test "selectors cache each name independently" {
