@@ -4,6 +4,11 @@
 //!     zig build app-example && zig-out/bin/app-example
 //!     zig build app-example -Dtarget=x86_64-windows     (or aarch64-macos)
 //!
+//! It is also a package of its own, as an application is: build.zig here takes LCGF as a
+//! dependency, with the render back end left at its default, and calls `lcgf.addApp`.
+//!
+//!     cd examples/app && zig build run
+//!
 //! `LCGF_APP_SECONDS=1` closes it after a second (ci/run.sh runs it so on Xvfb).
 
 const std = @import("std");

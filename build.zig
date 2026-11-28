@@ -132,6 +132,52 @@ pub fn build(b: *std.Build) void {
     });
     lcgf_render.addOptions("render_options", render_options);
     if (renderBackend(b, render, target, optimize, lcgf, wgpu_native_mod)) |m| lcgf_render.addImport("render_backend", m);
+    // lcgf_app (src/app/app.zig): an application in a desktop window in one call, with the
+    // shells this target needs. A dependent takes it as `dep.module("lcgf_app")`, or builds
+    // its executable with `addApp`.
+    const app_shell = struct {
+        fn module(bb: *std.Build, path: []const u8, t: std.Build.ResolvedTarget, o: std.builtin.OptimizeMode, imports: []const std.Build.Module.Import) *std.Build.Module {
+            return bb.createModule(.{ .root_source_file = bb.path(path), .target = t, .optimize = o, .imports = imports });
+        }
+    };
+    const lcgf_import: []const std.Build.Module.Import = &.{.{ .name = "lcgf", .module = lcgf }};
+    const app_imports: []const std.Build.Module.Import = switch (target.result.os.tag) {
+        .linux => &.{
+            .{ .name = "lcgf", .module = lcgf },
+            .{ .name = "x11", .module = app_shell.module(b, "src/shell/x11/x11.zig", target, optimize, lcgf_import) },
+            .{ .name = "wayland", .module = app_shell.module(b, "src/shell/wayland/wayland.zig", target, optimize, lcgf_import) },
+        },
+        .windows => &.{
+            .{ .name = "lcgf", .module = lcgf },
+            .{ .name = "win32", .module = app_shell.module(b, "src/shell/win32/win32.zig", target, optimize, lcgf_import) },
+        },
+        .macos => &.{
+            .{ .name = "lcgf", .module = lcgf },
+            .{ .name = "macos", .module = b.createModule(.{ .root_source_file = b.path("src/shell/macos/macos.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "metal", .module = renderBackend(b, .metal, target, optimize, lcgf, wgpu_native_mod).? } } }) },
+        },
+        else => lcgf_import,
+    };
+    // libc on macOS, and on Linux exactly when the back end is a GPU one (its loader is opened
+    // with dlopen): `-Drender=sw` stays without.
+    const linux = target.result.os.tag == .linux;
+    const app_libc = target.result.os.tag == .macos or (linux and render != .sw);
+    const app_mod = b.addModule("lcgf_app", .{ .root_source_file = b.path("src/app/app.zig"), .target = target, .optimize = optimize, .link_libc = app_libc, .imports = app_imports });
+    app_mod.addOptions("render_options", render_options);
+    // The GPU window (src/app/gpu.zig): Vulkan over the X11 shell's window.
+    if (linux and render == .vk) if (renderBackend(b, .vk, target, optimize, lcgf, wgpu_native_mod)) |app_vk| {
+        app_mod.addImport("vk", app_vk);
+        app_mod.addImport("x11_gpu", b.createModule(.{
+            .root_source_file = b.path("src/shell/x11/gpu.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk", .module = app_vk }, .{ .name = "x11", .module = app_imports[1].module } },
+        }));
+    };
+    // The text service's font discovery (src/app/text.zig), linking what lcgf_app links, and
+    // the test face of its tests.
+    app_mod.addImport("font_system", appText(b, target, optimize, lcgf, app_libc).import_table.get("font_system").?);
+    app_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
     // A downstream application consumes the modules and library above. The
     // benchmarks, SDK probes, docs and examples belong to this repository.
     if (!b.isRoot()) return;
@@ -1339,52 +1385,6 @@ pub fn build(b: *std.Build) void {
     }) });
     b.step("macos-example", "Build zig-out/bin/macos-example, the example in a macOS window").dependOn(&b.addInstallArtifact(macos_example, .{}).step);
 
-    // lcgf_app (src/app/app.zig): an application in a desktop window in one call, with the
-    // shells this target needs. A dependent takes it as `dep.module("lcgf_app")`, or builds
-    // its executable with `addApp`.
-    const app_shell = struct {
-        fn module(bb: *std.Build, path: []const u8, t: std.Build.ResolvedTarget, o: std.builtin.OptimizeMode, imports: []const std.Build.Module.Import) *std.Build.Module {
-            return bb.createModule(.{ .root_source_file = bb.path(path), .target = t, .optimize = o, .imports = imports });
-        }
-    };
-    const lcgf_import: []const std.Build.Module.Import = &.{.{ .name = "lcgf", .module = lcgf }};
-    const app_imports: []const std.Build.Module.Import = switch (target.result.os.tag) {
-        .linux => &.{
-            .{ .name = "lcgf", .module = lcgf },
-            .{ .name = "x11", .module = app_shell.module(b, "src/shell/x11/x11.zig", target, optimize, lcgf_import) },
-            .{ .name = "wayland", .module = app_shell.module(b, "src/shell/wayland/wayland.zig", target, optimize, lcgf_import) },
-        },
-        .windows => &.{
-            .{ .name = "lcgf", .module = lcgf },
-            .{ .name = "win32", .module = app_shell.module(b, "src/shell/win32/win32.zig", target, optimize, lcgf_import) },
-        },
-        .macos => &.{
-            .{ .name = "lcgf", .module = lcgf },
-            .{ .name = "macos", .module = b.createModule(.{ .root_source_file = b.path("src/shell/macos/macos.zig"), .target = target, .optimize = optimize, .link_libc = true, .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "metal", .module = macos_metal } } }) },
-        },
-        else => lcgf_import,
-    };
-    // libc on macOS, and on Linux exactly when the back end is a GPU one (its loader is opened
-    // with dlopen): `-Drender=sw` stays without.
-    const linux = target.result.os.tag == .linux;
-    const app_libc = target.result.os.tag == .macos or (linux and render != .sw);
-    const app_mod = b.addModule("lcgf_app", .{ .root_source_file = b.path("src/app/app.zig"), .target = target, .optimize = optimize, .link_libc = app_libc, .imports = app_imports });
-    app_mod.addOptions("render_options", render_options);
-    // The GPU window (src/app/gpu.zig): Vulkan over the X11 shell's window.
-    if (linux and render == .vk) if (renderBackend(b, .vk, target, optimize, lcgf, wgpu_native_mod)) |app_vk| {
-        app_mod.addImport("vk", app_vk);
-        app_mod.addImport("x11_gpu", b.createModule(.{
-            .root_source_file = b.path("src/shell/x11/gpu.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{ .{ .name = "lcgf", .module = lcgf }, .{ .name = "vk", .module = app_vk }, .{ .name = "x11", .module = app_imports[1].module } },
-        }));
-    };
-    // The text service's font discovery (src/app/text.zig), linking what lcgf_app links, and
-    // the test face of its tests.
-    app_mod.addImport("font_system", appText(b, target, optimize, lcgf, app_libc).import_table.get("font_system").?);
-    app_mod.addAnonymousImport("layout.ttf", .{ .root_source_file = b.path("src/text/layout/testdata/layout.ttf") });
     // examples/app: the hello window through lcgf_app, for any desktop target.
     const app_example = b.addExecutable(.{ .name = "app-example", .root_module = b.createModule(.{
         .root_source_file = b.path("examples/app/main.zig"),

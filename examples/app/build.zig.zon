@@ -1,0 +1,8 @@
+.{
+    .name = .app,
+    .version = "0.0.0",
+    .fingerprint = 0xc96e70cf938c63e3,
+    .minimum_zig_version = "0.18.0-dev.1151+8dfb7a7cc",
+    .dependencies = .{ .lcgf = .{ .path = "../.." } },
+    .paths = .{ "build.zig", "build.zig.zon", "main.zig" },
+}
