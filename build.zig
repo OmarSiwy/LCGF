@@ -365,6 +365,7 @@ pub fn build(b: *std.Build) void {
     const size_run = b.addRunArtifact(size_tool);
     const lcgf_small = b.createModule(.{ .root_source_file = b.path("src/lcgf.zig"), .target = target, .optimize = .ReleaseSmall });
     lcgf_small.addOptions("build_options", options);
+    lcgf_small.addAnonymousImport("unicode_tables", .{ .root_source_file = ucd_tables });
     const small_src_ui = b.createModule(.{ .root_source_file = b.path("bench/micro/src_ui.zig"), .imports = &.{.{ .name = "lcgf", .module = lcgf_small }} });
     const small_src_scenes = b.createModule(.{ .root_source_file = src_scenes_root, .imports = &.{.{ .name = "ui", .module = small_src_ui }} });
     // The reference row of docs/perf/vs.md: bench/vs/lcgf/, harness.h's driver over LCGF's
