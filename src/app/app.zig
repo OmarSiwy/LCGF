@@ -63,10 +63,18 @@ pub const Surface = if (has_gpu) gpu_app.Surface else @compileError(no_gpu);
 pub const GpuFrame = if (has_gpu) gpu_app.GpuFrame else @compileError(no_gpu);
 
 /// An application's image, which the UI draws through `Style.texture` (texture k + 1 is image
-/// k of `App.images`). RGBA8 texels (`types.Color` bits), `size[0]` by `size[1]`, row by row;
-/// both sides positive. The pixels are the application's, read while a frame is drawn.
+/// k of `App.images`): `size[0]` by `size[1]` texels, row by row, both sides positive, the
+/// application's, read while a frame is drawn. A texel is straight (not premultiplied) RGBA8,
+/// `types.Color` bits: red in the low byte. The quad shows texel times its `fill`, channel by
+/// channel, so a white fill shows the image as it is and a coloured one tints it.
+///
+/// An alpha-only image (an icon's coverage) is `alpha`, a byte a texel, read as white with that
+/// alpha: under a `fill` it draws in the fill's colour. Written into `pixels` it is the same
+/// image as `0x00ffffff | @as(u32, a) << 24` per texel; `alpha` takes a quarter of the bytes.
+/// Exactly one of the two is set.
 pub const Image = struct {
-    pixels: []const u32,
+    pixels: []const u32 = &.{},
+    alpha: []const u8 = &.{},
     size: [2]u32,
     /// Changed by the application whenever `pixels` change: the next frame redraws the
     /// whole window with them.
@@ -92,7 +100,7 @@ pub const Options = struct {
 /// Opens a window titled `options.title` and runs `app` in it until the window is closed.
 /// `App` has `pub fn build(*App, *lcgf.frame.Frame, *const lcgf.shell_iface.Events) void`,
 /// and may have `pub fn images(*App) []const Image` (at most `images_max`; the software shells
-/// draw them, the macOS shell, on Metal, not yet).
+/// and the GPU draw them, the macOS shell, on Metal, not yet).
 pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime options: Options) !void {
     if (!@hasDecl(App, "build")) @compileError(@typeName(App) ++ " needs `pub fn build(*App, *lcgf.frame.Frame, *const lcgf.shell_iface.Events) void`");
     if (@hasDecl(App, "draw") and !has_gpu) @compileError(no_gpu);
@@ -338,11 +346,17 @@ const Textures = struct {
         var same = !t.known or t.len == images.len;
         t.rows[0] = .white;
         for (images, 0..) |img, k| {
+            const texels = @as(usize, img.size[0]) * img.size[1];
             std.debug.assert(img.size[0] > 0);
-            std.debug.assert(img.pixels.len >= @as(usize, img.size[0]) * img.size[1]);
+            std.debug.assert(@max(img.pixels.len, img.alpha.len) >= texels);
             same = same and (!t.known or k >= t.len or t.generations[k] == img.generation);
             t.generations[k] = img.generation;
-            t.rows[k + 1] = .{ .pixels = img.pixels, .width = img.size[0], .height = img.size[1] };
+            t.rows[k + 1] = .{
+                .pixels = img.pixels,
+                .alpha8 = img.alpha,
+                .width = img.size[0],
+                .height = img.size[1],
+            };
         }
         t.rows[images.len + 1] = font.image;
         t.len = @intCast(images.len);
@@ -538,6 +552,37 @@ test "textures: image k is texture k + 1, the font last; a new generation or cou
     try testing.expect(changed);
     _ = t.update(list[0..1], &changed);
     try testing.expect(changed);
+}
+
+test "textures: an alpha-only image is coverage, which a fill tints" {
+    var t: Textures = .{};
+    const icon = [4]u8{ 0, 255, 128, 255 };
+    const list = [1]Image{.{ .alpha = &icon, .size = .{ 2, 2 } }};
+    var changed = false;
+    const rows = t.update(&list, &changed);
+    try testing.expectEqual(icon[0..].ptr, rows[1].alpha8.ptr);
+    try testing.expectEqual(0, rows[1].pixels.len);
+    // Drawn under a blue fill: blue where the icon has coverage, the ground where not.
+    var pixels: [sw.Framebuffer.len(2, 1)]u32 = undefined;
+    var fb: sw.Framebuffer = .init(&pixels, 2, 1, .rgba8);
+    fb.clear(.black);
+    var q: Quad = std.mem.zeroes(Quad);
+    q.rect = .{ 0, 0, 2, 1 };
+    q.clip = .{ 0, 0, 2, 1 };
+    q.uv = .{ 0, 0, 1, 0.5 };
+    q.fill = Color.rgb(0, 0, 255).bitsOf();
+    q.opacity = 1;
+    q.xform = .{ 1, 0, 0, 1, 0, 0 };
+    var r: sw.Software = .{ .quads = &.{q}, .images = rows };
+    const icon_batch: lcgf.draw_list.Batch = .{
+        .first = 0,
+        .count = 1,
+        .texture = @fromBackingInt(1),
+        .material = .solid,
+    };
+    r.drawBatch(.{ .fb = &fb, .scissor = .{ 0, 0, 2, 1 } }, icon_batch);
+    try testing.expectEqual(Color.black, fb.at(0, 0));
+    try testing.expectEqual(Color.rgb(0, 0, 255), fb.at(1, 0));
 }
 
 /// A clock that ends `loop` after `seconds`.

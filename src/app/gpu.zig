@@ -520,7 +520,7 @@ fn writeImages(gw: *Window, cmd: c.VkCommandBuffer, slot: u32, images: anytype) 
     for (images, 0..) |img, k| {
         if (gw.images[k] != null and gw.generations[k] == img.generation and
             std.mem.eql(u32, &gw.sizes[k], &img.size)) continue;
-        bytes += @as(u64, img.size[0]) * img.size[1] * 4;
+        bytes += @as(u64, img.size[0]) * img.size[1] * texelBytes(img);
     }
     if (bytes == 0 and images.len == gw.image_len and gw.images_known) return false;
     const staged = try gw.room(&gw.writes[slot], @max(bytes, 4));
@@ -533,16 +533,22 @@ fn writeImages(gw: *Window, cmd: c.VkCommandBuffer, slot: u32, images: anytype) 
             // Frames in flight may sample the old image.
             _ = d.fns.vkDeviceWaitIdle.?(d.handle);
             if (gw.images[k]) |*old| d.destroyImage(old);
-            gw.images[k] = try d.createImage(.{
-                .width = img.size[0],
-                .height = img.size[1],
-                .usage = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-            });
+            gw.images[k] = if (texelBytes(img) == 1)
+                try coverage(d, img.size[0], img.size[1])
+            else
+                try d.createImage(.{
+                    .width = img.size[0],
+                    .height = img.size[1],
+                    .usage = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                });
             const handle: Texture = @fromBackingInt(@as(u16, @intCast(k + 1)));
             g.gfx.setTexture(d, handle, gw.images[k].?.view, g.sampler);
         }
-        const n = @as(usize, img.size[0]) * img.size[1] * 4;
-        @memcpy(staged[@intCast(at)..][0..n], std.mem.sliceAsBytes(img.pixels[0 .. n / 4]));
+        const texels = @as(usize, img.size[0]) * img.size[1];
+        const n = texels * texelBytes(img);
+        const rgba = std.mem.sliceAsBytes(img.pixels);
+        const src = if (n == texels) alphaOf(img)[0..texels] else rgba[0..n];
+        @memcpy(staged[@intCast(at)..][0..n], src);
         const region: vk.host.Rect = .{ .w = img.size[0], .h = img.size[1] };
         const image = gw.images[k].?.handle;
         const fresh = c.VK_IMAGE_LAYOUT_UNDEFINED;
@@ -556,6 +562,18 @@ fn writeImages(gw: *Window, cmd: c.VkCommandBuffer, slot: u32, images: anytype) 
     gw.image_len = @intCast(images.len);
     gw.images_known = true;
     return changed and !first;
+}
+
+/// Bytes of a texel of `img`: 1 for an alpha-only image (`Image.alpha`), else 4.
+fn texelBytes(img: anytype) u32 {
+    const a = alphaOf(img);
+    std.debug.assert(a.len == 0 or img.pixels.len == 0);
+    return if (a.len != 0) 1 else 4;
+}
+
+/// `img.alpha`, empty for an image type without it.
+fn alphaOf(img: anytype) []const u8 {
+    return if (@hasField(@TypeOf(img), "alpha")) img.alpha else &.{};
 }
 
 /// The text service's atlas: made on its first frame, its changed rectangle written (all of
