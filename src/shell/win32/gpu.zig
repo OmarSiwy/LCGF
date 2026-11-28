@@ -111,11 +111,24 @@ const Fixture = struct {
         return &fx.ctx.draw;
     }
 
+    /// `Window.begin` at the client size, tried again while the swapchain takes no frame: a
+    /// loaded machine can hold the latency object past `wait_ms`. Gives up after 50 tries,
+    /// 5 s of waits.
+    fn begin(fx: *Fixture) !d3d12.setup.Window.Frame {
+        const t = &fx.g.target;
+        for (0..50) |_| {
+            if (t.begin(&fx.g.setup, fx.w.clientSize())) |f| return f else |e| {
+                if (e != error.NotShown) return e;
+            }
+        }
+        return error.NotShown;
+    }
+
     /// One frame at the client size: `new` uploaded (or none), `damage` drawn again, cleared
     /// to blue, waited for.
     fn present(fx: *Fixture, new: ?*const DrawList, damage: Region) !void {
         const t = &fx.g.target;
-        const f = try t.begin(&fx.g.setup, fx.w.clientSize());
+        const f = try fx.begin();
         var rows: ?d3d12.setup.Window.Rows = null;
         const in = &fx.w.t.in;
         std.debug.assert(in.scale > 0);

@@ -414,9 +414,19 @@ const Hidden = struct {
         return .{ @intFromFloat(h.in.viewport[0]), @intFromFloat(h.in.viewport[1]) };
     }
 
+    /// `Window.begin` at `in.viewport`, tried again while the swapchain takes no frame: a
+    /// loaded machine can hold the latency object past `wait_ms`. Gives up after 50 tries,
+    /// 5 s of waits.
+    fn begin(h: *Hidden) !Window.Frame {
+        for (0..50) |_| {
+            if (h.w.begin(&h.g, h.size())) |f| return f else |e| if (e != error.NotShown) return e;
+        }
+        return error.NotShown;
+    }
+
     /// One frame at `in.viewport`, waited for: `list` uploaded (or none), `damage` drawn.
     fn present(h: *Hidden, list: ?*const DrawList, damage: Region) !void {
-        const f = try h.w.begin(&h.g, h.size());
+        const f = try h.begin();
         try h.finish(&f, list, damage);
     }
 
@@ -521,7 +531,7 @@ test "setup: a swapchain that takes no frame within wait_ms is NotShown, and not
     try h.present(h.fill(.rgb(0, 0, 255)), .everything);
     // A frame begun and not presented holds the one frame of latency the swapchain allows:
     // the next `begin` waits `wait_ms` for the latency object and gives up.
-    const f = try h.w.begin(&h.g, h.size());
+    const f = try h.begin();
     try testing.expectError(error.NotShown, h.w.begin(&h.g, h.size()));
     try testing.expectError(error.ZeroExtent, h.w.begin(&h.g, .{ 0, 48 }));
     // The frame begun first is still good, and draws what it was given.
@@ -593,7 +603,7 @@ test "setup: a canvas moved with no new list is drawn again inside the damage re
     st.rows[0].camera.offset[0] += 40;
     var damage: Region = .empty;
     damage.add(.{ 100, 100, 300, 300 });
-    const f = try h.w.begin(&h.g, h.size());
+    const f = try h.begin();
     const ui: Window.Ui = .{
         .rows = null,
         .damage = damage,
