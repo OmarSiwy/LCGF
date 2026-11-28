@@ -134,8 +134,10 @@ pub const Image = struct {
     pixels: []const u32 = &.{},
     alpha: []const u8 = &.{},
     size: [2]u32,
-    /// Changed by the application whenever `pixels` change: the next frame redraws the
-    /// whole window with them.
+    /// Changed by the application whenever its pixels change, in a frame it asks for (`build`
+    /// changing it, or `ctx.waker`): that frame draws and sends the nodes that show the image
+    /// again, from the new pixels (the GPU writes them once), and nothing else. A frame that
+    /// changes the number of images or an image's size redraws the whole window.
     generation: u32 = 0,
 };
 
@@ -202,8 +204,9 @@ pub fn run(comptime App: type, app: *App, init: std.process.Init, comptime optio
     const clock: Clock = .{ .io = init.io, .t0 = std.Io.Timestamp.now(init.io, .awake), .seconds = seconds };
     var ctx = try context.Context.init(&B.ctx, limitsOf(options));
     // The software shells keep the last frame's pixels; Metal draws every frame whole. A list
-    // the application composes is culled once, after the compose.
-    const composing = comptime page.composes(App);
+    // the application composes, or one that may show an image whose pixels changed, is kept
+    // whole and culled once, after the compose or with the images' quads.
+    const composing = comptime page.composes(App) or @hasDecl(App, "images");
     if (builtin.os.tag != .macos) {
         if (composing) ctx.trackDamageWhole() else ctx.trackDamage();
     }
@@ -475,27 +478,43 @@ const Glyphs = struct { quads: []Quad, first: []u32, count: []u32 };
 
 /// What a software shell's renderer samples: the white texture, the application's images, the
 /// bundled font, and the text service's atlas when it draws the text. Remembers the images'
-/// generations, to tell when they change.
+/// generations and sizes, to tell which changed.
+/// What changed in the application's images since the frame before.
+const Change = struct {
+    /// Bit k + 1 (texture k + 1) when image k's generation moved.
+    moved: u128 = 0,
+    /// The count of images or a size changed.
+    whole: bool = false,
+};
+
 const Textures = struct {
     rows: [images_max + 4]sw.Image = undefined,
     generations: [images_max]u32 = undefined,
+    sizes: [images_max][2]u32 = undefined,
     len: u32 = 0,
     known: bool = false,
+    /// What the last `update` found changed.
+    change: Change = .{},
     /// The last `service` frame had a canvas label atlas: the row after the text's.
     labels: bool = false,
 
-    /// The rows for `images`. `changed` is set when an image differs from the last call's
-    /// (its generation, or how many there are), never on the first call.
-    fn update(t: *Textures, images: []const Image, changed: *bool) []const sw.Image {
+    /// The rows for `images`, and what changed since the last call (`change`); nothing
+    /// on the first call, which is drawn whole anyway.
+    fn update(t: *Textures, images: []const Image) []const sw.Image {
         std.debug.assert(images.len <= images_max);
-        var same = !t.known or t.len == images.len;
+        var whole = t.known and t.len != images.len;
+        var moved: u128 = 0;
         t.rows[0] = .white;
         for (images, 0..) |img, k| {
             const texels = @as(usize, img.size[0]) * img.size[1];
             std.debug.assert(img.size[0] > 0);
             std.debug.assert(@max(img.pixels.len, img.alpha.len) >= texels);
-            same = same and (!t.known or k >= t.len or t.generations[k] == img.generation);
+            const seen = t.known and k < t.len;
+            whole = whole or (seen and !std.mem.eql(u32, &t.sizes[k], &img.size));
+            const bit = @as(u128, @intFromBool(seen and t.generations[k] != img.generation));
+            moved |= bit << @intCast(k + 1);
             t.generations[k] = img.generation;
+            t.sizes[k] = img.size;
             t.rows[k + 1] = .{
                 .pixels = img.pixels,
                 .alpha8 = img.alpha,
@@ -506,26 +525,28 @@ const Textures = struct {
         t.rows[images.len + 1] = font.image;
         t.len = @intCast(images.len);
         t.known = true;
-        changed.* = !same;
+        t.change = .{ .moved = moved, .whole = whole };
         return t.rows[0 .. images.len + 2];
     }
 
+    /// `d`'s damage (its context records it whole: `trackDamageWhole`) with the quads that show
+    /// an image whose pixels moved (`change`), or everything when they all may; then `d` culled,
+    /// for a shell that draws and sends only that.
+    fn damage(t: *const Textures, d: *lcgf.draw_list.DrawList) void {
+        const c = t.change;
+        if (c.whole) d.damage = .everything else lcgf.damage.addTextures(d, c.moved, &d.damage);
+        lcgf.damage.cull(d, &d.damage);
+    }
+
     /// The frame's glyphs in the bundled font, sampling the last row, with the rows updated
-    /// for `images`. A change to them came after this frame's damage was taken: the next frame
-    /// redraws everything, at once.
+    /// for `images` (`damage` then draws what they changed).
     fn frame(
         t: *Textures,
-        ctx: *context.Context,
         images: []const Image,
         d: *const lcgf.draw_list.DrawList,
         glyphs: Glyphs,
     ) lcgf.render_iface.Glyphs {
-        var changed = false;
-        const rows = t.update(images, &changed);
-        if (changed) {
-            ctx.redrawAll();
-            ctx.waker.post();
-        }
+        const rows = t.update(images);
         var g = font.glyphs(d, glyphs.quads, glyphs.first, glyphs.count);
         g.texture = @fromBackingInt(@as(u16, @intCast(rows.len - 1)));
         return g;
@@ -535,17 +556,11 @@ const Textures = struct {
     /// after the font; canvas labels keep sampling the bundled font, as their cells are its.
     fn service(
         t: *Textures,
-        ctx: *context.Context,
         images: []const Image,
         placed: text.Frame,
     ) lcgf.render_iface.Glyphs {
         std.debug.assert(placed.glyphs.first.len == placed.glyphs.count.len);
-        var changed = false;
-        const rows = t.update(images, &changed);
-        if (changed) {
-            ctx.redrawAll();
-            ctx.waker.post();
-        }
+        const rows = t.update(images);
         const a = placed.atlas;
         t.rows[rows.len] = .{ .alpha8 = a.pixels, .width = a.w, .height = a.h };
         var g = placed.glyphs;
@@ -621,8 +636,14 @@ fn loop(
     std.debug.assert(glyphs.first.len == glyphs.count.len);
     const follows = @hasField(App, "theme") and @FieldType(App, "theme") == lcgf.widgets_base.Theme;
     var styled: ?lcgf.input.Input.Appearance = null;
-    var textures: Textures = .{};
-    var paging: page.Paging = .{};
+    // The window's, kept from one call to the next as its pixels are: a loop run again (a
+    // test, a fallback) still knows what the last frame showed.
+    const Kept = struct {
+        var textures: Textures = .{};
+        var paging: page.Paging = .{};
+    };
+    const textures = &Kept.textures;
+    const paging = &Kept.paging;
     var ev: Events = .{};
     while (shell.poll(&ev)) {
         if (follows and !std.meta.eql(styled, ev.in.appearance)) {
@@ -633,7 +654,7 @@ fn loop(
         if (comptime page.composes(App)) {
             if (paging.wants(ctx, &ev.in)) {
                 if (@hasDecl(@TypeOf(shell.*), "beforeFrame")) try shell.beforeFrame();
-                composedFrame(App, app, shell, ctx, &paging, &textures, glyphs, tw, &ev);
+                composedFrame(App, app, shell, ctx, paging, textures, glyphs, tw, &ev);
             }
         } else if (ctx.needsFrame(&ev.in)) {
             if (@hasDecl(@TypeOf(shell.*), "beforeFrame")) try shell.beforeFrame();
@@ -645,9 +666,11 @@ fn loop(
             if (@hasDecl(@TypeOf(shell.*), "presentWith")) {
                 const images = if (@hasDecl(App, "images")) app.images() else &.{};
                 const g = if (tw.on())
-                    textures.service(ctx, images, tw.glyphs(ctx, &out, ev.in.scale))
+                    textures.service(images, tw.glyphs(ctx, &out, ev.in.scale))
                 else
-                    textures.frame(ctx, images, out.draw, glyphs);
+                    textures.frame(images, out.draw, glyphs);
+                // An App with images keeps its list whole (`run`): culled here, with them.
+                if (@hasDecl(App, "images")) textures.damage(&ctx.draw);
                 shell.presentWith(&out, g, textures.shown(tw.on()));
             } else shell.present(&out);
         }
@@ -694,12 +717,12 @@ fn composedFrame(
     var shown = b.out;
     shown.draw = d;
     if (!@hasDecl(@TypeOf(shell.*), "presentWith")) return shell.present(&shown);
-    lcgf.damage.cull(d, &d.damage);
     const images = if (@hasDecl(App, "images")) app.images() else &.{};
     const g = if (tw.on())
-        textures.service(ctx, images, tw.glyphsOf(ctx, d, b.composed.texts, ev.in.scale))
+        textures.service(images, tw.glyphsOf(ctx, d, b.composed.texts, ev.in.scale))
     else
-        textures.frame(ctx, images, d, glyphs);
+        textures.frame(images, d, glyphs);
+    textures.damage(d);
     shell.presentWith(&shown, g, textures.shown(tw.on()));
 }
 
@@ -739,34 +762,38 @@ const ImageApp = struct {
     }
 };
 
-test "textures: image k is texture k + 1, the font last; a new generation or count is a change" {
+test "textures: image k is texture k + 1, the font last; a generation moves its texture" {
     var t: Textures = .{};
     const texel = [1]u32{0xff00ff00};
     var list = [2]Image{
         .{ .pixels = &texel, .size = .{ 1, 1 } },
         .{ .pixels = &texel, .size = .{ 1, 1 } },
     };
-    var changed = true;
-    const rows = t.update(&list, &changed);
-    try testing.expect(!changed); // the first frame is whole anyway
+    const rows = t.update(&list);
+    // The first frame is whole anyway.
+    try testing.expectEqual(0, t.change.moved);
+    try testing.expect(!t.change.whole);
     try testing.expectEqual(4, rows.len);
     try testing.expectEqual(texel[0..].ptr, rows[1].pixels.ptr);
     try testing.expectEqual(font.image.alpha8.ptr, rows[3].alpha8.ptr);
-    _ = t.update(&list, &changed);
-    try testing.expect(!changed);
+    _ = t.update(&list);
+    try testing.expectEqual(0, t.change.moved);
+    // Image 1's pixels: texture 2, nothing else.
     list[1].generation += 1;
-    _ = t.update(&list, &changed);
-    try testing.expect(changed);
-    _ = t.update(list[0..1], &changed);
-    try testing.expect(changed);
+    _ = t.update(&list);
+    try testing.expectEqual(1 << 2, t.change.moved);
+    try testing.expect(!t.change.whole);
+    // A size or a count: everything.
+    list[0].size = .{ 1, 1 };
+    _ = t.update(list[0..1]);
+    try testing.expect(t.change.whole);
 }
 
 test "textures: an alpha-only image is coverage, which a fill tints" {
     var t: Textures = .{};
     const icon = [4]u8{ 0, 255, 128, 255 };
     const list = [1]Image{.{ .alpha = &icon, .size = .{ 2, 2 } }};
-    var changed = false;
-    const rows = t.update(&list, &changed);
+    const rows = t.update(&list);
     try testing.expectEqual(icon[0..].ptr, rows[1].alpha8.ptr);
     try testing.expectEqual(0, rows[1].pixels.len);
     // Drawn under a blue fill: blue where the icon has coverage, the ground where not.
@@ -983,6 +1010,106 @@ test "a custom node in the window is said once, in a debug build" {
     ctx.waker.post();
     try loop(CustomApp, &app, &shell, &ctx, clockFor(0.2), glyphs, &tw);
     try testing.expectEqual(builtin.mode == .debug, custom_said);
+}
+
+/// Two images on two nodes; `bump` gives the first new pixels under a new generation.
+const TwoImages = struct {
+    const ground = Color.rgb(30, 30, 30);
+    const green = Color.rgb(0, 200, 0);
+    const blue = Color.rgb(0, 0, 220);
+    const red = Color.rgb(220, 0, 0);
+    const first_rect = [4]f32{ 10, 10, 30, 30 };
+    const second_at = [2]f32{ 50, 10 };
+    first: [4]u32 = @splat(green.bitsOf()),
+    second: [4]u32 = @splat(blue.bitsOf()),
+    generation: u32 = 0,
+    list: [2]Image = undefined,
+    builds: u32 = 0,
+
+    pub fn images(a: *TwoImages) []const Image {
+        a.list = .{
+            .{ .pixels = &a.first, .size = .{ 2, 2 }, .generation = a.generation },
+            .{ .pixels = &a.second, .size = .{ 2, 2 } },
+        };
+        return &a.list;
+    }
+
+    pub fn build(a: *TwoImages, f: *lcgf.frame.Frame, _: *const Events) void {
+        std.debug.assert(first_rect[2] < second_at[0]);
+        a.builds += 1;
+        const size: [2]lcgf.types.Size = .{ .px(20), .px(20) };
+        _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ground });
+        const at: [2]f32 = .{ first_rect[0], first_rect[1] };
+        const one: lcgf.types.Texture = @fromBackingInt(1);
+        const two: lcgf.types.Texture = @fromBackingInt(2);
+        const node: lcgf.types.Style = .{ .float = true, .size = size, .fill = .white };
+        var a_node = node;
+        a_node.offset = at;
+        a_node.texture = one;
+        var b_node = node;
+        b_node.offset = second_at;
+        b_node.texture = two;
+        _ = f.leaf(.none, a_node);
+        _ = f.leaf(.none, b_node);
+        f.close();
+    }
+
+    fn bump(a: *TwoImages) void {
+        a.first = @splat(red.bitsOf());
+        a.generation += 1;
+    }
+};
+
+test "app on X11: a new generation draws and sends only the nodes that show the image" {
+    const display = testing.environ.getPosix("LCGF_X11_TEST_DISPLAY") orelse
+        return error.SkipZigTest;
+    const x11 = @import("x11");
+    const options: Options = .{ .limits = .{ .nodes = 16, .texts = 4 } };
+    const B = Buffers(options);
+    const conn = &B.x11_conn;
+    try conn.open(display, "");
+    defer conn.close();
+    conn.overrideScale(1);
+    var pixels: std.ArrayList(u32) = .empty;
+    defer pixels.deinit(testing.allocator);
+    var w: x11.Window = undefined;
+    const bufs: x11.Window.Buffers = .{
+        .pixels = pixels.items,
+        .glyphs = &B.glyphs,
+        .first = &B.first,
+        .count = &B.count,
+    };
+    try w.open(conn, 200, 100, "lcgf app image damage", bufs);
+    defer w.close();
+    var shell: X11 = .{ .w = &w, .pixels = &pixels, .gpa = testing.allocator };
+    var ctx = try context.Context.init(&B.ctx, limitsOf(options));
+    // As `run` keeps an App with images.
+    ctx.trackDamageWhole();
+    const glyphs: Glyphs = .{ .quads = &B.glyphs, .first = &B.first, .count = &B.count };
+    const gpa = testing.allocator;
+    var tw = try text.Window.open(&B.service, textOptions(options), &.{}, false, gpa, testing.io);
+    defer tw.close();
+    var app: TwoImages = .{};
+    try loop(TwoImages, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(TwoImages.green, try x11.pixel(&w, 20, 20));
+    try testing.expectEqual(TwoImages.blue, try x11.pixel(&w, 60, 20));
+
+    // Image 0's new pixels: its node is the damage; the second image's node and the ground,
+    // changed behind the window's back, are not drawn or sent again.
+    w.fb.fill(.{ 60, 20, 61, 21 }, .white);
+    w.fb.fill(.{ 150, 50, 151, 51 }, .white);
+    app.bump();
+    ctx.waker.post();
+    try loop(TwoImages, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(TwoImages.red, try x11.pixel(&w, 20, 20));
+    try testing.expectEqual(TwoImages.blue, try x11.pixel(&w, 60, 20));
+    try testing.expectEqual(TwoImages.ground, try x11.pixel(&w, 150, 50));
+
+    // Idle: nothing is sent.
+    const presents = w.presents;
+    try loop(TwoImages, &app, &shell, &ctx, clockFor(1), glyphs, &tw);
+    try testing.expectEqual(presents, w.presents);
+    try testing.expectEqual(@as(u32, 0), conn.errors);
 }
 
 test "app on X11: the app's image and text in the bundled font draw; an idle second presents none" {
@@ -1242,6 +1369,14 @@ test "app on X11: a composed page draws both sides; a pan, a widget, idle each s
     try testing.expect(d[0] >= widget[0] and d[1] >= widget[1]);
     try testing.expect(d[2] <= widget[2] and d[3] <= widget[3]);
     try testing.expect(d[0] < d[2]);
+    try testing.expectEqual(T.region_fill, try x11.pixel(&w, 290, 190));
+
+    // The page's icon gets new pixels: only its node is drawn and sent.
+    w.fb.fill(.{ probe[0], probe[1], probe[0] + 1, probe[1] + 1 }, .white);
+    app.clearIcon();
+    ctx.waker.post();
+    try loop(page.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+    try testing.expectEqual(T.page_fill, try x11.pixel(&w, 258, 16));
     try testing.expectEqual(T.region_fill, try x11.pixel(&w, 290, 190));
 
     // Idle: nothing is sent. (A loop's first frame is built; here it is a new loop.)

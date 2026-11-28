@@ -177,6 +177,7 @@ pub const TestApp = struct {
     ranges: [1]lcgf.canvas.Range = undefined,
     camera: lcgf.canvas.Camera = .{ .offset = .{ 10, 10 } },
     icon: [16 * 16]u8 = @splat(255),
+    icon_generation: u32 = 0,
     image: [1]AppImage = undefined,
     /// The canvas node's rect in the window, as the last frame laid it out.
     canvas_rect: [4]f32 = .{ 0, 0, 0, 0 },
@@ -240,8 +241,22 @@ pub const TestApp = struct {
     }
 
     pub fn images(a: *TestApp) []const AppImage {
-        a.image = .{.{ .alpha = &a.icon, .size = .{ 16, 16 } }};
+        a.image = .{.{ .alpha = &a.icon, .size = .{ 16, 16 }, .generation = a.icon_generation }};
         return &a.image;
+    }
+
+    /// The icon's rect in the window: its offset is from the header's padded corner.
+    pub const icon_rect = [4]f32{
+        icon_at[0] + 6,
+        icon_at[1] + 6,
+        icon_at[0] + 22,
+        icon_at[1] + 22,
+    };
+
+    /// The icon's coverage cleared, under a new generation: the page shows through.
+    pub fn clearIcon(a: *TestApp) void {
+        @memset(&a.icon, 0);
+        a.icon_generation += 1;
     }
 
     /// The checkbox's rect in the window, as the last frame laid it out.

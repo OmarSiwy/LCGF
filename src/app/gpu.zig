@@ -407,6 +407,7 @@ fn build(comptime App: type, app: *App, gw: *Window, run: Run, ev: *const Events
     gw.stats.builds += 1;
     const placed: ?text.Frame = if (run.tw.on()) run.tw.glyphs(ctx, &out, ev.in.scale) else null;
     owe(gw, run, &out, out.draw, textGlyphs(gw, run, out.draw, placed), .{ 0, 0 }, &ev.in);
+    oweImages(App, app, gw, out.draw);
 }
 
 /// `build` for an App that composes its frames into a page (src/app/page.zig): the frame is
@@ -425,6 +426,31 @@ fn buildPage(comptime App: type, app: *App, gw: *Window, run: Run, ev: *const Ev
     const sides = b.composed.texts;
     const placed: ?text.Frame = if (run.tw.on()) run.tw.glyphsOf(ctx, list, sides, scale) else null;
     owe(gw, run, &b.out, list, textGlyphs(gw, run, list, placed), b.origin, &ev.in);
+    oweImages(App, app, gw, list);
+}
+
+/// The quads of `list` that show an image whose generation moved since it was last written,
+/// owed: the image's pixels changed, which no node's hash sees. A new count of images, a new
+/// size or a first image owes the whole window.
+// tidy: allow-fn(large-generic-function) one instance per App
+fn oweImages(comptime App: type, app: *App, gw: *Window, list: *const DrawList) void {
+    if (!@hasDecl(App, "images")) return;
+    const images = app.images();
+    std.debug.assert(images.len <= images_max);
+    if (!gw.images_known or images.len != gw.image_len) {
+        gw.owed = .everything;
+        return;
+    }
+    var moved: u128 = 0;
+    for (images, 0..) |img, k| {
+        if (gw.images[k] == null or !std.mem.eql(u32, &gw.sizes[k], &img.size)) {
+            gw.owed = .everything;
+            return;
+        }
+        const bit = @as(u128, @intFromBool(gw.generations[k] != img.generation)) << @intCast(k + 1);
+        moved |= bit;
+    }
+    lcgf.damage.addTextures(list, moved, &gw.owed);
 }
 
 /// The glyphs of `list` with the handles they sample: the service's `placed`, its atlas owed an
@@ -494,7 +520,10 @@ fn present(comptime App: type, app: *App, gw: *Window, w: *x11.Window) !void {
     var f = try win.begin(g, .{ .width = w.width, .height = w.height });
     const slot = f.acquired.slot;
     if (@hasDecl(App, "images")) {
-        if (try writeImages(gw, f.cmd, slot, app.images())) gw.owed = .everything;
+        // A frame built since the last present owed the images' quads (`oweImages`); a
+        // change with no frame built (a surface's frame) is drawn whole.
+        const built = gw.rows != null;
+        if (try writeImages(gw, f.cmd, slot, app.images()) and !built) gw.owed = .everything;
     }
     if (gw.text_dirty) |placed| {
         try writeText(gw, f.cmd, slot, placed);
@@ -1104,19 +1133,28 @@ test "not shown: widget frames with every other one refused never call draw, the
 const PictureApp = struct {
     const green: Color = .rgb(0, 200, 0);
     const ground: Color = .rgb(30, 30, 30);
+    const blue: Color = .rgb(0, 0, 220);
     const Picture = struct { pixels: []const u32, size: [2]u32, generation: u32 = 0 };
+    /// Where image 0 and image 1 are shown.
+    const first_rect = [4]f32{ 10, 10, 30, 30 };
+    const second_at = [2]f32{ 50, 10 };
     texels: [4]u32 = @splat(green.bitsOf()),
-    list: [1]Picture = undefined,
+    second: [4]u32 = @splat(blue.bitsOf()),
+    list: [2]Picture = undefined,
     generation: u32 = 0,
 
     pub fn images(a: *PictureApp) []const Picture {
-        a.list = .{.{ .pixels = &a.texels, .size = .{ 2, 2 }, .generation = a.generation }};
+        a.list = .{
+            .{ .pixels = &a.texels, .size = .{ 2, 2 }, .generation = a.generation },
+            .{ .pixels = &a.second, .size = .{ 2, 2 } },
+        };
         return &a.list;
     }
 
     pub fn build(_: *PictureApp, f: *lcgf.frame.Frame, _: *const Events) void {
+        std.debug.assert(first_rect[0] < second_at[0]);
         _ = f.open(.none, .{ .size = .{ .fill, .fill }, .fill = ground });
-        const at: [2]f32 = .{ 10, 10 };
+        const at: [2]f32 = .{ first_rect[0], first_rect[1] };
         _ = f.leaf(.none, .{
             .float = true,
             .offset = at,
@@ -1124,13 +1162,20 @@ const PictureApp = struct {
             .fill = .white,
             .texture = @fromBackingInt(1),
         });
+        _ = f.leaf(.none, .{
+            .float = true,
+            .offset = second_at,
+            .size = .{ .px(20), .px(20) },
+            .fill = .white,
+            .texture = @fromBackingInt(2),
+        });
         const line: lcgf.types.Style = .{ .float = true, .offset = .{ 100, 10 } };
         _ = f.textStyled("W", .{ .px = 20, .color = .white }, line);
         f.close();
     }
 };
 
-test "gpu images and text: an image and the service's glyphs draw; a new generation draws all" {
+test "gpu images and text: an image and the service's glyphs draw; a new generation, its nodes" {
     var fx: Fixture = undefined;
     try fx.openWith(try displayOrSkip(), 200, 100, &Fixture.face);
     defer fx.close();
@@ -1147,14 +1192,22 @@ test "gpu images and text: an image and the service's glyphs draw; a new generat
     try testing.expect(lit > 12);
     try testing.expect(lit < 15 * 25 / 2);
 
-    // New pixels in the image, under a new generation: the window is drawn whole with them.
+    // New pixels in image 0, under a new generation: only its node is drawn, from them; image 1
+    // is not drawn again, and an idle second after presents nothing.
     const whole = fx.gw.stats.whole;
-    app.texels = @splat(Color.rgb(0, 0, 220).bitsOf());
+    const red: Color = .rgb(220, 0, 0);
+    app.texels = @splat(red.bitsOf());
     app.generation += 1;
     fx.ctx.waker.post();
     try fx.run(&app, seconds(0.3));
-    try testing.expectEqual(Color.rgb(0, 0, 220), try shown(&fx.w, 20, 20, .rgb(0, 0, 220)));
-    try testing.expect(fx.gw.stats.whole > whole);
+    try testing.expectEqual(red, try shown(&fx.w, 20, 20, red));
+    try testing.expectEqual(PictureApp.first_rect, fx.gw.stats.damage.bounds());
+    try testing.expectEqual(@as(u32, 1), fx.gw.stats.damage.count());
+    try testing.expectEqual(whole, fx.gw.stats.whole);
+    try testing.expectEqual(PictureApp.blue, try x11.pixel(&fx.w, 60, 20));
+    const presents = fx.gw.stats.presents;
+    try fx.run(&app, seconds(1));
+    try testing.expectEqual(presents, fx.gw.stats.presents);
 }
 
 test "gpu page: a composed page draws both sides; a pan scissors the canvas; idle presents none" {
@@ -1192,6 +1245,13 @@ test "gpu page: a composed page draws both sides; a pan scissors the canvas; idl
     const d = fx.gw.stats.damage.bounds();
     try testing.expect(d[0] >= widget[0] and d[1] >= widget[1]);
     try testing.expect(d[2] <= widget[2] and d[3] <= widget[3]);
+
+    // The page's icon gets new pixels: its node is the scissor, and nothing else.
+    app.clearIcon();
+    fx.ctx.waker.post();
+    try fx.run(&app, seconds(0.3));
+    try testing.expectEqual(T.icon_rect, fx.gw.stats.damage.bounds());
+    try testing.expectEqual(T.page_fill, try shown(&fx.w, 258, 16, T.page_fill));
 
     // Idle: nothing presented.
     const presents = fx.gw.stats.presents;
