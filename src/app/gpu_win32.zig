@@ -577,9 +577,10 @@ fn seconds(s: f32) Clock(Never) {
     return .{ .t0 = .now(testing.io, .awake), .seconds = s, .done = .{} };
 }
 
-/// Stops once `done` says so, or after 30 s.
+/// Stops once `done` says so, or after 300 s: under load on lavapipe, Wine's swapchain often
+/// takes no frame within `wait_ms`, and the loop waits `retry_seconds` after each such frame.
 fn until(done: anytype) Clock(@TypeOf(done)) {
-    return .{ .t0 = .now(testing.io, .awake), .seconds = 30, .done = done };
+    return .{ .t0 = .now(testing.io, .awake), .seconds = 300, .done = done };
 }
 
 /// A button-like box beside a surface the application paints one colour at a time: `paints`
@@ -640,6 +641,42 @@ const Settled = struct {
     }
 };
 
+/// `ok`, or a test failure that says why: `what` formatted with `args`.
+fn check(ok: bool, comptime what: []const u8, args: anytype) !void {
+    if (ok) return;
+    std.debug.print("check failed: " ++ what ++ "\n", args);
+    return error.TestUnexpectedResult;
+}
+
+/// Watches a run's frames from the loop's clock, which it reads after each one: the frames
+/// presented with none refused since the one before (`clean`), and those of them not drawn
+/// inside the surface's rectangle alone (`wrong`). Stops once the app's paints are done.
+const Watch = struct {
+    a: *const SurfaceApp,
+    gw: *const Loop.Window,
+    presents: u32,
+    refused: u32,
+    clean: u32 = 0,
+    wrong: u32 = 0,
+
+    fn stop(w: *Watch) bool {
+        const s = w.gw.stats;
+        if (s.presents != w.presents) {
+            // One frame a loop turn: this one was the last presented.
+            std.debug.assert(s.presents == w.presents + 1);
+            if (s.not_shown == w.refused) {
+                w.clean += 1;
+                const only = s.damage.count() == 1 and
+                    std.meta.eql(s.damage.bounds(), SurfaceApp.plot_rect);
+                w.wrong += @intFromBool(!only);
+            }
+            w.presents = s.presents;
+            w.refused = s.not_shown;
+        }
+        return w.a.paints == 0;
+    }
+};
+
 const Painted = struct {
     a: *const SurfaceApp,
     fn stop(d: Painted) bool {
@@ -660,7 +697,7 @@ test "win32 T2: surface frames under an idle UI build nothing, upload no rows, r
     defer fx.close();
     var app: SurfaceApp = .{};
     try fx.warm(&app);
-    try testing.expect(app.draws >= 1);
+    try check(app.draws >= 1, "draws after the warm-up: {d}", .{app.draws});
     const builds = app.builds;
     const rows = fx.gw.stats.row_bytes;
     const before = try fx.read();
@@ -668,16 +705,31 @@ test "win32 T2: surface frames under an idle UI build nothing, upload no rows, r
     app.paints = 100;
     app.plot.redraw();
     const draws = app.draws;
-    try fx.run(&app, until(Painted{ .a = &app }));
-    try testing.expect(app.draws - draws >= 100);
+    const refused = fx.gw.stats.not_shown;
+    const presents = fx.gw.stats.presents;
+    const whole = fx.gw.stats.whole;
+    var watch: Watch = .{ .a = &app, .gw = &fx.gw, .presents = presents, .refused = refused };
+    try fx.run(&app, until(&watch));
+    const s = fx.gw.stats;
+    const said = "draws {d}, presents {d}, not shown {d}, paints left {d}";
+    const counts = .{ app.draws - draws, s.presents - presents, s.not_shown - refused, app.paints };
+    try check(app.draws - draws >= 100, said, counts);
     try testing.expectEqual(builds, app.builds);
-    try testing.expectEqual(rows, fx.gw.stats.row_bytes);
-    // The picture's pass was scissored to the surface's rectangle, and only it.
-    try testing.expectEqual(SurfaceApp.plot_rect, fx.gw.stats.damage.bounds());
-    try testing.expectEqual(@as(u32, 1), fx.gw.stats.damage.count());
-    // The last `redraw` (paints reached 0) is drawn: outside it the same bytes, inside it the
+    try testing.expectEqual(rows, s.row_bytes);
+    // A frame the window did not take owes the whole window (the contract's not-shown row):
+    // at most one whole redraw for each, and none without one. Every frame presented with
+    // none refused since the one before was scissored to the surface's rectangle, and only it.
+    const wholes = s.whole - whole;
+    const refusals = s.not_shown - refused;
+    try check(wholes <= refusals, "whole redraws {d}, frames not shown {d}", .{ wholes, refusals });
+    try check(watch.clean > 0, "no frame shown without one refused before it: " ++ said, counts);
+    try check(watch.wrong == 0, "{d} of {d} frames shown at once not the surface's alone", .{
+        watch.wrong,
+        watch.clean,
+    });
+    // The last `redraw` (paints reached 0) drawn: outside it the same bytes, inside it the
     // last colour.
-    try fx.run(&app, seconds(0.2));
+    try fx.settle(&app, fx.gw.stats.presents);
     const after = try fx.read();
     defer after.deinit();
     try testing.expectEqual(before.px.len, after.px.len);
@@ -827,17 +879,24 @@ test "win32 images and text: images and the service's glyphs draw; a new generat
     try testing.expect(lit > 12);
     try testing.expect(lit < 15 * 25 / 2);
 
-    // New pixels in image 0, under a new generation: only its node is drawn, from them.
-    const whole = fx.gw.stats.whole;
+    // New pixels in image 0, under a new generation: only its node is drawn, from them. A
+    // frame the window refuses owes the whole window instead: then a new generation again.
     const red: Color = .rgb(220, 0, 0);
     app.texels = @splat(red.bitsOf());
-    app.generation += 1;
-    fx.ctx.waker.post();
-    try fx.settle(&app, fx.gw.stats.presents);
-    try testing.expectEqual(red, try fx.pixel(20, 20));
-    try testing.expectEqual(PictureApp.first_rect, fx.gw.stats.damage.bounds());
-    try testing.expectEqual(whole, fx.gw.stats.whole);
-    try testing.expectEqual(PictureApp.blue, try fx.pixel(60, 20));
+    for (0..20) |_| {
+        const whole = fx.gw.stats.whole;
+        const refused = fx.gw.stats.not_shown;
+        app.generation += 1;
+        fx.ctx.waker.post();
+        try fx.settle(&app, fx.gw.stats.presents);
+        if (fx.gw.stats.not_shown != refused) continue;
+        try testing.expectEqual(red, try fx.pixel(20, 20));
+        try testing.expectEqual(PictureApp.first_rect, fx.gw.stats.damage.bounds());
+        try testing.expectEqual(whole, fx.gw.stats.whole);
+        try testing.expectEqual(PictureApp.blue, try fx.pixel(60, 20));
+        return;
+    }
+    return error.NeverShown;
 }
 
 extern "user32" fn ShowWindow(@FieldType(Win32, "hwnd"), c_int) callconv(.winapi) c_int;
