@@ -17,11 +17,11 @@
 //! is as sharp as exact and 8 is eight times as wide. Costs: building the glyph set's images
 //! (us, median of 20) and their atlas bytes (boxes plus a pixel of gap).
 //!
-//! Then the cost of drawing while the camera moves, in software (src/render/sw/canvas.zig):
-//! 2,000 labels "R1 10k Vout" (18,000 glyph rows) made by the text service's labels
-//! (src/app/labels.zig), on a 1600 x 900 target, median of 20 frames per camera scale, as
-//! distance glyphs and, for comparison, the same rows sampled nearest as coverage (what a
-//! canvas glyph cost before).
+//! Then 2,000 labels such as "R7 10k n7" (22,670 glyph rows) made by the text service's labels
+//! (src/app/labels.zig) into an empty atlas and again into the same one, timed, and the cost
+//! of drawing them in software while the camera moves (src/render/sw/canvas.zig), on a
+//! 1600 x 900 target, median of 20 frames per camera scale, as distance glyphs and, for
+//! comparison, the same rows sampled nearest as coverage (what a canvas glyph cost before).
 
 const std = @import("std");
 const linux = std.os.linux;
@@ -96,9 +96,9 @@ pub fn main(init: std.process.Init) !void {
     try o.flush();
 }
 
-const label_options: app_text.labels.Options = .{ .atlas = .{ 256, 128 }, .images = 64, .label_glyphs = 32 };
+const label_options: app_text.labels.Options = .{};
 const text_options: app_text.Options = .{ .atlas = .{ 16, 16 }, .images = 8, .texts = 1, .quads = 8 };
-const rows_cap = 18_000;
+const rows_cap = 24_000;
 var label_buf: [app_text.labels.Labels.requiredBytes(label_options)]u8 align(lcgf.mem.column_align) = undefined;
 var text_buf: [app_text.Text.requiredBytes(text_options)]u8 align(lcgf.mem.column_align) = undefined;
 var shapes_buf: [lcgf.canvas.Instances.requiredBytes(rows_cap, 1, 1, .{})]u8 align(lcgf.mem.column_align) = undefined;
@@ -115,11 +115,28 @@ fn drawing(o: *std.Io.Writer) !void {
     var labels = app_text.labels.Labels.init(&label_buf, label_options);
     var carver: lcgf.mem.Carver = .{ .buf = &shapes_buf };
     var shapes = canvas.Instances.init(&carver, rows_cap, 1, 1, .{});
-    // A 40 x 50 grid of labels, 80 x 18 px apart at scale 1 (a world unit is 1/100 px).
-    for (0..2000) |k| {
-        const at = [2]i32{ @intCast((k % 40) * 8_000), @intCast((k / 40) * 1_800) };
-        _ = try labels.label(&t, &shapes, "R1 10k Vout", .{ .origin = at, .px = 1_300 });
+    // A 40 x 50 grid of labels, 80 x 18 px apart at scale 1 (a world unit is 1/100 px): made
+    // into an empty atlas, then made again into the same one, as after a document edit.
+    var made: [2]u64 = undefined;
+    for (&made) |*time| {
+        shapes.reset();
+        const t0 = now();
+        for (0..2000) |k| {
+            const at = [2]i32{ @intCast((k % 40) * 8_000), @intCast((k / 40) * 1_800) };
+            var name: [32]u8 = undefined;
+            const str = std.fmt.bufPrint(&name, "R{d} 10k n{d}", .{ k % 1000, k }) catch unreachable;
+            _ = try labels.label(&t, &shapes, str, .{ .origin = at, .px = 1_300 });
+        }
+        time.* = now() - t0;
     }
+    try o.print("\n2,000 labels of 8 to 12 bytes ({d} rows): made {d:.1} ms into an empty atlas, " ++
+        "{d:.1} ms again; label atlas {d} bytes, rows {d} bytes\n", .{
+        shapes.len,
+        @as(f64, @floatFromInt(made[0])) / 1e6,
+        @as(f64, @floatFromInt(made[1])) / 1e6,
+        app_text.labels.Labels.requiredBytes(label_options),
+        lcgf.canvas.Instances.requiredBytes(rows_cap, 1, 1, .{}),
+    });
     const atlas: sw.Image = .{ .alpha8 = labels.atlas.pixels, .width = labels.atlas.w, .height = labels.atlas.h };
     var c: lcgf.mem.Carver = .{ .buf = &list_buf };
     var list = DrawList.init(&c, 1, 1, 1);
