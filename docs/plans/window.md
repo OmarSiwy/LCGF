@@ -150,6 +150,7 @@ lavapipe and on the machine's GPU where its display can be reached.
 | 5: canvas labels over a distance atlas (src/app/labels.zig, `bit.distance`), chosen by bench/micro/canvastext.zig; golden `labels` at camera scales 0.5 to 8 | 9a067b4b, 40cf51f2, 3b22a4c4, 9d1c1fa0 |
 | 6: X11 pacing at RandR's refresh rate; scale tests on Wayland and the web; goldens at scale 2 (tools/golden/ref/draw-2x); also `Connection.overrideScale` and the screen's size from RandR | 612c4550, 9265b3e1, 79faee36, ea96b956, 69f50853, 5abf1b7f, 25f7ffc3, 9b062620 |
 | 7, in part: `lcgf_app.Image.alpha`; an App draws its frame inside a page of its own (`page`, `compose`); `lcgf_app` registered for dependent packages, examples/app a package that calls `addApp`; canvas labels in the window's fonts (`labels: lcgf_app.Labels`, `Options.labels`), also in a composed page; `Options.canvas` sizes the GPU window's canvas rows | 85b08b30, 4480c11e, 5773d30d, 08dd77ba, 8be9626b, 690417b1, b217a16d |
+| No GPU is a state (`Surface.live()`, no `error.NoGpu`; `Surface` and `GpuFrame` on every build), an unreachable X server takes the software path, a `custom` node is said once in a debug build; a new image generation redraws only the nodes that show it (`damage.addTextures`); bitmap canvas glyphs on both windows; a floating `.fill` region is a compile error; the general canvas row | 29fdabaa, 2143e029, 5bef6afd, 748cbcbc, 5e30337b, af5e8e85, 6b35cc75 |
 
 Measured on main 71cae28e, ReleaseFast, calling-thread CPU time per frame, 300 frames a mode:
 
