@@ -898,6 +898,14 @@ test "gpu labels: labels draw as the reference at camera and window scales; a pa
     try app.expectWindow(&fx.w, x11.pixel, 2, &Rows.reference);
     try testing.expectEqual(1, app.remakes);
     try testing.expectEqual(bytes, fx.gw.stats.label_bytes);
+    // Aligned at the start, the middle and the end, along x and turned a quarter.
+    fx.conn.overrideScale(1);
+    for ([_]u2{ 0, 1 }) |turns| for (text.labels.TestApp.alignments) |alignment| {
+        app.aligned(alignment, turns);
+        fx.ctx.waker.post();
+        try fx.run(&app, seconds(0.3));
+        try app.expectWindow(&fx.w, x11.pixel, 1, &Rows.reference);
+    };
 }
 
 test "gpu canvas: a canvas beside a damaged rect is not drawn again over itself" {

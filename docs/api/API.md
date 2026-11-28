@@ -1167,7 +1167,7 @@ Fields: `advance`, `line`
 ### `Mono.Label` (struct)
 How `canvasGlyphs` lays a line out: `px` world units tall, in `layer` or `color`, turned `turns` quarter turns, each byte's cell of `atlas` (the host's font descriptor; the default is the full 16 x 16 grid).
 
-Fields: `px`, `layer`, `color`, `turns`, `atlas`
+Fields: `px`, `layer`, `color`, `turns`, `atlas`, `alignment`
 
 
 ### `Styled` (struct)

@@ -1668,6 +1668,14 @@ test "app on X11: canvas labels in the font file draw as the reference at camera
         try app.expectWindow(&w, x11.pixel, s, &Rows.reference);
         try testing.expectEqual(1, app.remakes);
         try testing.expectEqual(images, tw.labels.?.image_len);
+        // Aligned at the start, the middle and the end, along x and turned a quarter, where
+        // all of each fits the window (scale 1).
+        if (s == 1) for ([_]u2{ 0, 1 }) |turns| for (text.labels.TestApp.alignments) |alignment| {
+            app.aligned(alignment, turns);
+            ctx.waker.post();
+            try loop(text.labels.TestApp, &app, &shell, &ctx, clockFor(0.3), glyphs, &tw);
+            try app.expectWindow(&w, x11.pixel, s, &Rows.reference);
+        };
     }
     try testing.expectEqual(@as(u32, 0), conn.errors);
 }

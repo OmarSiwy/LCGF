@@ -64,10 +64,18 @@ pub const Options = struct {
     edges: u32 = 8192,
 };
 
-/// Where a label is and how it looks. Its baseline starts at `origin` (world units) and runs
-/// along the glyphs' x axis, turned `turns` quarter turns clockwise on screen with them; `px`
-/// is its em in world units.
-pub const Label = struct { origin: [2]i32, px: u32, font: u16 = 0, layer: u8 = 0, turns: u2 = 0 };
+/// Where a label is and how it looks. Its baseline runs through `origin` (world units) along
+/// the glyphs' x axis, turned `turns` quarter turns clockwise on screen with them; `px` is its
+/// em in world units. `alignment` is where along the baseline `origin` falls, as a fraction of the
+/// label's advance: 0 its start, 0.5 its middle, 1 its end (a pin name ending at its pin).
+pub const Label = struct {
+    origin: [2]i32,
+    px: u32,
+    font: u16 = 0,
+    layer: u8 = 0,
+    turns: u2 = 0,
+    alignment: f32 = 0,
+};
 
 /// `error.Full`: the atlas or its table filled up and is empty again (`label`).
 /// `error.NoSpace`: the instances or the label scratch are short.
@@ -159,6 +167,17 @@ pub const Labels = struct {
             }
         }
         std.debug.assert(s.len >= first);
+        // Aligned: every row moved back along the baseline by `alignment` of the advance.
+        if (o.alignment != 0) {
+            const back = o.alignment * pen * k;
+            const sx: i32 = @intFromFloat(@round(-c * back));
+            const sy: i32 = @intFromFloat(@round(-sn * back));
+            const shift = [2]i32{ sx, sy };
+            for (s.c.pos[first..s.len]) |*p| {
+                p[0] += shift[0];
+                p[1] += shift[1];
+            }
+        }
         return s.since(first);
     }
 
@@ -420,6 +439,11 @@ pub const TestApp = struct {
     /// Camera scale, and pixels the camera has moved right.
     zoom: f32 = 1,
     pan: f32 = 0,
+    /// Where the first label's origin is, logical pixels from the canvas's top left, an em
+    /// above (the others under it), and the alignment and turn `remake` writes them with.
+    at: [2]f32 = .{ 4, 4 },
+    alignment: f32 = 0,
+    turns: u2 = 0,
     /// The generation and words the labels were made at; how often they were made and how
     /// often an atlas filled while making them.
     made: ?u32 = null,
@@ -442,8 +466,27 @@ pub const TestApp = struct {
         f.close();
     }
 
+    /// The alignments and turns `align` takes, each case of the window tests.
+    pub const alignments = [3]f32{ 0, 0.5, 1 };
+
+    /// One label, "R1 10k Vout", with `alignment` and `turns`, its origin where all of it
+    /// stays in a 200 x 100 window at camera scale 1 (`expectWindow`): made again at the next
+    /// frame, the camera unpanned.
+    pub fn aligned(a: *TestApp, alignment: f32, turns: u2) void {
+        std.debug.assert(alignment >= 0);
+        std.debug.assert(alignment <= 1);
+        a.words = &.{"R1 10k Vout"};
+        a.alignment = alignment;
+        a.turns = turns;
+        a.zoom = 1;
+        a.pan = 0;
+        a.made = null;
+        // Along x the label is about 75 pixels; turned, it runs down from the origin.
+        a.at = if (turns == 0) .{ 4 + 190 * alignment, 4 } else .{ 100, 4 + 80 * alignment };
+    }
+
     pub fn camera(a: *const TestApp) canvas.Camera {
-        return .{ .scale = a.zoom / per_px, .offset = .{ 4 - a.pan, 4 + 13 * a.zoom } };
+        return .{ .scale = a.zoom / per_px, .offset = .{ a.at[0] - a.pan, a.at[1] + 13 * a.zoom } };
     }
 
     /// Every word a label, one under the other: when the atlas fills, all of them again in
@@ -455,7 +498,12 @@ pub const TestApp = struct {
         for (0..2) |_| {
             a.shapes.reset();
             const done = for (a.words, 0..) |w, k| {
-                const o: Label = .{ .origin = .{ 0, @intCast(k * 2000) }, .px = 13 * per_px };
+                const o: Label = .{
+                    .origin = .{ 0, @intCast(k * 2000) },
+                    .px = 13 * per_px,
+                    .turns = a.turns,
+                    .alignment = a.alignment,
+                };
                 _ = a.labels.label(a.shapes, w, o) catch |e| switch (e) {
                     error.Full => break false,
                     else => @panic("labels: no room for the test's rows"),
@@ -579,6 +627,66 @@ pub const BitmapApp = struct {
         try testing.expect(ink > 50);
     }
 };
+
+test "an aligned label starts, centres or ends on its origin, along its own axis when turned" {
+    var text_buf: [Text.requiredBytes(text_mod.test_options)]u8 align(mem.column_align) = undefined;
+    const t = try Text.init(&text_buf, text_mod.test_options, &text_mod.test_files);
+    const o: Options = comptime .{ .atlas = .{ 256, 256 }, .images = 64, .label_glyphs = 32 };
+    var buf: [Labels.requiredBytes(o)]u8 align(mem.column_align) = undefined;
+    var labels = Labels.init(&buf, o);
+    var shapes_buf: [Instances.requiredBytes(64, 1, 1, .{})]u8 align(mem.column_align) = undefined;
+    var carver: mem.Carver = .{ .buf = &shapes_buf };
+    var shapes = Instances.init(&carver, 64, 1, 1, .{});
+    const a = &labels.atlas;
+    const atlas: sw.Image = .{ .alpha8 = a.pixels, .width = a.w, .height = a.h };
+    var pixels: [sw.Framebuffer.len(400, 400)]u32 = undefined;
+    var node: Node = .{};
+    // The origin at pixel (200, 200), camera scale 1.
+    const cam: canvas.Camera = .{ .scale = 1.0 / @as(f32, per_px), .offset = .{ 200, 200 } };
+    for ([_]u2{ 0, 1 }) |turns| {
+        // Without `alignment`: the rows of before, which an aligned label moves as one.
+        shapes.reset();
+        const at_start: Label = .{ .origin = .{ 0, 0 }, .px = 13 * per_px, .turns = turns };
+        const plain = try labels.label(&t, &shapes, words, at_start);
+        for ([_]f32{ 0, 0.5, 1 }) |alignment| {
+            const first = shapes.len;
+            var l = at_start;
+            l.alignment = alignment;
+            const r = try labels.label(&t, &shapes, words, l);
+            try testing.expectEqual(plain.count, r.count);
+            const p0 = shapes.c.pos[first];
+            const q0 = shapes.c.pos[0];
+            const d = [2]i32{ p0[0] - q0[0], p0[1] - q0[1] };
+            for (0..r.count) |i| {
+                const p = shapes.c.pos[first + i];
+                const q = shapes.c.pos[i];
+                try testing.expectEqual([4]i32{ q[0] + d[0], q[1] + d[1], q[2], q[3] }, p);
+                try testing.expectEqual(shapes.c.look[i], shapes.c.look[first + i]);
+            }
+            if (alignment == 0) try testing.expectEqual([2]i32{ 0, 0 }, d);
+            // The ink of this label alone along its axis: x unturned, y a quarter turn on.
+            const n = comptime Instances.requiredBytes(32, 1, 1, .{});
+            var one_buf: [n]u8 align(mem.column_align) = undefined;
+            var one_carver: mem.Carver = .{ .buf = &one_buf };
+            var one = Instances.init(&one_carver, 32, 1, 1, .{});
+            _ = try labels.label(&t, &one, words, l);
+            var fb: sw.Framebuffer = .init(&pixels, 400, 400, .rgba8);
+            node.draw(&fb, &one, cam, atlas);
+            var lo: f32 = 400;
+            var hi: f32 = 0;
+            for (0..400) |y| for (0..400) |x| {
+                if (fb.at(@intCast(x), @intCast(y)).r < 128) continue;
+                const along: f32 = @floatFromInt(if (turns == 0) x else y);
+                lo = @min(lo, along);
+                hi = @max(hi, along + 1);
+            };
+            const at = lo + (hi - lo) * alignment;
+            const seen = .{ alignment, turns, lo, hi };
+            errdefer std.debug.print("alignment {d}, turns {d}: ink {d}..{d}\n", seen);
+            try testing.expect(@abs(at - 200) <= 1);
+        }
+    }
+}
 
 test "a label is as sharp at camera scale 8 as at 1 and close to its glyphs rasterised there" {
     var text_buf: [Text.requiredBytes(text_mod.test_options)]u8 align(mem.column_align) = undefined;

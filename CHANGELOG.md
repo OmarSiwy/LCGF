@@ -5,6 +5,7 @@
 ### New
 
 - Test an application without a window: the `lcgf_replay` module (`dep.module("lcgf_replay")`, src/example/replay.zig) plays a recording into an `App` through the headless shell and gives its tree, draw list and software-rendered pixels; an App's `images` are bound as the window binds them. Every example's `zig build test` uses it.
+- Canvas labels align on their origin: `Label.alignment` (`lcgf_app.Labels`, src/app/labels.zig) and `Mono.Label.alignment` (`Mono.canvasGlyphs`) place the origin at the label's start (0, the default), middle (0.5) or end (1), as a fraction of its advance and along its own axis when turned, so a pin name can end at its pin without measuring the rows. A label without it is written as before, byte for byte. It is `alignment` because `align` is a Zig keyword.
 - `lcgf_app` draws on the GPU on native Wayland: a Vulkan build under a compositor that takes LINEAR XRGB8888 dma-bufs (zwp_linux_dmabuf_v1) opens a Wayland window, Vulkan draws into images it exports, and the Wayland shell shares and attaches them on its own connection, paced by frame callbacks. XWayland is the fallback. One GPU loop drives every GPU window (src/app/gpu.zig's window contract). [Surfaces](docs/guide/surface.md)
 
 ### Changed

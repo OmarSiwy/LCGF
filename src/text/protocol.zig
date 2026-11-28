@@ -164,13 +164,15 @@ pub const Mono = struct {
 
     /// How `canvasGlyphs` lays a line out: `px` world units tall, in `layer` or `color`, turned
     /// `turns` quarter turns, each byte's cell of `atlas` (the host's font descriptor; the
-    /// default is the full 16 x 16 grid).
+    /// default is the full 16 x 16 grid). `alignment` is where along the line its anchor falls, as
+    /// a fraction of its advance: 0 its start, 0.5 its middle, 1 its end.
     pub const Label = struct {
         px: u32,
         layer: u8 = 0,
         color: types.Color = .transparent,
         turns: u2 = 0,
         atlas: Atlas = .{},
+        alignment: f32 = 0,
     };
 
     /// `text`'s bytes on one line of canvas glyph rows from `at` (the first glyph's anchor), in
@@ -182,12 +184,16 @@ pub const Mono = struct {
         const px: f32 = @floatFromInt(o.px);
         const adv = px * font.advance;
         const c, const sn = canvas.turn(o.turns);
+        // Aligned: the line starts `alignment` of its advance back along its axis.
+        const advance = adv * @as(f32, @floatFromInt(text.len));
+        const back: i32 = @intFromFloat(@round(o.alignment * advance));
+        const ax: i32 = @intFromFloat(c);
+        const ay: i32 = @intFromFloat(sn);
+        const start = [2]i32{ at[0] - ax * back, at[1] - ay * back };
         for (text, 0..) |byte, j| {
             const x0: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j))));
             const x1: i32 = @intFromFloat(@round(adv * @as(f32, @floatFromInt(j + 1))));
-            const dx: i32 = @intFromFloat(c);
-            const dy: i32 = @intFromFloat(sn);
-            const anchor = [2]i32{ at[0] + dx * x0, at[1] + dy * x0 };
+            const anchor = [2]i32{ start[0] + ax * x0, start[1] + ay * x0 };
             const size = [2]u32{ @intCast(x1 - x0), @intFromFloat(@round(px * font.line)) };
             const look: canvas.Instances.Glyph = .{
                 .layer = o.layer,
@@ -1387,4 +1393,10 @@ test "canvasGlyphs: a byte a cell, turned with the line" {
     try std.testing.expectEqual([4]i32{ 2_000, 600, 600, 1_250 }, s.c.pos[1]);
     try std.testing.expectEqual(4 | (1 << 16) | (7 << 24), s.c.look[0][0]);
     try std.testing.expectEqual(canvas.Instances.GlyphAtlas.coverage, s.glyph_atlas);
+    // Ended on the anchor: the line's 1,200 of advance back down the screen, turned with it.
+    var ended = o;
+    ended.alignment = 1;
+    _ = font.canvasGlyphs(&s, "AB", .{ 2_000, 0 }, ended);
+    try std.testing.expectEqual([4]i32{ 2_000, -1_200, 600, 1_250 }, s.c.pos[2]);
+    try std.testing.expectEqual([4]i32{ 2_000, -600, 600, 1_250 }, s.c.pos[3]);
 }
