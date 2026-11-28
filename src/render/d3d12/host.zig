@@ -79,6 +79,52 @@ pub const Readback = struct {
     }
 };
 
+/// A rectangle of a texture, in texels.
+pub const Rect = struct { x: u32 = 0, y: u32 = 0, w: u32, h: u32 };
+
+/// Bytes between the rows of `r` in a staging buffer, `texel` bytes a texel: D3D12 copies
+/// from rows 256-byte aligned.
+pub fn rowPitch(r: Rect, texel: u32) u32 {
+    return std.mem.alignForward(u32, r.w * texel, c.D3D12_TEXTURE_DATA_PITCH_ALIGNMENT);
+}
+
+/// Records a copy of `region` of `texture` from `buffer` at `offset` (512-byte aligned, its
+/// rows `rowPitch` apart), the texture moved from `from` to COPY_DEST and left in
+/// PIXEL_SHADER_RESOURCE. The buffer stays alive and unwritten until the list has run.
+/// Asserts that `offset` is aligned and the region is inside the texture.
+pub fn uploadRegion(
+    l: *com.GraphicsCommandList,
+    texture: *com.Resource,
+    from: c.D3D12_RESOURCE_STATES,
+    buffer: *com.Resource,
+    offset: u64,
+    region: Rect,
+) void {
+    std.debug.assert(offset % c.D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT == 0);
+    const desc = texture.getDesc();
+    std.debug.assert(region.x + region.w <= desc.Width);
+    std.debug.assert(region.y + region.h <= desc.Height);
+    const texel: u32 = if (desc.Format == c.DXGI_FORMAT_R8_UNORM) 1 else 4;
+    const copy_dest = c.D3D12_RESOURCE_STATE_COPY_DEST;
+    if (from != copy_dest) l.resourceBarrier(&.{device_mod.transition(texture, from, copy_dest)});
+    var dst: c.D3D12_TEXTURE_COPY_LOCATION = std.mem.zeroes(c.D3D12_TEXTURE_COPY_LOCATION);
+    dst.pResource = @ptrCast(@alignCast(texture));
+    dst.Type = c.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    var src: c.D3D12_TEXTURE_COPY_LOCATION = std.mem.zeroes(c.D3D12_TEXTURE_COPY_LOCATION);
+    src.pResource = @ptrCast(@alignCast(buffer));
+    src.Type = c.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.unnamed_0.PlacedFootprint = .{ .Offset = offset, .Footprint = .{
+        .Format = desc.Format,
+        .Width = region.w,
+        .Height = region.h,
+        .Depth = 1,
+        .RowPitch = rowPitch(region, texel),
+    } };
+    l.copyTextureRegionAt(&dst, region.x, region.y, &src);
+    const readable = c.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    l.resourceBarrier(&.{device_mod.transition(texture, copy_dest, readable)});
+}
+
 /// An RGBA8 texture filled with `rgba` (tight rows) through an upload buffer, left in
 /// PIXEL_SHADER_RESOURCE for sampling. Waits for the copy.
 pub fn sampled(d: *Device, once: *Once, width: u32, height: u32, rgba: []const u8) Error!*com.Resource {

@@ -332,7 +332,19 @@ pub const GraphicsCommandList = opaque {
         method(l, Slot.DrawInstanced, fn (*L, u32, u32, u32, u32) callconv(.c) void)(l, vertices, instances, first_vertex, first_instance);
     }
     pub fn copyTextureRegion(l: *L, dst: *const c.D3D12_TEXTURE_COPY_LOCATION, src: *const c.D3D12_TEXTURE_COPY_LOCATION) void {
-        method(l, Slot.CopyTextureRegion, fn (*L, *const c.D3D12_TEXTURE_COPY_LOCATION, u32, u32, u32, *const c.D3D12_TEXTURE_COPY_LOCATION, ?*const c.D3D12_BOX) callconv(.c) void)(l, dst, 0, 0, 0, src, null);
+        l.copyTextureRegionAt(dst, 0, 0, src);
+    }
+    /// `copyTextureRegion` with `src` placed at texel (`x`, `y`) of `dst`.
+    pub fn copyTextureRegionAt(
+        l: *L,
+        dst: *const c.D3D12_TEXTURE_COPY_LOCATION,
+        x: u32,
+        y: u32,
+        src: *const c.D3D12_TEXTURE_COPY_LOCATION,
+    ) void {
+        const Loc = *const c.D3D12_TEXTURE_COPY_LOCATION;
+        const F = fn (*L, Loc, u32, u32, u32, Loc, ?*const c.D3D12_BOX) callconv(.c) void;
+        method(l, Slot.CopyTextureRegion, F)(l, dst, x, y, 0, src, null);
     }
     pub fn iaSetPrimitiveTopology(l: *L, t: c.D3D12_PRIMITIVE_TOPOLOGY) void {
         method(l, Slot.IASetPrimitiveTopology, fn (*L, c.D3D12_PRIMITIVE_TOPOLOGY) callconv(.c) void)(l, t);

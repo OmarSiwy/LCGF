@@ -58,6 +58,14 @@ const globals_slot = c.D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
 
 pub const max_materials = quad_shader.max_materials;
 
+/// D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(1, 1, 1, R): an R8 texture read as white, its byte
+/// the alpha.
+const coverage_mapping: u32 = c.D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1 |
+    (c.D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1 << 3) |
+    (c.D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1 << 6) |
+    (c.D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0 << 9) |
+    c.D3D12_SHADER_COMPONENT_MAPPING_ALWAYS_SET_BIT_AVOIDING_ZEROMEM_MISTAKES;
+
 pub fn RendererOf(comptime canvases: bool) type {
     return struct {
         const Self = @This();
@@ -76,6 +84,11 @@ pub fn RendererOf(comptime canvases: bool) type {
         base: u64 = 0,
         /// Physical pixels: viewport * scale from the last `prepare`.
         extent: [2]u32 = .{ 0, 0 },
+        /// The scissor every quad and text draw sets, and every canvas draw is cut to: the
+        /// whole `extent` after `prepareRows`. A host that draws only part of its target again
+        /// (`setup.Window.present`, one damage rect at a time) narrows it between `prepare`
+        /// and the draws.
+        scissor: c.D3D12_RECT = std.mem.zeroes(c.D3D12_RECT),
         scale: f32 = 1,
         glyphs: Glyphs = .{},
         /// Shader-visible CBV/SRV/UAV heap: descriptor i is the SRV of `Texture` i. Set on the
@@ -91,7 +104,8 @@ pub fn RendererOf(comptime canvases: bool) type {
         canvas: if (canvases) ?Canvas else void = if (canvases) null else {},
         list: ?*const DrawList = null,
 
-        pub const max_textures = 64;
+        /// Room for 64 images of an application's, its atlases and its surfaces (`lcgf_app`).
+        pub const max_textures = 128;
 
         /// `white` is a 1x1 opaque white RGBA8 texture in PIXEL_SHADER_RESOURCE; it becomes
         /// `Texture.white`.
@@ -157,8 +171,10 @@ pub fn RendererOf(comptime canvases: bool) type {
         }
 
         /// Texture in: makes a 2D texture (in PIXEL_SHADER_RESOURCE, one mip) usable as
-        /// `Style.texture`. The texture stays yours, alive while a frame may sample it. Handles are
-        /// indices in registration order; `Texture.white` is 0. Past `max_textures` the last entry
+        /// `Style.texture`. An R8_UNORM texture is coverage: sampled as white with its byte as
+        /// alpha, as `sw.Image.alpha8` is (glyph atlases, `lcgf_app.Image.alpha`). The texture
+        /// stays yours, alive while a frame may sample it. Handles are indices in registration
+        /// order; `Texture.white` is 0. Past `max_textures` the last entry
         /// is rewritten, as the prototype does; the GPU must be done with frames that sampled it
         /// (a descriptor in a shader-visible heap is read when the GPU executes, not when recorded).
         pub fn addTexture(r: *Self, d: *const Device, texture: *com.Resource) types.Texture {
@@ -180,7 +196,9 @@ pub fn RendererOf(comptime canvases: bool) type {
             var srv: c.D3D12_SHADER_RESOURCE_VIEW_DESC = std.mem.zeroes(c.D3D12_SHADER_RESOURCE_VIEW_DESC);
             srv.Format = res.getDesc().Format;
             srv.ViewDimension = c.D3D12_SRV_DIMENSION_TEXTURE2D;
-            srv.Shader4ComponentMapping = c.D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            const coverage = srv.Format == c.DXGI_FORMAT_R8_UNORM;
+            const plain = c.D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srv.Shader4ComponentMapping = if (coverage) coverage_mapping else plain;
             srv.unnamed_0.Texture2D = .{ .MostDetailedMip = 0, .MipLevels = 1, .PlaneSlice = 0, .ResourceMinLODClamp = 0 };
             d.handle.createShaderResourceView(res, &srv, device_mod.cpuAt(r.textures.cpuStart(), r.srv_stride, i));
         }
@@ -200,7 +218,7 @@ pub fn RendererOf(comptime canvases: bool) type {
             l.iaSetPrimitiveTopology(c.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             l.iaSetVertexBuffer(.{ .BufferLocation = r.ring_address + r.base + at, .SizeInBytes = @intCast(count * quad_shader.stride), .StrideInBytes = quad_shader.stride });
             l.rsSetViewport(.{ .TopLeftX = 0, .TopLeftY = 0, .Width = @floatFromInt(r.extent[0]), .Height = @floatFromInt(r.extent[1]), .MinDepth = 0, .MaxDepth = 1 });
-            l.rsSetScissorRect(.{ .left = 0, .top = 0, .right = @intCast(r.extent[0]), .bottom = @intCast(r.extent[1]) });
+            l.rsSetScissorRect(r.scissor);
         }
 
         /// Offsets inside a slot.
@@ -218,8 +236,22 @@ pub fn RendererOf(comptime canvases: bool) type {
 
         /// Uploads the frame into ring slot `frame`: three memcpy into the mapped upload heap.
         /// Quads past `max_quads` (glyphs past `max_glyphs`) are dropped, as the wgpu back end does.
-        /// Call before recording the frame's draws.
+        /// Call before recording the frame's draws. `prepareRows` then `prepareCanvases`, both in
+        /// `frame`.
         pub fn prepare(r: *Self, frame: Queue, draw: *const DrawList, glyphs: Glyphs, viewport: [2]f32, scale: f32) void {
+            r.prepareRows(frame, draw, glyphs, viewport, scale);
+            r.prepareCanvases(frame);
+        }
+
+        /// `prepare` without the canvases: the list's quads and glyphs into ring slot `frame`.
+        pub fn prepareRows(
+            r: *Self,
+            frame: Queue,
+            draw: *const DrawList,
+            glyphs: Glyphs,
+            viewport: [2]f32,
+            scale: f32,
+        ) void {
             r.base = @as(u64, frame % r.desc.frames) * r.slot_bytes;
             const slot = r.mapped[@intCast(r.base)..][0..@intCast(r.slot_bytes)];
             const g: Globals = .{ .viewport = viewport, .scale = scale };
@@ -233,10 +265,21 @@ pub fn RendererOf(comptime canvases: bool) type {
             r.glyphs = glyphs;
             r.scale = scale;
             r.extent = .{ @intFromFloat(@round(viewport[0] * scale)), @intFromFloat(@round(viewport[1] * scale)) };
+            const right: c_long = @intCast(r.extent[0]);
+            r.scissor = .{ .left = 0, .top = 0, .right = right, .bottom = @intCast(r.extent[1]) };
             r.list = draw;
+        }
+
+        /// The canvas commands of the last `prepareRows`' list into the canvas copy `frame`:
+        /// their cameras, palettes and overrides, and the rows their instances dirtied. A host
+        /// that changed only those (a pan) calls this alone, with the list's quads where they
+        /// are; its slots then count apart from the rows' (`setup.Window.present`).
+        pub fn prepareCanvases(r: *Self, frame: Queue) void {
+            const draw = r.list orelse return;
             if (canvases) if (r.canvas) |*cv| {
-                const atlas = @min(@backingInt(glyphs.canvasTexture()), r.texture_count - 1);
-                cv.prepare(.wrap(r.dev), null, draw, frame, scale, r.extent, .{ .resource = r.resources[atlas], .width = 0, .height = 0 }, atlas);
+                const atlas = @min(@backingInt(r.glyphs.canvasTexture()), r.texture_count - 1);
+                const view: gpu.TextureView = .{ .resource = r.resources[atlas], .width = 0, .height = 0 };
+                cv.prepare(.wrap(r.dev), null, draw, frame, r.scale, r.extent, view, atlas);
             };
         }
 
@@ -248,7 +291,14 @@ pub fn RendererOf(comptime canvases: bool) type {
             if (canvases) {
                 const cv = if (r.canvas) |*cv| cv else return;
                 var pass = gpu.RenderPass.wrap(.wrap(r.dev), l, r.extent[0], r.extent[1]);
-                cv.draw(&pass, r.list.?, k);
+                const s = r.scissor;
+                const bound: gpu.Rect = .{
+                    .x = @intCast(s.left),
+                    .y = @intCast(s.top),
+                    .width = @intCast(s.right - s.left),
+                    .height = @intCast(s.bottom - s.top),
+                };
+                cv.drawWithin(&pass, r.list.?, k, bound);
             }
         }
 
