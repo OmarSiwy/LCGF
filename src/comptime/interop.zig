@@ -75,11 +75,22 @@ pub fn setFit(ui: anytype, comptime id: @EnumLiteral(), size: [2]f32) bool {
 }
 
 /// A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.
+/// A compile error when it floats sized by a share (`.fill`): it would be empty, and its host
+/// would find no region (`Style.float`).
 pub fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec {
+    if (floatsByShare(style)) @compileError("region '" ++ @tagName(id) ++
+        "' floats and is sized .fill: a floating node is not in its parent's flow and takes no " ++
+        "share of it, so it would be empty; write .pct(1) for the parent's content box, or .px(n)");
     var out = spec_zig.col(style, .{});
     out.id = @tagName(id);
     out.custom = data;
     return out;
+}
+
+/// Whether `style` floats and is sized by a share of free space on an axis, which a floating
+/// node does not take (`Style.float`).
+pub fn floatsByShare(style: Style) bool {
+    return style.float and (style.size[0].kind == .grow or style.size[1].kind == .grow);
 }
 
 /// Row `row`'s rect (x0, y0, x1, y1) in a comptime layout's RAM (`Columns.Dynamic`), as f32
@@ -145,7 +156,9 @@ fn cut(clip: [4]f32, off: @Vector(4, f32), w: [4]f32) [4]f32 {
 /// Canvas commands (`Frame.canvas`) of either side keep their batches: `out.canvases` (the
 /// caller's, a row per custom row of both) gets the host's rows, then the guest's.
 /// `out` is the caller's, carved for the host's rows plus the guest's. Nothing is written when
-/// it, or `strings`, is too small, or when the host has no such region. Batches are not merged
+/// it, or `strings`, is too small, or when the host has no such region (error.NoRegion; also
+/// the error of a region with no area, which paints no command: a floating region sized
+/// `.fill` is one, see `Style.float`). Batches are not merged
 /// across the seams, and `out` has no ops or depth: run `order` passes on it afterwards if the
 /// renderer wants them.
 ///

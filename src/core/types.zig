@@ -421,7 +421,10 @@ pub const Style = struct {
     cross: Align = .start,
     /// May become narrower than its content when the parent has no room.
     shrink: bool = false,
-    /// Out of flow: placed at the parent's content origin plus `offset`.
+    /// Out of flow: placed at the parent's content origin plus `offset`, and sized by its own
+    /// `size` alone: its natural size, pixels, or a percentage of the parent's content box. A
+    /// share of free space (`.fill`, `.grow`) means nothing to a node in no flow and leaves it
+    /// at its natural size, 0 for an empty one: write `.pct(1)` to fill the parent.
     float: bool = false,
     offset: [2]f32 = .{ 0, 0 },
     /// Clip children to this node's rect.

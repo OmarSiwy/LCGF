@@ -8585,6 +8585,7 @@ Interop between the two front ends (tier 1): a runtime `Frame` inside a region o
 - `fn FitRegion(comptime name: [:0]const u8) type`: The `Spec.widget` of a `fitRegion` named `name`.
 - `fn setFit(ui: anytype, comptime id: @EnumLiteral(), size: [2]f32) bool`: Records the content size `size` of the `fitRegion` named `id` in comptime UI `ui`, for its next frame.
 - `fn canvas(comptime id: @EnumLiteral(), comptime style: Style, comptime data: u64) Spec`: A leaf whose custom command gives the host its final bounds, clip, id and opaque payload.
+- `fn floatsByShare(style: Style) bool`: Whether `style` floats and is sized by a share of free space on an axis, which a floating node does not take (`Style.float`).
 - `fn rectOf(ram: anytype, row: usize) [4]f32`: Row `row`'s rect (x0, y0, x1, y1) in a comptime layout's RAM (`Columns.Dynamic`), as f32 whatever the coordinate type.
 - `fn widgetRects(comptime E: type, ram: anytype) E.Rects`: The widget rect table `Events(spec).Rects` from a comptime layout's RAM: each widget's visible rect (`vis`), in the layout's own coordinates, as `Rects.fromTree` takes it from a runtime tree.
 - `fn regionInput(outer: *const Input, rect: [4]f32) Input`: The input of a front end hosted in `rect` (x0, y0, x1, y1, in `outer`'s coordinates): the rect's size as its viewport, and the pointer moved by the rect's origin.

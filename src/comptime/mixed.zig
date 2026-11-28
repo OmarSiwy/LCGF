@@ -525,3 +525,45 @@ test "page C: a composed page redraws only what changed in the page or a region"
     sc.draw(d);
     try testing.expectEqual(Color.rgb(0, 200, 0), sc.in(side2, 20, 20));
 }
+
+/// A page whose only content is a region floating over a 30 px header, sized `size`.
+fn FloatPage(comptime size: [2]lcgf.types.Size) type {
+    // Built by hand: `interop.region` refuses a floating region sized `.fill` at compile time.
+    var view = interop.region(.view, .{ .size = .{ .px(1), .px(1) } });
+    view.style.float = true;
+    view.style.size = size;
+    const spec = s.col(.{ .size = .{ .fill, .fill } }, .{
+        s.row(.{ .size = .{ .fill, .px(30) }, .fill = th.panel }, .{}),
+        view,
+    });
+    return w.ComptimeUi(struct {}, spec, th);
+}
+
+test "a floating region takes no share: .fill leaves it empty (NoRegion), .pct(1) fills the page" {
+    const S = struct {
+        var empty: FloatPage(.{ .fill, .fill }) = .{};
+        var full: FloatPage(.{ .pct(1), .pct(1) }) = .{};
+        var buffer: [Context.requiredBytes(list_limits)]u8 align(mem.column_align) = undefined;
+        var out: Out = .{};
+    };
+    S.out.init();
+    var ctx = try Context.init(&S.buffer, list_limits);
+    const in: Input = .{ .viewport = .{ 400, 300 } };
+    var f = ctx.begin(&in);
+    _ = f.leaf(.none, .{ .size = .{ .px(10), .px(10) }, .fill = .rgb(1, 2, 3) });
+    const inner = f.end(font).draw;
+    const view_id = @backingInt(Id.from("view"));
+    // Sized .fill, the floating region is laid out at its natural size, 0: it paints no
+    // custom command, and the host has no region to compose into.
+    const empty = S.empty.frame(&in);
+    const none = empty.tree.rect(empty.tree.find(Id.from("view")));
+    try testing.expectEqual([4]f32{ 0, 0, 0, 0 }, rect4(none));
+    const err = interop.compose(&S.out.draw, empty.draw, inner, view_id, &S.out.strings);
+    try testing.expectError(error.NoRegion, err);
+    try testing.expect(interop.floatsByShare(.{ .float = true, .size = .{ .fill, .px(5) } }));
+    // .pct(1) is the parent's content box, and composes.
+    const full = S.full.frame(&in);
+    const page = full.tree.rect(full.tree.find(Id.from("view")));
+    try testing.expectEqual([4]f32{ 0, 0, 400, 300 }, rect4(page));
+    try interop.compose(&S.out.draw, full.draw, inner, view_id, &S.out.strings);
+}

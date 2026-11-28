@@ -212,8 +212,10 @@ pub const Frame = struct {
     }
 
     /// Reserves a rect that the caller draws itself. It comes back in the draw list as
-    /// `Cmd.custom`, in paint order, with `data` attached.
+    /// `Cmd.custom`, in paint order, with `data` attached. Asserts it does not float sized by
+    /// a share (`.fill`): it would have no area (`Style.float`).
     pub fn custom(f: *Frame, id: Id, style: Style, data: u64) Node {
+        std.debug.assert(!(style.float and (style.size[0].kind == .grow or style.size[1].kind == .grow)));
         const row: Template = .from(&style);
         return f.customRow(id, &row, data);
     }
